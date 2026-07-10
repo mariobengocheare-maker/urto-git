@@ -76,9 +76,9 @@ def wait_for_results_or_none(page, timeout_ms=15000) -> int:
 def run_search(page, first_name, last_name, zip_code):
     page.goto(FOREWARN_SEARCH_URL, wait_until="domcontentloaded")
     page.get_by_text("SEARCH BY NAME", exact=False).click()
-    page.get_by_placeholder("First Name").fill(first_name)
-    page.get_by_placeholder("Last Name").fill(last_name)
-    page.get_by_placeholder("Zip Code").fill(zip_code)
+    page.get_by_label("First Name", exact=True).fill(first_name)
+    page.get_by_label("Last Name", exact=True).fill(last_name)
+    page.get_by_label("Zip Code", exact=True).fill(zip_code)
     page.get_by_role("button", name="SEARCH", exact=True).click()
 
 
