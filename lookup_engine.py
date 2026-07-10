@@ -89,23 +89,26 @@ def human_fill(locator, text: str):
     """Types like a person: variable per-character delay, with an
     occasional longer pause, instead of instantly filling the field."""
     locator.click()
+    human_pause(0.15, 0.4)
     locator.fill("")
     for ch in text:
         locator.press_sequentially(ch)
-        time.sleep(random.uniform(0.04, 0.16))
-        if random.random() < 0.08:
-            time.sleep(random.uniform(0.15, 0.45))
+        time.sleep(random.uniform(0.07, 0.24))
+        if random.random() < 0.12:
+            time.sleep(random.uniform(0.25, 0.7))
 
 
 def run_search(page, first_name, last_name, zip_code):
     page.goto(FOREWARN_SEARCH_URL, wait_until="domcontentloaded")
-    human_pause()
+    human_pause(1.0, 2.2)  # settle in on the fresh page before doing anything
     page.get_by_text("SEARCH BY NAME", exact=False).click()
-    human_pause()
+    human_pause(0.6, 1.4)
     human_fill(page.get_by_label("First Name", exact=True), first_name)
+    human_pause(0.25, 0.7)
     human_fill(page.get_by_label("Last Name", exact=True), last_name)
+    human_pause(0.25, 0.7)
     human_fill(page.get_by_label("Zip Code", exact=True), zip_code)
-    human_pause()
+    human_pause(0.6, 1.5)
     page.get_by_role("button", name=SEARCH_BUTTON_RE).click()
 
 

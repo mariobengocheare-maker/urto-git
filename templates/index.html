@@ -60,6 +60,27 @@
   .SKIPPED { color: #888; font-style: italic; }
   #downloadBox { display: none; margin-top: 20px; }
   #errorBox { display: none; margin-top: 16px; color: #d33; }
+
+  #catScene { display: none; text-align: center; margin: 18px 0 4px; }
+  #catScene.show { display: block; }
+  #catScene .cat-caption { color: #888; font-size: .85rem; margin-top: -4px; }
+
+  .cat-black .tail { transform-origin: 100px 190px; animation: tailSwish 2.3s ease-in-out infinite; }
+  .cat-white .tail2 { transform-origin: 380px 190px; animation: tailSwish 2s ease-in-out infinite reverse; }
+  @keyframes tailSwish { 0%, 100% { transform: rotate(-10deg); } 50% { transform: rotate(10deg); } }
+
+  .cat-black .paw { transform-origin: 168px 208px; animation: pawType .55s ease-in-out infinite; }
+  .cat-white .paw2 { transform-origin: 312px 208px; animation: pawType .65s ease-in-out infinite .2s; }
+  @keyframes pawType { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+
+  .cat-eye { animation: blink 4.5s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+  .cat-white .cat-eye { animation-duration: 3.8s; }
+  @keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
+
+  .type-line { animation: flicker 1.4s steps(2) infinite; }
+  .type-line.line2 { animation-delay: .3s; }
+  .type-line.line3 { animation-delay: .6s; }
+  @keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 </style>
 </head>
 <body>
@@ -86,6 +107,46 @@
   <div class="row">
     <button id="loginBtn" class="secondary">I've logged in — continue</button>
   </div>
+</div>
+
+<div id="catScene">
+  <svg viewBox="0 0 480 240" width="100%" height="200" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="222" width="480" height="10" fill="#b98a5e"/>
+    <rect x="165" y="206" width="150" height="18" rx="4" fill="#9aa0a6"/>
+    <rect x="180" y="140" width="120" height="68" rx="6" fill="#37474f"/>
+    <rect x="186" y="146" width="108" height="56" rx="3" fill="#0d1b2a"/>
+    <rect class="type-line" x="192" y="154" width="60" height="4" rx="2" fill="#4fd1c5"/>
+    <rect class="type-line line2" x="192" y="164" width="80" height="4" rx="2" fill="#4fd1c5"/>
+    <rect class="type-line line3" x="192" y="174" width="45" height="4" rx="2" fill="#4fd1c5"/>
+
+    <g class="cat cat-black">
+      <path class="tail" d="M100 190 C 70 190, 60 140, 90 120" stroke="#111" stroke-width="14" fill="none" stroke-linecap="round"/>
+      <ellipse cx="128" cy="196" rx="44" ry="30" fill="#1a1a1a"/>
+      <circle cx="116" cy="150" r="26" fill="#1a1a1a"/>
+      <polygon points="98,132 106,108 118,130" fill="#1a1a1a"/>
+      <polygon points="130,128 140,106 148,132" fill="#1a1a1a"/>
+      <circle class="cat-eye" cx="112" cy="150" r="3" fill="#fff"/>
+      <line x1="90" y1="156" x2="65" y2="152" stroke="#fff" stroke-width="1.5"/>
+      <line x1="90" y1="161" x2="65" y2="162" stroke="#fff" stroke-width="1.5"/>
+      <ellipse class="paw" cx="168" cy="208" rx="12" ry="9" fill="#1a1a1a"/>
+    </g>
+
+    <g class="cat cat-white">
+      <path class="tail tail2" d="M380 190 C 410 190, 420 140, 390 120" stroke="#333" stroke-width="13" fill="none" stroke-linecap="round"/>
+      <ellipse cx="352" cy="196" rx="42" ry="28" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
+      <circle cx="364" cy="150" r="25" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
+      <polygon points="382,132 374,108 362,130" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
+      <polygon points="350,128 340,106 332,132" fill="#111111"/>
+      <ellipse cx="340" cy="190" rx="9" ry="7" fill="#111111"/>
+      <ellipse cx="368" cy="205" rx="8" ry="6" fill="#111111"/>
+      <ellipse cx="375" cy="160" rx="7" ry="5" fill="#111111"/>
+      <circle class="cat-eye" cx="368" cy="150" r="3" fill="#111"/>
+      <line x1="390" y1="156" x2="415" y2="152" stroke="#999" stroke-width="1.5"/>
+      <line x1="390" y1="161" x2="415" y2="162" stroke="#999" stroke-width="1.5"/>
+      <ellipse class="paw paw2" cx="312" cy="208" rx="11" ry="8" fill="#ffffff" stroke="#d8d8d8"/>
+    </g>
+  </svg>
+  <p class="cat-caption">hard at work...</p>
 </div>
 
 <div id="status"></div>
@@ -118,6 +179,7 @@ const downloadBox = document.getElementById('downloadBox');
 const downloadBtn = document.getElementById('downloadBtn');
 const resultsTable = document.getElementById('resultsTable');
 const resultsBody = resultsTable.querySelector('tbody');
+const catScene = document.getElementById('catScene');
 
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
@@ -176,6 +238,8 @@ async function poll() {
   const res = await fetch(`/api/status/${jobId}`);
   if (!res.ok) return;
   const data = await res.json();
+
+  catScene.classList.toggle('show', data.status === 'running');
 
   if (data.status === 'awaiting_login') {
     loginBox.style.display = 'block';
