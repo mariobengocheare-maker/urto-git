@@ -22,9 +22,11 @@ ABBREVIATIONS = {
 }
 
 PHONE_RE = re.compile(r"\b\d{3}-\d{3}-\d{4}\b")
-# Matches only the standalone "SEARCH" button, not "SEARCH BY NAME" etc.
-# Case-insensitive because MUI buttons often show as "Search" in the DOM
-# and get uppercased purely via CSS text-transform.
+# Accessible name of the SEARCH button. Case-insensitive because MUI
+# buttons often show as "Search" in the DOM and get uppercased purely via
+# CSS text-transform. Used with get_by_role("button", ...) rather than
+# get_by_text() because the button also contains a nested <span>Search</span>,
+# which text-based matching resolves as a second, ambiguous match.
 SEARCH_BUTTON_RE = re.compile(r"^\s*search\s*$", re.IGNORECASE)
 RESULTS_COUNT_RE = re.compile(r"Found\s+(\d+)\s+results?", re.IGNORECASE)
 AGE_TAG_RE = re.compile(r"Age\s*\(\s*\d+\s*\)", re.IGNORECASE)
@@ -104,7 +106,7 @@ def run_search(page, first_name, last_name, zip_code):
     human_fill(page.get_by_label("Last Name", exact=True), last_name)
     human_fill(page.get_by_label("Zip Code", exact=True), zip_code)
     human_pause()
-    page.get_by_text(SEARCH_BUTTON_RE).click()
+    page.get_by_role("button", name=SEARCH_BUTTON_RE).click()
 
 
 def extract_first_phone(page) -> str:
