@@ -2,69 +2,147 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>FOREWARN Owner Lookup</title>
+<title>URTO — Ultimate Realtor Tool</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2316233c'/%3E%3Cpath d='M16 6 L27 15 H23 V26 H9 V15 H5 Z' fill='%23d4af37'/%3E%3Crect x='13' y='18' width='6' height='8' fill='%2316233c'/%3E%3C/svg%3E">
 <style>
-  :root { color-scheme: light dark; }
-  body {
-    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
-    max-width: 900px;
-    margin: 40px auto;
-    padding: 0 20px;
-    color: #222;
-    background: #fafafa;
+  :root {
+    color-scheme: light dark;
+    --navy: #16233c;
+    --navy-light: #223a5e;
+    --gold: #c9a227;
+    --gold-bright: #d4af37;
+    --bg: #f3f1ec;
+    --card-bg: #ffffff;
+    --text: #1f2430;
+    --text-secondary: #667085;
+    --border: #e3e0d8;
+    --success-bg: rgba(31, 122, 63, .12);
+    --success-fg: #1f7a3f;
+    --warn-bg: rgba(138, 109, 26, .14);
+    --warn-fg: #8a6d1a;
+    --danger-bg: rgba(198, 40, 40, .12);
+    --danger-fg: #c62828;
+    --muted-bg: rgba(102, 112, 133, .12);
+    --muted-fg: #667085;
   }
-  h1 { font-size: 1.4rem; margin-bottom: 4px; }
-  .sub { color: #666; margin-bottom: 24px; }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --navy: #0e1830;
+      --navy-light: #1c2e4d;
+      --bg: #0c1220;
+      --card-bg: #131c2e;
+      --text: #e7e9ee;
+      --text-secondary: #97a2b8;
+      --border: #263349;
+      --success-bg: rgba(72, 199, 118, .16);
+      --success-fg: #6bd694;
+      --warn-bg: rgba(224, 185, 60, .16);
+      --warn-fg: #e0b93c;
+      --danger-bg: rgba(255, 99, 99, .16);
+      --danger-fg: #ff8a8a;
+      --muted-bg: rgba(151, 162, 184, .14);
+      --muted-fg: #97a2b8;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    color: var(--text);
+    background: var(--bg);
+  }
+
+  .topbar {
+    background: var(--navy);
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
+    padding: 18px 28px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; max-width: 880px; margin: 0 auto; }
+  .brand svg { flex-shrink: 0; }
+  .brand-name { color: #fff; font-size: 1.35rem; font-weight: 700; letter-spacing: .04em; }
+  .brand-tag {
+    display: block;
+    color: var(--gold-bright);
+    font-size: .68rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    margin-top: 1px;
+  }
+
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 32px 20px 60px;
+  }
+
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .sub { color: var(--text-secondary); margin: 0 0 24px; font-size: .95rem; }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
+  }
+
   #dropzone {
-    border: 2px dashed #999;
+    border: 2px dashed var(--border);
     border-radius: 10px;
     padding: 40px 20px;
     text-align: center;
     cursor: pointer;
-    background: #fff;
+    background: var(--bg);
     transition: border-color .15s, background .15s;
   }
-  #dropzone.drag { border-color: #2a6df4; background: #eef4ff; }
-  #dropzone p { margin: 4px 0; color: #555; }
+  #dropzone.drag { border-color: var(--gold); background: var(--warn-bg); }
+  #dropzone p { margin: 4px 0; color: var(--text-secondary); }
+  #dropzone p strong { color: var(--text); }
   #fileInput { display: none; }
-  .row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
-  label { font-size: .9rem; color: #444; }
-  input[type=number] { width: 70px; padding: 4px; }
+
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+  label { font-size: .9rem; color: var(--text-secondary); }
+  input[type=number] {
+    width: 70px;
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    color: var(--text);
+  }
+
   button {
-    background: #2a6df4;
+    background: var(--navy);
     color: #fff;
     border: none;
-    padding: 10px 18px;
-    border-radius: 6px;
-    font-size: .95rem;
+    padding: 10px 20px;
+    border-radius: 7px;
+    font-size: .9rem;
+    font-weight: 600;
     cursor: pointer;
+    transition: opacity .15s, transform .05s;
   }
-  button:disabled { background: #aaa; cursor: not-allowed; }
-  button.secondary { background: #1a9c56; }
-  button.danger { background: #c0392b; display: none; }
-  #status { margin-top: 20px; font-size: .95rem; }
+  button:hover:not(:disabled) { opacity: .9; }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { background: var(--muted-fg); opacity: .5; cursor: not-allowed; }
+  button.secondary { background: var(--gold); color: #2a2205; }
+  button.danger { background: var(--danger-fg); display: none; }
+
+  #status { margin-top: 20px; font-size: .95rem; color: var(--text-secondary); }
+
   #loginBox {
     display: none;
-    margin-top: 16px;
+    margin-top: 18px;
     padding: 16px;
-    background: #fff8e1;
-    border: 1px solid #f0c14b;
-    border-radius: 8px;
+    background: var(--warn-bg);
+    border: 1px solid var(--gold);
+    border-radius: 10px;
   }
-  table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: .85rem; background: #fff; }
-  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
-  th { background: #f0f0f0; }
-  .FOUND { color: #1a9c56; font-weight: 600; }
-  .NOT_FOUND { color: #999; }
-  .FOUND_NO_PHONE { color: #b8860b; }
-  .ERROR { color: #d33; font-weight: 600; }
-  .SKIPPED { color: #888; font-style: italic; }
-  #downloadBox { display: none; margin-top: 20px; }
-  #errorBox { display: none; margin-top: 16px; color: #d33; }
 
-  #catScene { display: none; text-align: center; margin: 18px 0 4px; }
+  #catScene { display: none; text-align: center; margin: 20px 0 4px; }
   #catScene.show { display: block; }
-  #catScene .cat-caption { color: #888; font-size: .85rem; margin-top: -4px; }
+  #catScene .cat-caption { color: var(--text-secondary); font-size: .85rem; margin-top: -4px; }
 
   .cat-black .tail { transform-origin: 100px 190px; animation: tailSwish 2.3s ease-in-out infinite; }
   .cat-white .tail2 { transform-origin: 380px 190px; animation: tailSwish 2s ease-in-out infinite reverse; }
@@ -82,87 +160,158 @@
   .type-line.line2 { animation-delay: .3s; }
   .type-line.line3 { animation-delay: .6s; }
   @keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+  #downloadBox { display: none; margin-top: 20px; }
+  #errorBox {
+    display: none;
+    margin-top: 16px;
+    padding: 12px 14px;
+    color: var(--danger-fg);
+    background: var(--danger-bg);
+    border-radius: 8px;
+    font-size: .9rem;
+  }
+
+  .table-wrap { margin-top: 22px; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; background: var(--card-bg); }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th {
+    background: var(--bg);
+    color: var(--text-secondary);
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    font-weight: 600;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--bg); }
+
+  .status-pill {
+    display: inline-block;
+    padding: 3px 11px;
+    border-radius: 999px;
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .02em;
+    white-space: nowrap;
+  }
+  .status-pill.FOUND { background: var(--success-bg); color: var(--success-fg); }
+  .status-pill.NOT_FOUND { background: var(--muted-bg); color: var(--muted-fg); }
+  .status-pill.FOUND_NO_PHONE { background: var(--warn-bg); color: var(--warn-fg); }
+  .status-pill.ERROR { background: var(--danger-bg); color: var(--danger-fg); }
+  .status-pill.SKIPPED { background: var(--muted-bg); color: var(--muted-fg); font-style: italic; }
+
+  footer.site-footer {
+    text-align: center;
+    padding: 24px 20px 40px;
+    color: var(--text-secondary);
+    font-size: .8rem;
+  }
 </style>
 </head>
 <body>
 
-<h1>FOREWARN Owner Lookup</h1>
-<p class="sub">Drag in a CSV of name + address entries, log into FOREWARN when prompted, and get a results CSV back.</p>
-
-<div id="dropzone">
-  <p><strong>Drag & drop your CSV here</strong></p>
-  <p>or click to browse — accepts a clean first_name/last_name/address/zip CSV, or a raw county property-tax-roll export</p>
-  <input type="file" id="fileInput" accept=".csv">
-</div>
-
-<div class="row">
-  <label for="delay">Delay between lookups (seconds):</label>
-  <input type="number" id="delay" value="5" min="1">
-  <button id="startBtn" disabled>Start Lookup</button>
-  <button id="stopBtn" class="danger">Stop</button>
-</div>
-
-<div id="errorBox"></div>
-
-<div id="loginBox">
-  A Chromium window has opened. Log into FOREWARN there, then click below to continue.
-  <div class="row">
-    <button id="loginBtn" class="secondary">I've logged in — continue</button>
+<div class="topbar">
+  <div class="brand">
+    <svg width="34" height="34" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="8" fill="#c9a227" opacity="0.15" />
+      <path d="M16 6 L27 15 H23 V26 H9 V15 H5 Z" fill="#d4af37"/>
+      <rect x="13" y="18" width="6" height="8" fill="#16233c"/>
+    </svg>
+    <div>
+      <span class="brand-name">URTO</span>
+      <span class="brand-tag">Ultimate Realtor Tool</span>
+    </div>
   </div>
 </div>
 
-<div id="catScene">
-  <svg viewBox="0 0 480 240" width="100%" height="200" xmlns="http://www.w3.org/2000/svg">
-    <rect x="0" y="222" width="480" height="10" fill="#b98a5e"/>
-    <rect x="165" y="206" width="150" height="18" rx="4" fill="#9aa0a6"/>
-    <rect x="180" y="140" width="120" height="68" rx="6" fill="#37474f"/>
-    <rect x="186" y="146" width="108" height="56" rx="3" fill="#0d1b2a"/>
-    <rect class="type-line" x="192" y="154" width="60" height="4" rx="2" fill="#4fd1c5"/>
-    <rect class="type-line line2" x="192" y="164" width="80" height="4" rx="2" fill="#4fd1c5"/>
-    <rect class="type-line line3" x="192" y="174" width="45" height="4" rx="2" fill="#4fd1c5"/>
+<main>
+  <h1>Owner Lookup</h1>
+  <p class="sub">Drag in a CSV of name + address entries, log into FOREWARN when prompted, and get a results CSV back.</p>
 
-    <g class="cat cat-black">
-      <path class="tail" d="M100 190 C 70 190, 60 140, 90 120" stroke="#111" stroke-width="14" fill="none" stroke-linecap="round"/>
-      <ellipse cx="128" cy="196" rx="44" ry="30" fill="#1a1a1a"/>
-      <circle cx="116" cy="150" r="26" fill="#1a1a1a"/>
-      <polygon points="98,132 106,108 118,130" fill="#1a1a1a"/>
-      <polygon points="130,128 140,106 148,132" fill="#1a1a1a"/>
-      <circle class="cat-eye" cx="112" cy="150" r="3" fill="#fff"/>
-      <line x1="90" y1="156" x2="65" y2="152" stroke="#fff" stroke-width="1.5"/>
-      <line x1="90" y1="161" x2="65" y2="162" stroke="#fff" stroke-width="1.5"/>
-      <ellipse class="paw" cx="168" cy="208" rx="12" ry="9" fill="#1a1a1a"/>
-    </g>
+  <div class="card">
+    <div id="dropzone">
+      <p><strong>Drag & drop your CSV here</strong></p>
+      <p>or click to browse — accepts a clean first_name/last_name/address/zip CSV, or a raw county property-tax-roll export</p>
+      <input type="file" id="fileInput" accept=".csv">
+    </div>
 
-    <g class="cat cat-white">
-      <path class="tail tail2" d="M380 190 C 410 190, 420 140, 390 120" stroke="#333" stroke-width="13" fill="none" stroke-linecap="round"/>
-      <ellipse cx="352" cy="196" rx="42" ry="28" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
-      <circle cx="364" cy="150" r="25" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
-      <polygon points="382,132 374,108 362,130" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
-      <polygon points="350,128 340,106 332,132" fill="#111111"/>
-      <ellipse cx="340" cy="190" rx="9" ry="7" fill="#111111"/>
-      <ellipse cx="368" cy="205" rx="8" ry="6" fill="#111111"/>
-      <ellipse cx="375" cy="160" rx="7" ry="5" fill="#111111"/>
-      <circle class="cat-eye" cx="368" cy="150" r="3" fill="#111"/>
-      <line x1="390" y1="156" x2="415" y2="152" stroke="#999" stroke-width="1.5"/>
-      <line x1="390" y1="161" x2="415" y2="162" stroke="#999" stroke-width="1.5"/>
-      <ellipse class="paw paw2" cx="312" cy="208" rx="11" ry="8" fill="#ffffff" stroke="#d8d8d8"/>
-    </g>
-  </svg>
-  <p class="cat-caption">hard at work...</p>
-</div>
+    <div class="row">
+      <label for="delay">Delay between lookups (seconds):</label>
+      <input type="number" id="delay" value="5" min="1">
+      <button id="startBtn" disabled>Start Lookup</button>
+      <button id="stopBtn" class="danger">Stop</button>
+    </div>
 
-<div id="status"></div>
+    <div id="errorBox"></div>
 
-<div id="downloadBox">
-  <button id="downloadBtn" class="secondary">Download results CSV</button>
-</div>
+    <div id="loginBox">
+      A Chromium window has opened. Log into FOREWARN there, then click below to continue.
+      <div class="row">
+        <button id="loginBtn" class="secondary">I've logged in — continue</button>
+      </div>
+    </div>
 
-<table id="resultsTable" style="display:none">
-  <thead>
-    <tr><th>Owner</th><th>Address</th><th>Zip</th><th>Phone</th><th>Status</th><th>Notes</th></tr>
-  </thead>
-  <tbody></tbody>
-</table>
+    <div id="catScene">
+      <svg viewBox="0 0 480 240" width="100%" height="200" xmlns="http://www.w3.org/2000/svg">
+        <rect x="0" y="222" width="480" height="10" fill="#b98a5e"/>
+        <rect x="165" y="206" width="150" height="18" rx="4" fill="#9aa0a6"/>
+        <rect x="180" y="140" width="120" height="68" rx="6" fill="#37474f"/>
+        <rect x="186" y="146" width="108" height="56" rx="3" fill="#0d1b2a"/>
+        <rect class="type-line" x="192" y="154" width="60" height="4" rx="2" fill="#4fd1c5"/>
+        <rect class="type-line line2" x="192" y="164" width="80" height="4" rx="2" fill="#4fd1c5"/>
+        <rect class="type-line line3" x="192" y="174" width="45" height="4" rx="2" fill="#4fd1c5"/>
+
+        <g class="cat cat-black">
+          <path class="tail" d="M100 190 C 70 190, 60 140, 90 120" stroke="#111" stroke-width="14" fill="none" stroke-linecap="round"/>
+          <ellipse cx="128" cy="196" rx="44" ry="30" fill="#1a1a1a"/>
+          <circle cx="116" cy="150" r="26" fill="#1a1a1a"/>
+          <polygon points="98,132 106,108 118,130" fill="#1a1a1a"/>
+          <polygon points="130,128 140,106 148,132" fill="#1a1a1a"/>
+          <circle class="cat-eye" cx="112" cy="150" r="3" fill="#fff"/>
+          <line x1="90" y1="156" x2="65" y2="152" stroke="#fff" stroke-width="1.5"/>
+          <line x1="90" y1="161" x2="65" y2="162" stroke="#fff" stroke-width="1.5"/>
+          <ellipse class="paw" cx="168" cy="208" rx="12" ry="9" fill="#1a1a1a"/>
+        </g>
+
+        <g class="cat cat-white">
+          <path class="tail tail2" d="M380 190 C 410 190, 420 140, 390 120" stroke="#333" stroke-width="13" fill="none" stroke-linecap="round"/>
+          <ellipse cx="352" cy="196" rx="42" ry="28" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
+          <circle cx="364" cy="150" r="25" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
+          <polygon points="382,132 374,108 362,130" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
+          <polygon points="350,128 340,106 332,132" fill="#111111"/>
+          <ellipse cx="340" cy="190" rx="9" ry="7" fill="#111111"/>
+          <ellipse cx="368" cy="205" rx="8" ry="6" fill="#111111"/>
+          <ellipse cx="375" cy="160" rx="7" ry="5" fill="#111111"/>
+          <circle class="cat-eye" cx="368" cy="150" r="3" fill="#111"/>
+          <line x1="390" y1="156" x2="415" y2="152" stroke="#999" stroke-width="1.5"/>
+          <line x1="390" y1="161" x2="415" y2="162" stroke="#999" stroke-width="1.5"/>
+          <ellipse class="paw paw2" cx="312" cy="208" rx="11" ry="8" fill="#ffffff" stroke="#d8d8d8"/>
+        </g>
+      </svg>
+      <p class="cat-caption">hard at work...</p>
+    </div>
+
+    <div id="status"></div>
+
+    <div id="downloadBox">
+      <button id="downloadBtn" class="secondary">Download results CSV</button>
+    </div>
+
+    <div class="table-wrap">
+      <table id="resultsTable" style="display:none">
+        <thead>
+          <tr><th>Owner</th><th>Address</th><th>Zip</th><th>Phone</th><th>Status</th><th>Notes</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  URTO — Ultimate Realtor Tool · Created by Mario Bengochea
+</footer>
 
 <script>
 let selectedFile = null;
@@ -289,7 +438,7 @@ function renderRows(rows) {
       <td>${escapeHtml(r.address || '')}</td>
       <td>${escapeHtml(r.zip || '')}</td>
       <td>${escapeHtml(r.phone || '')}</td>
-      <td class="${r.status}">${escapeHtml(r.status || '')}</td>
+      <td><span class="status-pill ${r.status || ''}">${escapeHtml(r.status || '')}</span></td>
       <td>${escapeHtml(r.notes || '')}</td>
     `;
     resultsBody.appendChild(tr);
