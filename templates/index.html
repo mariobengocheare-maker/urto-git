@@ -404,112 +404,248 @@
   .home-scene {
     position: relative;
     height: calc(100vh - 220px);
-    min-height: 480px;
-    background: radial-gradient(ellipse at center, var(--navy-light) 0%, var(--navy) 60%, #060a14 100%);
+    min-height: 520px;
     border-radius: 16px;
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+    caret-color: transparent;
+    perspective: 900px;
+    background:
+      radial-gradient(ellipse 60% 45% at 22% 18%, rgba(88, 60, 190, .22), transparent 70%),
+      radial-gradient(ellipse 55% 40% at 80% 78%, rgba(20, 120, 190, .18), transparent 70%),
+      radial-gradient(ellipse 45% 35% at 70% 15%, rgba(190, 55, 130, .10), transparent 70%),
+      radial-gradient(ellipse at center, #0b1224 0%, #070b18 55%, #04060d 100%);
   }
+
+  .home-star {
+    position: absolute;
+    border-radius: 50%;
+    background: #cfe0ff;
+    animation: starTwinkle 4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes starTwinkle {
+    0%, 100% { opacity: .15; }
+    50% { opacity: .9; }
+  }
+
   .home-orbit-ring {
     position: absolute;
-    width: 340px;
-    height: 340px;
     border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, .12);
+    pointer-events: none;
   }
-  .home-center {
-    position: absolute;
-    width: 84px;
-    height: 84px;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, var(--gold-bright), var(--gold) 60%, #8a6d1a 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 0 40px rgba(212, 175, 55, .45);
-    z-index: 5;
+  .home-orbit-ring.r1 {
+    width: 360px;
+    height: 360px;
+    border: 1px solid rgba(120, 160, 255, .22);
+    box-shadow: inset 0 0 60px rgba(80, 120, 255, .07), 0 0 30px rgba(80, 120, 255, .06);
   }
-  .home-center span { color: var(--navy); font-weight: 800; font-size: .9rem; letter-spacing: .05em; }
-  .home-ping {
-    position: absolute;
-    border-radius: 50%;
-    border: 1px solid rgba(212, 175, 55, .5);
-    animation: homePing 2.4s cubic-bezier(0,0,.2,1) infinite;
+  .home-orbit-ring.r2 {
+    width: 480px;
+    height: 480px;
+    border: 1px dashed rgba(120, 160, 255, .12);
+    animation: ringSpin 80s linear infinite;
   }
-  .home-ping.p1 { width: 110px; height: 110px; }
-  .home-ping.p2 { width: 140px; height: 140px; animation-delay: .6s; }
-  @keyframes homePing { 0% { transform: scale(.8); opacity: .6; } 100% { transform: scale(1.6); opacity: 0; } }
+  .home-orbit-ring.r3 {
+    width: 240px;
+    height: 240px;
+    border: 1px solid rgba(167, 139, 250, .14);
+    animation: ringSpin 45s linear infinite reverse;
+  }
+  @keyframes ringSpin { to { transform: rotate(360deg); } }
 
-  .home-node {
+  .home-core {
+    position: absolute;
+    z-index: 100;
+    text-align: center;
+    transform-style: preserve-3d;
+    animation: coreTilt 10s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes coreTilt {
+    0%, 100% { transform: rotateX(8deg) rotateY(-7deg); }
+    25% { transform: rotateX(-5deg) rotateY(6deg); }
+    50% { transform: rotateX(7deg) rotateY(8deg); }
+    75% { transform: rotateX(-6deg) rotateY(-6deg); }
+  }
+  .home-core-glow {
     position: absolute;
     left: 50%;
     top: 50%;
-    margin-left: -26px;
-    margin-top: -26px;
+    width: 300px;
+    height: 140px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(ellipse, rgba(99, 141, 255, .30), rgba(167, 139, 250, .12) 55%, transparent 75%);
+    filter: blur(6px);
+    animation: coreBreath 4.5s ease-in-out infinite;
+  }
+  @keyframes coreBreath {
+    0%, 100% { opacity: .65; transform: translate(-50%, -50%) scale(1); }
+    50% { opacity: 1; transform: translate(-50%, -50%) scale(1.12); }
+  }
+  .home-title {
+    /* Back layer: transparent glyphs carrying the 3D extrusion shadows.
+       The gradient face lives on ::after (z-index 1) because negative
+       z-index pseudo-elements paint ABOVE a parent's background — and
+       with background-clip:text the face IS the background. */
+    position: relative;
+    font-size: clamp(3.2rem, 9vw, 5rem);
+    font-weight: 900;
+    letter-spacing: .14em;
+    line-height: 1;
+    padding-right: .14em; /* compensate trailing letter-spacing so it centers true */
+    color: transparent;
+    text-shadow:
+      1px 1px 0 #1d2c52, 2px 2px 0 #1a2849, 3px 3px 0 #172440,
+      4px 4px 0 #142038, 5px 5px 0 #111c30, 6px 6px 0 #0e1828,
+      7px 7px 0 #0b1420, 8px 8px 0 #081018,
+      0 16px 34px rgba(0, 0, 0, .75);
+    filter: drop-shadow(0 0 26px rgba(120, 160, 255, .55));
+  }
+  .home-title::after {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    padding-right: .14em;
+    z-index: 1;
+    text-shadow: none;
+    background: linear-gradient(180deg, #ffffff 0%, #eaf1ff 30%, #c3d3f5 48%, #8aa5df 62%, #ffffff 68%, #9db4e8 78%, #5c79bb 92%, #47609c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+  .home-tagline {
+    margin-top: 12px;
+    font-size: .68rem;
+    font-weight: 600;
+    letter-spacing: .5em;
+    padding-left: .5em;
+    color: rgba(180, 200, 245, .55);
+    text-transform: uppercase;
+  }
+
+  .home-node {
+    --accent: 120, 160, 255;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    margin-left: -30px;
+    margin-top: -30px;
     transition: opacity .4s ease;
     cursor: pointer;
   }
-  .home-node-inner { animation: homeFloat 3.2s ease-in-out infinite; }
-  @keyframes homeFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+  .home-node-inner { animation: homeFloat 3.6s ease-in-out infinite; }
+  @keyframes homeFloat {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    35% { transform: translateY(-8px) rotate(1.2deg); }
+    70% { transform: translateY(3px) rotate(-1deg); }
+  }
 
   .home-node-circle {
-    width: 52px;
-    height: 52px;
+    width: 60px;
+    height: 60px;
     border-radius: 50%;
-    background: var(--navy);
-    border: 2px solid rgba(255, 255, 255, .35);
+    background:
+      radial-gradient(circle at 30% 25%, rgba(255, 255, 255, .22), transparent 45%),
+      radial-gradient(circle at 65% 75%, rgba(var(--accent), .38), transparent 65%),
+      radial-gradient(circle, rgba(14, 20, 40, .92), rgba(8, 12, 26, .96));
+    border: 1px solid rgba(var(--accent), .55);
+    box-shadow:
+      0 0 20px rgba(var(--accent), .35),
+      inset 0 0 14px rgba(var(--accent), .18);
+    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
-    transition: all .25s ease;
+    color: rgb(var(--accent));
+    transition: all .3s ease;
+  }
+  .home-node:hover .home-node-circle {
+    box-shadow: 0 0 32px rgba(var(--accent), .55), inset 0 0 16px rgba(var(--accent), .3);
   }
   .home-node.expanded .home-node-circle {
-    background: var(--gold-bright);
-    border-color: var(--gold-bright);
-    color: var(--navy);
-    box-shadow: 0 0 24px rgba(212, 175, 55, .5);
-    transform: scale(1.15);
+    color: #fff;
+    border-color: rgba(var(--accent), .95);
+    box-shadow:
+      0 0 44px rgba(var(--accent), .75),
+      inset 0 0 22px rgba(var(--accent), .5);
+    transform: scale(1.18);
   }
   .home-node-label {
     position: absolute;
-    top: 60px;
+    top: 68px;
     left: 50%;
     transform: translateX(-50%);
     white-space: nowrap;
     font-size: .72rem;
     font-weight: 700;
-    letter-spacing: .04em;
-    color: rgba(255, 255, 255, .8);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, .65);
+    text-shadow: 0 0 12px rgba(var(--accent), .8);
+    transition: color .3s ease;
   }
   .home-node.expanded .home-node-label { color: #fff; }
 
   .home-detail-card {
     position: absolute;
-    top: 88px;
+    top: 96px;
     left: 50%;
     transform: translateX(-50%);
-    width: 230px;
-    background: rgba(10, 15, 26, .95);
-    border: 1px solid rgba(212, 175, 55, .4);
-    border-radius: 10px;
-    padding: 14px;
+    width: 244px;
+    background: linear-gradient(160deg, rgba(16, 24, 48, .96), rgba(8, 12, 26, .97));
+    border: 1px solid rgba(var(--accent), .45);
+    border-radius: 12px;
+    padding: 16px;
     text-align: center;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, .4);
+    box-shadow: 0 14px 44px rgba(0, 0, 0, .55), 0 0 30px rgba(var(--accent), .16);
+    animation: cardIn .35s cubic-bezier(.2, .9, .3, 1.2);
   }
-  .home-detail-card h4 { margin: 0 0 6px; color: #fff; font-size: .92rem; }
-  .home-detail-card p { margin: 0 0 12px; color: rgba(255,255,255,.7); font-size: .78rem; line-height: 1.4; }
-  .home-detail-card button { width: 100%; padding: 8px; font-size: .8rem; }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(.94); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  }
+  .home-detail-card::before {
+    content: "";
+    position: absolute;
+    top: -13px;
+    left: 50%;
+    width: 1px;
+    height: 13px;
+    background: linear-gradient(to bottom, transparent, rgba(var(--accent), .7));
+  }
+  .home-detail-card h4 {
+    margin: 0 0 7px;
+    color: #fff;
+    font-size: .95rem;
+    letter-spacing: .05em;
+  }
+  .home-detail-card p { margin: 0 0 13px; color: rgba(210, 222, 250, .72); font-size: .78rem; line-height: 1.5; }
+  .home-detail-card button {
+    width: 100%;
+    padding: 9px;
+    font-size: .8rem;
+    letter-spacing: .06em;
+    background: linear-gradient(135deg, rgba(var(--accent), .9), rgba(var(--accent), .65));
+    color: #060a14;
+    font-weight: 800;
+  }
 
   .home-hint {
     position: absolute;
     bottom: 14px;
     left: 50%;
     transform: translateX(-50%);
-    color: rgba(255, 255, 255, .4);
-    font-size: .75rem;
+    color: rgba(170, 190, 235, .38);
+    font-size: .72rem;
+    letter-spacing: .05em;
+    pointer-events: none;
   }
 </style>
 </head>
@@ -540,10 +676,15 @@
 
 <section id="homeSection">
   <div class="home-scene" id="homeScene">
-    <div class="home-orbit-ring"></div>
-    <div class="home-ping p1"></div>
-    <div class="home-ping p2"></div>
-    <div class="home-center"><span>URTO</span></div>
+    <div id="homeStars"></div>
+    <div class="home-orbit-ring r2"></div>
+    <div class="home-orbit-ring r1"></div>
+    <div class="home-orbit-ring r3"></div>
+    <div class="home-core">
+      <div class="home-core-glow"></div>
+      <div class="home-title" data-text="URTO">URTO</div>
+      <div class="home-tagline">Ultimate Realtor Tool</div>
+    </div>
     <div id="homeOrbitNodes"></div>
     <div class="home-hint">Click a node to learn more &nbsp;·&nbsp; click anywhere else to let it orbit again</div>
   </div>
@@ -1437,9 +1578,9 @@ const ICON_PEOPLE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"
 const ICON_PHONE = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.4c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.4 0 .8-.2 1L6.6 10.8z"/></svg>';
 
 const HOME_NODES = [
-  { key: 'lookup', title: 'URTO Skip Trace', desc: 'Drag in a CSV, automate FOREWARN owner-phone lookups, and get results back.', icon: ICON_SEARCH },
-  { key: 'crm', title: 'URTO CRM', desc: 'Manage clients, log notes, and keep follow-ups on an automatic schedule.', icon: ICON_PEOPLE },
-  { key: 'dialer', title: 'URTO Dialer', desc: 'Load a call list and power through it — Enter to call, arrows to move on.', icon: ICON_PHONE },
+  { key: 'lookup', title: 'URTO Skip Trace', desc: 'Drag in a CSV, automate FOREWARN owner-phone lookups, and get results back.', icon: ICON_SEARCH, accent: '56, 217, 255' },
+  { key: 'crm', title: 'URTO CRM', desc: 'Manage clients, log notes, and keep follow-ups on an automatic schedule.', icon: ICON_PEOPLE, accent: '167, 139, 250' },
+  { key: 'dialer', title: 'URTO Dialer', desc: 'Load a call list and power through it — Enter to call, arrows to move on.', icon: ICON_PHONE, accent: '244, 114, 182' },
 ];
 
 let homeInitialized = false;
@@ -1449,14 +1590,32 @@ let homeExpandedKey = null;
 let homeTimer = null;
 const homeNodeEls = {};
 
+function buildStarfield() {
+  const container = document.getElementById('homeStars');
+  for (let i = 0; i < 90; i++) {
+    const star = document.createElement('div');
+    star.className = 'home-star';
+    const size = (Math.random() * 1.8 + 0.6).toFixed(1);
+    star.style.width = size + 'px';
+    star.style.height = size + 'px';
+    star.style.left = (Math.random() * 100).toFixed(2) + '%';
+    star.style.top = (Math.random() * 100).toFixed(2) + '%';
+    star.style.animationDuration = (Math.random() * 4 + 2.5).toFixed(2) + 's';
+    star.style.animationDelay = (Math.random() * 5).toFixed(2) + 's';
+    container.appendChild(star);
+  }
+}
+
 function initHomeOrbit() {
   if (!homeInitialized) {
+    buildStarfield();
     const container = document.getElementById('homeOrbitNodes');
-    HOME_NODES.forEach((node) => {
+    HOME_NODES.forEach((node, i) => {
       const el = document.createElement('div');
       el.className = 'home-node';
+      el.style.setProperty('--accent', node.accent);
       el.innerHTML = `
-        <div class="home-node-inner">
+        <div class="home-node-inner" style="animation-duration:${(3.2 + i * 0.7).toFixed(1)}s;animation-delay:${(i * 0.9).toFixed(1)}s">
           <div class="home-node-circle">${node.icon}</div>
           <div class="home-node-label">${escapeHtml(node.title)}</div>
         </div>
@@ -1505,7 +1664,7 @@ function toggleHomeNode(key) {
 
 function renderHomeNodes() {
   const total = HOME_NODES.length;
-  const radius = 150;
+  const radius = 180;
   HOME_NODES.forEach((node, i) => {
     const el = homeNodeEls[node.key];
     if (!el) return;
@@ -1539,6 +1698,92 @@ function renderHomeNodes() {
 }
 
 initHomeOrbit();
+
+/* ===================== Intro sound + voice ===================== */
+let introDone = false;
+
+function playIntroSound(ctx) {
+  const now = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0.0001, now);
+  master.gain.exponentialRampToValueAtTime(0.22, now + 0.45);
+  master.gain.exponentialRampToValueAtTime(0.0001, now + 1.7);
+  master.connect(ctx.destination);
+
+  // Rising shimmer: three detuned sweeps landing on an A-major-ish stack.
+  const sweeps = [
+    { from: 220, to: 880, type: 'triangle', gain: 0.20 },
+    { from: 330, to: 1318, type: 'triangle', gain: 0.14 },
+    { from: 554, to: 2217, type: 'sine', gain: 0.07 },
+  ];
+  for (const s of sweeps) {
+    const osc = ctx.createOscillator();
+    osc.type = s.type;
+    osc.frequency.setValueAtTime(s.from, now);
+    osc.frequency.exponentialRampToValueAtTime(s.to, now + 1.15);
+    const g = ctx.createGain();
+    g.gain.value = s.gain;
+    osc.connect(g);
+    g.connect(master);
+    osc.start(now);
+    osc.stop(now + 1.8);
+  }
+
+  // A soft "arrival" bell once the sweep lands.
+  const bell = ctx.createOscillator();
+  bell.type = 'sine';
+  bell.frequency.setValueAtTime(1760, now + 1.05);
+  const bellGain = ctx.createGain();
+  bellGain.gain.setValueAtTime(0.0001, now + 1.05);
+  bellGain.gain.exponentialRampToValueAtTime(0.12, now + 1.12);
+  bellGain.gain.exponentialRampToValueAtTime(0.0001, now + 2.2);
+  bell.connect(bellGain);
+  bellGain.connect(ctx.destination);
+  bell.start(now + 1.05);
+  bell.stop(now + 2.3);
+}
+
+function speakWelcome() {
+  if (!('speechSynthesis' in window)) return;
+  const speak = () => {
+    const u = new SpeechSynthesisUtterance('Welcome to URTO');
+    u.rate = 0.92;
+    u.pitch = 1.12;
+    u.volume = 0.9;
+    const voices = speechSynthesis.getVoices();
+    const preferred =
+      voices.find(v => v.lang.startsWith('en') && /aria|jenny|zira|samantha|sonia|libby|female/i.test(v.name)) ||
+      voices.find(v => v.lang.startsWith('en') && /google/i.test(v.name)) ||
+      voices.find(v => v.lang.startsWith('en'));
+    if (preferred) u.voice = preferred;
+    speechSynthesis.speak(u);
+  };
+  if (speechSynthesis.getVoices().length === 0) {
+    speechSynthesis.addEventListener('voiceschanged', speak, { once: true });
+  } else {
+    speak();
+  }
+}
+
+function tryIntro() {
+  if (introDone) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { introDone = true; speakWelcome(); return; }
+  const ctx = new AC();
+  if (ctx.state === 'suspended') {
+    // Browser autoplay policy: no sound until the user interacts.
+    // Leave introDone false so the first click/keypress triggers us again.
+    ctx.close();
+    return;
+  }
+  introDone = true;
+  try { playIntroSound(ctx); } catch (e) { /* sound is decorative; never block the page */ }
+  setTimeout(speakWelcome, 1100);
+}
+
+tryIntro();
+document.addEventListener('pointerdown', tryIntro);
+document.addEventListener('keydown', tryIntro);
 </script>
 
 </body>
