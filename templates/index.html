@@ -399,6 +399,118 @@
   .dialer-list-row:hover { background: var(--bg); }
   .dialer-list-row.current { background: var(--warn-bg); font-weight: 700; }
   .dialer-empty { color: var(--text-secondary); font-size: .9rem; text-align: center; padding: 30px; }
+
+  /* ---- Home orbital ---- */
+  .home-scene {
+    position: relative;
+    height: calc(100vh - 220px);
+    min-height: 480px;
+    background: radial-gradient(ellipse at center, var(--navy-light) 0%, var(--navy) 60%, #060a14 100%);
+    border-radius: 16px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .home-orbit-ring {
+    position: absolute;
+    width: 340px;
+    height: 340px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, .12);
+  }
+  .home-center {
+    position: absolute;
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, var(--gold-bright), var(--gold) 60%, #8a6d1a 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 40px rgba(212, 175, 55, .45);
+    z-index: 5;
+  }
+  .home-center span { color: var(--navy); font-weight: 800; font-size: .9rem; letter-spacing: .05em; }
+  .home-ping {
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid rgba(212, 175, 55, .5);
+    animation: homePing 2.4s cubic-bezier(0,0,.2,1) infinite;
+  }
+  .home-ping.p1 { width: 110px; height: 110px; }
+  .home-ping.p2 { width: 140px; height: 140px; animation-delay: .6s; }
+  @keyframes homePing { 0% { transform: scale(.8); opacity: .6; } 100% { transform: scale(1.6); opacity: 0; } }
+
+  .home-node {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    margin-left: -26px;
+    margin-top: -26px;
+    transition: opacity .4s ease;
+    cursor: pointer;
+  }
+  .home-node-inner { animation: homeFloat 3.2s ease-in-out infinite; }
+  @keyframes homeFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+
+  .home-node-circle {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--navy);
+    border: 2px solid rgba(255, 255, 255, .35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    transition: all .25s ease;
+  }
+  .home-node.expanded .home-node-circle {
+    background: var(--gold-bright);
+    border-color: var(--gold-bright);
+    color: var(--navy);
+    box-shadow: 0 0 24px rgba(212, 175, 55, .5);
+    transform: scale(1.15);
+  }
+  .home-node-label {
+    position: absolute;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: rgba(255, 255, 255, .8);
+  }
+  .home-node.expanded .home-node-label { color: #fff; }
+
+  .home-detail-card {
+    position: absolute;
+    top: 88px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 230px;
+    background: rgba(10, 15, 26, .95);
+    border: 1px solid rgba(212, 175, 55, .4);
+    border-radius: 10px;
+    padding: 14px;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .4);
+  }
+  .home-detail-card h4 { margin: 0 0 6px; color: #fff; font-size: .92rem; }
+  .home-detail-card p { margin: 0 0 12px; color: rgba(255,255,255,.7); font-size: .78rem; line-height: 1.4; }
+  .home-detail-card button { width: 100%; padding: 8px; font-size: .8rem; }
+
+  .home-hint {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255, 255, 255, .4);
+    font-size: .75rem;
+  }
 </style>
 </head>
 <body>
@@ -418,14 +530,26 @@
 </div>
 
 <div class="tabs">
-  <button class="tab-btn active" id="tabLookupBtn">Owner Lookup</button>
+  <button class="tab-btn active" id="tabHomeBtn">Home</button>
+  <button class="tab-btn" id="tabLookupBtn">Owner Lookup</button>
   <button class="tab-btn" id="tabCrmBtn">URTO CRM</button>
   <button class="tab-btn" id="tabDialerBtn">URTO Dialer</button>
 </div>
 
 <main>
 
-<section id="lookupSection">
+<section id="homeSection">
+  <div class="home-scene" id="homeScene">
+    <div class="home-orbit-ring"></div>
+    <div class="home-ping p1"></div>
+    <div class="home-ping p2"></div>
+    <div class="home-center"><span>URTO</span></div>
+    <div id="homeOrbitNodes"></div>
+    <div class="home-hint">Click a node to learn more &nbsp;·&nbsp; click anywhere else to let it orbit again</div>
+  </div>
+</section>
+
+<section id="lookupSection" style="display:none">
   <h1>Owner Lookup</h1>
   <p class="sub">Drag in a CSV of name + address entries, log into FOREWARN when prompted, and get a results CSV back.</p>
 
@@ -818,17 +942,20 @@ function escapeHtml(s) {
 }
 
 /* ===================== Tabs ===================== */
+const tabHomeBtn = document.getElementById('tabHomeBtn');
 const tabLookupBtn = document.getElementById('tabLookupBtn');
 const tabCrmBtn = document.getElementById('tabCrmBtn');
 const tabDialerBtn = document.getElementById('tabDialerBtn');
+const homeSection = document.getElementById('homeSection');
 const lookupSection = document.getElementById('lookupSection');
 const crmSection = document.getElementById('crmSection');
 const dialerSection = document.getElementById('dialerSection');
 
 const TOP_TABS = [
-  { btn: tabLookupBtn, section: lookupSection, onShow: null },
-  { btn: tabCrmBtn, section: crmSection, onShow: () => loadClients() },
-  { btn: tabDialerBtn, section: dialerSection, onShow: null },
+  { key: 'home', btn: tabHomeBtn, section: homeSection, onShow: () => initHomeOrbit() },
+  { key: 'lookup', btn: tabLookupBtn, section: lookupSection, onShow: null },
+  { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => loadClients() },
+  { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
 ];
 
 function showTopTab(target) {
@@ -837,12 +964,19 @@ function showTopTab(target) {
     t.btn.classList.toggle('active', active);
     t.section.style.display = active ? 'block' : 'none';
   }
+  if (target.key !== 'home') stopHomeOrbit();
   if (target.onShow) target.onShow();
 }
 
-tabLookupBtn.addEventListener('click', () => showTopTab(TOP_TABS[0]));
-tabCrmBtn.addEventListener('click', () => showTopTab(TOP_TABS[1]));
-tabDialerBtn.addEventListener('click', () => showTopTab(TOP_TABS[2]));
+function showTopTabByKey(key) {
+  const target = TOP_TABS.find(t => t.key === key);
+  if (target) showTopTab(target);
+}
+
+tabHomeBtn.addEventListener('click', () => showTopTab(TOP_TABS[0]));
+tabLookupBtn.addEventListener('click', () => showTopTab(TOP_TABS[1]));
+tabCrmBtn.addEventListener('click', () => showTopTab(TOP_TABS[2]));
+tabDialerBtn.addEventListener('click', () => showTopTab(TOP_TABS[3]));
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
 const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
@@ -1296,6 +1430,115 @@ document.addEventListener('keydown', (e) => {
     dialerPrev();
   }
 });
+
+/* ===================== Home orbital ===================== */
+const ICON_SEARCH = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10" cy="10" r="6"/><line x1="20" y1="20" x2="14.5" y2="14.5"/></svg>';
+const ICON_PEOPLE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="3"/><path d="M2 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="8" r="2.3"/><path d="M14.7 14.1c2.6.5 4.6 2.8 4.6 5.9"/></svg>';
+const ICON_PHONE = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.4c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.4 0 .8-.2 1L6.6 10.8z"/></svg>';
+
+const HOME_NODES = [
+  { key: 'lookup', title: 'URTO Skip Trace', desc: 'Drag in a CSV, automate FOREWARN owner-phone lookups, and get results back.', icon: ICON_SEARCH },
+  { key: 'crm', title: 'URTO CRM', desc: 'Manage clients, log notes, and keep follow-ups on an automatic schedule.', icon: ICON_PEOPLE },
+  { key: 'dialer', title: 'URTO Dialer', desc: 'Load a call list and power through it — Enter to call, arrows to move on.', icon: ICON_PHONE },
+];
+
+let homeInitialized = false;
+let homeRotation = 0;
+let homeAutoRotate = true;
+let homeExpandedKey = null;
+let homeTimer = null;
+const homeNodeEls = {};
+
+function initHomeOrbit() {
+  if (!homeInitialized) {
+    const container = document.getElementById('homeOrbitNodes');
+    HOME_NODES.forEach((node) => {
+      const el = document.createElement('div');
+      el.className = 'home-node';
+      el.innerHTML = `
+        <div class="home-node-inner">
+          <div class="home-node-circle">${node.icon}</div>
+          <div class="home-node-label">${escapeHtml(node.title)}</div>
+        </div>
+      `;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleHomeNode(node.key);
+      });
+      container.appendChild(el);
+      homeNodeEls[node.key] = el;
+    });
+    document.getElementById('homeScene').addEventListener('click', () => {
+      homeExpandedKey = null;
+      homeAutoRotate = true;
+      renderHomeNodes();
+    });
+    homeInitialized = true;
+  }
+  startHomeTimer();
+  renderHomeNodes();
+}
+
+function startHomeTimer() {
+  stopHomeOrbit();
+  homeTimer = setInterval(() => {
+    if (!homeAutoRotate) return;
+    homeRotation = (homeRotation + 0.4) % 360;
+    renderHomeNodes();
+  }, 50);
+}
+
+function stopHomeOrbit() {
+  if (homeTimer) { clearInterval(homeTimer); homeTimer = null; }
+}
+
+function toggleHomeNode(key) {
+  if (homeExpandedKey === key) {
+    homeExpandedKey = null;
+    homeAutoRotate = true;
+  } else {
+    homeExpandedKey = key;
+    homeAutoRotate = false;
+  }
+  renderHomeNodes();
+}
+
+function renderHomeNodes() {
+  const total = HOME_NODES.length;
+  const radius = 150;
+  HOME_NODES.forEach((node, i) => {
+    const el = homeNodeEls[node.key];
+    if (!el) return;
+    const isExpanded = homeExpandedKey === node.key;
+    const angle = ((i / total) * 360 + homeRotation) % 360;
+    const rad = (angle * Math.PI) / 180;
+    const x = radius * Math.cos(rad);
+    const y = radius * Math.sin(rad);
+    const zIndex = Math.round(100 + 50 * Math.cos(rad));
+    const opacity = (homeExpandedKey && !isExpanded)
+      ? 0.35
+      : Math.max(0.55, Math.min(1, 0.55 + 0.45 * ((1 + Math.sin(rad)) / 2)));
+
+    el.style.transform = `translate(${x}px, ${y}px)`;
+    el.style.zIndex = isExpanded ? 300 : zIndex;
+    el.style.opacity = opacity;
+    el.classList.toggle('expanded', isExpanded);
+
+    let card = el.querySelector('.home-detail-card');
+    if (isExpanded && !card) {
+      card = document.createElement('div');
+      card.className = 'home-detail-card';
+      card.innerHTML = `<h4>${escapeHtml(node.title)}</h4><p>${escapeHtml(node.desc)}</p><button type="button">Open &rarr;</button>`;
+      card.addEventListener('click', (e) => e.stopPropagation());
+      card.querySelector('button').addEventListener('click', () => showTopTabByKey(node.key));
+      el.appendChild(card);
+    } else if (!isExpanded && card) {
+      card.remove();
+    }
+  });
+}
+
+initHomeOrbit();
 </script>
 
 </body>
