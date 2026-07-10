@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FOREWARN Owner Lookup</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 0 20px;
+    color: #222;
+    background: #fafafa;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: #666; margin-bottom: 24px; }
+  #dropzone {
+    border: 2px dashed #999;
+    border-radius: 10px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    background: #fff;
+    transition: border-color .15s, background .15s;
+  }
+  #dropzone.drag { border-color: #2a6df4; background: #eef4ff; }
+  #dropzone p { margin: 4px 0; color: #555; }
+  #fileInput { display: none; }
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  label { font-size: .9rem; color: #444; }
+  input[type=number] { width: 70px; padding: 4px; }
+  button {
+    background: #2a6df4;
+    color: #fff;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: .95rem;
+    cursor: pointer;
+  }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  button.secondary { background: #1a9c56; }
+  #status { margin-top: 20px; font-size: .95rem; }
+  #loginBox {
+    display: none;
+    margin-top: 16px;
+    padding: 16px;
+    background: #fff8e1;
+    border: 1px solid #f0c14b;
+    border-radius: 8px;
+  }
+  table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: .85rem; background: #fff; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+  th { background: #f0f0f0; }
+  .FOUND { color: #1a9c56; font-weight: 600; }
+  .NOT_FOUND { color: #999; }
+  .FOUND_NO_PHONE { color: #b8860b; }
+  .ERROR { color: #d33; font-weight: 600; }
+  #downloadBox { display: none; margin-top: 20px; }
+  #errorBox { display: none; margin-top: 16px; color: #d33; }
+</style>
+</head>
+<body>
+
+<h1>FOREWARN Owner Lookup</h1>
+<p class="sub">Drag in a CSV of name + address entries, log into FOREWARN when prompted, and get a results CSV back.</p>
+
+<div id="dropzone">
+  <p><strong>Drag & drop your CSV here</strong></p>
+  <p>or click to browse — needs columns: first_name, last_name, address, city, state, zip</p>
+  <input type="file" id="fileInput" accept=".csv">
+</div>
+
+<div class="row">
+  <label for="delay">Delay between lookups (seconds):</label>
+  <input type="number" id="delay" value="5" min="1">
+  <button id="startBtn" disabled>Start Lookup</button>
+</div>
+
+<div id="errorBox"></div>
+
+<div id="loginBox">
+  A Chromium window has opened. Log into FOREWARN there, then click below to continue.
+  <div class="row">
+    <button id="loginBtn" class="secondary">I've logged in — continue</button>
+  </div>
+</div>
+
+<div id="status"></div>
+
+<div id="downloadBox">
+  <button id="downloadBtn" class="secondary">Download results CSV</button>
+</div>
+
+<table id="resultsTable" style="display:none">
+  <thead>
+    <tr><th>First</th><th>Last</th><th>Address</th><th>Phone</th><th>Status</th><th>Notes</th></tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<script>
+let selectedFile = null;
+let jobId = null;
+let pollTimer = null;
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const startBtn = document.getElementById('startBtn');
+const delayInput = document.getElementById('delay');
+const loginBox = document.getElementById('loginBox');
+const loginBtn = document.getElementById('loginBtn');
+const statusDiv = document.getElementById('status');
+const errorBox = document.getElementById('errorBox');
+const downloadBox = document.getElementById('downloadBox');
+const downloadBtn = document.getElementById('downloadBtn');
+const resultsTable = document.getElementById('resultsTable');
+const resultsBody = resultsTable.querySelector('tbody');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) setFile(fileInput.files[0]);
+});
+
+function setFile(file) {
+  selectedFile = file;
+  dropzone.querySelector('p').textContent = `Selected: ${file.name}`;
+  startBtn.disabled = false;
+}
+
+startBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+  startBtn.disabled = true;
+  errorBox.style.display = 'none';
+  const form = new FormData();
+  form.append('file', selectedFile);
+  form.append('delay', delayInput.value);
+
+  const res = await fetch('/api/upload', { method: 'POST', body: form });
+  const data = await res.json();
+  if (!res.ok) {
+    showError(data.error || 'Upload failed');
+    startBtn.disabled = false;
+    return;
+  }
+  jobId = data.job_id;
+  resultsTable.style.display = 'table';
+  pollTimer = setInterval(poll, 1500);
+});
+
+loginBtn.addEventListener('click', async () => {
+  loginBtn.disabled = true;
+  await fetch(`/api/confirm_login/${jobId}`, { method: 'POST' });
+  loginBox.style.display = 'none';
+});
+
+downloadBtn.addEventListener('click', () => {
+  window.location.href = `/api/download/${jobId}`;
+});
+
+function showError(msg) {
+  errorBox.textContent = msg;
+  errorBox.style.display = 'block';
+}
+
+async function poll() {
+  const res = await fetch(`/api/status/${jobId}`);
+  if (!res.ok) return;
+  const data = await res.json();
+
+  if (data.status === 'awaiting_login') {
+    loginBox.style.display = 'block';
+    statusDiv.textContent = 'Waiting for you to log into FOREWARN...';
+  } else if (data.status === 'running') {
+    loginBox.style.display = 'none';
+    statusDiv.textContent = `Processing: ${data.processed} / ${data.total}`;
+  } else if (data.status === 'done') {
+    statusDiv.textContent = `Done — ${data.processed} / ${data.total} processed.`;
+    downloadBox.style.display = 'block';
+    clearInterval(pollTimer);
+  } else if (data.status === 'error') {
+    showError(data.error || 'Something went wrong.');
+    clearInterval(pollTimer);
+  }
+
+  renderRows(data.rows);
+}
+
+function renderRows(rows) {
+  resultsBody.innerHTML = '';
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(r.first_name || '')}</td>
+      <td>${escapeHtml(r.last_name || '')}</td>
+      <td>${escapeHtml(r.address || '')}</td>
+      <td>${escapeHtml(r.phone || '')}</td>
+      <td class="${r.status}">${escapeHtml(r.status || '')}</td>
+      <td>${escapeHtml(r.notes || '')}</td>
+    `;
+    resultsBody.appendChild(tr);
+  }
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+</script>
+
+</body>
+</html>

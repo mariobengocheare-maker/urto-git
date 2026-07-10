@@ -21,7 +21,27 @@ first_name,last_name,address,city,state,zip
 `address` is the street line only (e.g. `15730 SW 127th Ave Apt 301`). See
 `input_sample.csv` for an example.
 
-## Run
+## Run — web UI (drag & drop)
+
+```bash
+python app.py
+```
+
+Then open **http://localhost:5000** in your browser. This must run on your
+own machine, not a remote server — FOREWARN requires you to log in by hand,
+and the automation drives that same logged-in browser session.
+
+1. Drag your CSV onto the page (or click to browse).
+2. Click **Start Lookup** — a real Chromium window opens to FOREWARN.
+3. Log into FOREWARN in that window, then click **"I've logged in — continue"**
+   back on the web page.
+4. Watch results fill in live in the table.
+5. Click **Download results CSV** when it's done.
+
+Only one lookup job can run at a time. Output files are also saved under
+`outputs/` (git-ignored, since they contain names/phone numbers).
+
+## Run — command line
 
 ```bash
 python forewarn_lookup.py --input input.csv --output output.csv --delay 5
@@ -34,6 +54,9 @@ python forewarn_lookup.py --input input.csv --output output.csv --delay 5
 - `status` is one of: `FOUND`, `FOUND_NO_PHONE`, `NOT_FOUND`, `ERROR`.
 - `--delay` is the base pause (seconds) between lookups; a small random
   jitter is added on top.
+
+Both the web UI and the CLI share the same matching logic, in
+`lookup_engine.py`.
 
 ## How matching works
 
