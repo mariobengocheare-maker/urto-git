@@ -26,6 +26,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 
+from input_parser import OUTPUT_FIELDS, load_rows
 from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
 
@@ -40,13 +41,17 @@ def main():
     args = parser.parse_args()
 
     with open(args.input, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        raw_rows = list(reader)
+        fieldnames = reader.fieldnames
 
-    required_cols = {"first_name", "last_name", "address", "zip"}
-    if rows and not required_cols.issubset(rows[0].keys()):
-        sys.exit(f"Input CSV must have at least these columns: {sorted(required_cols)}")
+    if not raw_rows:
+        sys.exit("Input CSV is empty.")
 
-    out_fields = list(rows[0].keys()) + ["phone", "status", "notes"] if rows else []
+    try:
+        rows = load_rows(fieldnames, raw_rows)
+    except ValueError as e:
+        sys.exit(str(e))
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -57,19 +62,25 @@ def main():
               "Once you're on the search page, press Enter here to start...\n")
 
         with open(args.output, "w", newline="", encoding="utf-8") as out_f:
-            writer = csv.DictWriter(out_f, fieldnames=out_fields)
+            writer = csv.DictWriter(out_f, fieldnames=OUTPUT_FIELDS)
             writer.writeheader()
 
             for idx, row in enumerate(rows, start=1):
-                print(f"[{idx}/{len(rows)}] Looking up {row['first_name']} {row['last_name']} "
-                      f"/ {row['address']}...")
-                try:
-                    result = process_row(page, row, debug=args.debug)
-                except Exception as e:
-                    result = {"phone": "", "status": "ERROR", "notes": str(e)}
-                    print(f"  -> ERROR: {e}")
+                owner = row.get("owner_name_raw") or f"{row.get('first_name','')} {row.get('last_name','')}"
+                skip_reason = row.pop("skip_reason", "")
 
-                out_row = dict(row)
+                if skip_reason:
+                    print(f"[{idx}/{len(rows)}] Skipping {owner}: {skip_reason}")
+                    result = {"phone": "", "status": "SKIPPED", "notes": skip_reason}
+                else:
+                    print(f"[{idx}/{len(rows)}] Looking up {owner} / {row['address']}...")
+                    try:
+                        result = process_row(page, row, debug=args.debug)
+                    except Exception as e:
+                        result = {"phone": "", "status": "ERROR", "notes": str(e)}
+                        print(f"  -> ERROR: {e}")
+
+                out_row = {k: row.get(k, "") for k in OUTPUT_FIELDS if k in row}
                 out_row.update(result)
                 writer.writerow(out_row)
                 out_f.flush()
@@ -77,7 +88,7 @@ def main():
                 print(f"  -> {result['status']}"
                       + (f" ({result['phone']})" if result["phone"] else ""))
 
-                if idx < len(rows):
+                if idx < len(rows) and not skip_reason:
                     time.sleep(args.delay + random.uniform(0, 1.5))
 
         browser.close()

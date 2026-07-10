@@ -57,6 +57,7 @@
   .NOT_FOUND { color: #999; }
   .FOUND_NO_PHONE { color: #b8860b; }
   .ERROR { color: #d33; font-weight: 600; }
+  .SKIPPED { color: #888; font-style: italic; }
   #downloadBox { display: none; margin-top: 20px; }
   #errorBox { display: none; margin-top: 16px; color: #d33; }
 </style>
@@ -95,7 +96,7 @@
 
 <table id="resultsTable" style="display:none">
   <thead>
-    <tr><th>First</th><th>Last</th><th>Address</th><th>Phone</th><th>Status</th><th>Notes</th></tr>
+    <tr><th>Owner</th><th>Address</th><th>Zip</th><th>Phone</th><th>Status</th><th>Notes</th></tr>
   </thead>
   <tbody></tbody>
 </table>
@@ -198,10 +199,11 @@ function renderRows(rows) {
   resultsBody.innerHTML = '';
   for (const r of rows) {
     const tr = document.createElement('tr');
+    const owner = r.owner_name_raw || `${r.first_name || ''} ${r.last_name || ''}`.trim();
     tr.innerHTML = `
-      <td>${escapeHtml(r.first_name || '')}</td>
-      <td>${escapeHtml(r.last_name || '')}</td>
+      <td>${escapeHtml(owner)}</td>
       <td>${escapeHtml(r.address || '')}</td>
+      <td>${escapeHtml(r.zip || '')}</td>
       <td>${escapeHtml(r.phone || '')}</td>
       <td class="${r.status}">${escapeHtml(r.status || '')}</td>
       <td>${escapeHtml(r.notes || '')}</td>

@@ -12,7 +12,9 @@ playwright install chromium
 
 ## Input
 
-CSV with a header row, columns:
+Two CSV formats are accepted — the tool auto-detects which one you gave it.
+
+**Clean format**, columns:
 
 ```
 first_name,last_name,address,city,state,zip
@@ -20,6 +22,23 @@ first_name,last_name,address,city,state,zip
 
 `address` is the street line only (e.g. `15730 SW 127th Ave Apt 301`). See
 `input_sample.csv` for an example.
+
+**Raw county property-tax-roll export**, columns:
+
+```
+Owner Name 1,House Number,Prefix Direction,Street Name,Street Type,Post Direction,Unit Type,Unit Number,Zip Code
+```
+
+(the format Miami-Dade and similar county appraiser exports use). The tool
+parses `Owner Name 1` (handling `LAST FIRST MIDDLE` order, `LE `-prefixed
+life-estate entries, and `JR`/`SR`/`III` suffixes) and builds the address
+from the split columns automatically.
+
+Rows that clearly aren't an individual at a real street address — LLCs,
+trusts, estates, `***CONFIDENTIAL OWNER***` / `ONLY REFERENCE` placeholders,
+PO boxes, blank rows, or ambiguous multi-owner names — are marked
+`SKIPPED` with a reason instead of being searched, so you can review them
+by hand rather than getting a wasted or wrong lookup.
 
 ## Run — web UI (drag & drop)
 

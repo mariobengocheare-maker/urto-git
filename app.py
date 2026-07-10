@@ -21,6 +21,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from playwright.sync_api import sync_playwright
 
+from input_parser import OUTPUT_FIELDS, load_rows
 from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
 app = Flask(__name__)
@@ -28,16 +29,13 @@ app = Flask(__name__)
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-REQUIRED_COLUMNS = {"first_name", "last_name", "address", "zip"}
-
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 
 
-def run_job(job_id, rows, fieldnames):
+def run_job(job_id, rows):
     job = JOBS[job_id]
     output_path = OUTPUT_DIR / f"{job_id}.csv"
-    out_fields = list(fieldnames) + ["phone", "status", "notes"]
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -49,16 +47,20 @@ def run_job(job_id, rows, fieldnames):
 
         job["status"] = "running"
         with open(output_path, "w", newline="", encoding="utf-8") as out_f:
-            writer = csv.DictWriter(out_f, fieldnames=out_fields)
+            writer = csv.DictWriter(out_f, fieldnames=OUTPUT_FIELDS)
             writer.writeheader()
 
             for row in rows:
-                try:
-                    result = process_row(page, row)
-                except Exception as e:
-                    result = {"phone": "", "status": "ERROR", "notes": str(e)}
+                skip_reason = row.pop("skip_reason", "")
+                if skip_reason:
+                    result = {"phone": "", "status": "SKIPPED", "notes": skip_reason}
+                else:
+                    try:
+                        result = process_row(page, row)
+                    except Exception as e:
+                        result = {"phone": "", "status": "ERROR", "notes": str(e)}
 
-                out_row = dict(row)
+                out_row = {k: row.get(k, "") for k in OUTPUT_FIELDS if k in row}
                 out_row.update(result)
                 writer.writerow(out_row)
                 out_f.flush()
@@ -67,7 +69,8 @@ def run_job(job_id, rows, fieldnames):
                     job["rows"].append(out_row)
                     job["processed"] += 1
 
-                time.sleep(job["delay"])
+                if not skip_reason:
+                    time.sleep(job["delay"])
 
         browser.close()
 
@@ -75,9 +78,9 @@ def run_job(job_id, rows, fieldnames):
     job["status"] = "done"
 
 
-def run_job_safe(job_id, rows, fieldnames):
+def run_job_safe(job_id, rows):
     try:
-        run_job(job_id, rows, fieldnames)
+        run_job(job_id, rows)
     except Exception as e:
         JOBS[job_id]["status"] = "error"
         JOBS[job_id]["error"] = str(e)
@@ -105,13 +108,15 @@ def upload():
 
     text = file.read().decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
-    rows = list(reader)
-    fieldnames = reader.fieldnames or []
+    raw_rows = list(reader)
 
-    if not rows:
+    if not raw_rows:
         return jsonify({"error": "CSV is empty"}), 400
-    if not REQUIRED_COLUMNS.issubset(fieldnames):
-        return jsonify({"error": f"CSV must have columns: {sorted(REQUIRED_COLUMNS)}"}), 400
+
+    try:
+        rows = load_rows(reader.fieldnames, raw_rows)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     job_id = uuid.uuid4().hex
     JOBS[job_id] = {
@@ -125,7 +130,7 @@ def upload():
         "error": None,
     }
 
-    thread = threading.Thread(target=run_job_safe, args=(job_id, rows, fieldnames), daemon=True)
+    thread = threading.Thread(target=run_job_safe, args=(job_id, rows), daemon=True)
     thread.start()
 
     return jsonify({"job_id": job_id})
