@@ -21,6 +21,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from playwright.sync_api import sync_playwright
 
+import crm
 from input_parser import OUTPUT_FIELDS, build_output_row, load_rows
 from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
@@ -28,6 +29,8 @@ app = Flask(__name__)
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+crm.init_db()
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
@@ -183,6 +186,101 @@ def download(job_id):
     if not job or not job["output_path"]:
         abort(404)
     return send_file(job["output_path"], as_attachment=True, download_name="forewarn_results.csv")
+
+
+@app.route("/api/crm/clients", methods=["GET"])
+def crm_list_clients():
+    return jsonify(crm.list_clients())
+
+
+@app.route("/api/crm/clients", methods=["POST"])
+def crm_create_client():
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    try:
+        client = crm.create_client(
+            name=name,
+            phone=(data.get("phone") or "").strip(),
+            contact_info=(data.get("contact_info") or "").strip(),
+            address=(data.get("address") or "").strip(),
+            frequency_key=data.get("frequency_key"),
+            custom_amount=data.get("custom_amount"),
+            custom_unit=data.get("custom_unit"),
+        )
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid custom follow-up amount"}), 400
+    return jsonify(client)
+
+
+@app.route("/api/crm/clients/<int:client_id>", methods=["GET"])
+def crm_get_client(client_id):
+    client = crm.get_client(client_id)
+    if not client:
+        abort(404)
+    client["notes"] = crm.list_notes(client_id)
+    return jsonify(client)
+
+
+@app.route("/api/crm/clients/<int:client_id>", methods=["PUT"])
+def crm_update_client(client_id):
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    try:
+        client = crm.update_client(
+            client_id,
+            name=name,
+            phone=(data.get("phone") or "").strip(),
+            contact_info=(data.get("contact_info") or "").strip(),
+            address=(data.get("address") or "").strip(),
+            frequency_key=data.get("frequency_key"),
+            custom_amount=data.get("custom_amount"),
+            custom_unit=data.get("custom_unit"),
+        )
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid custom follow-up amount"}), 400
+    if not client:
+        abort(404)
+    return jsonify(client)
+
+
+@app.route("/api/crm/clients/<int:client_id>", methods=["DELETE"])
+def crm_delete_client(client_id):
+    crm.delete_client(client_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/crm/clients/<int:client_id>/notes", methods=["POST"])
+def crm_add_note(client_id):
+    data = request.get_json(force=True)
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Note text is required"}), 400
+    if not crm.get_client(client_id):
+        abort(404)
+    note = crm.add_note(client_id, text)
+    return jsonify(note)
+
+
+@app.route("/api/crm/clients/<int:client_id>/complete_followup", methods=["POST"])
+def crm_complete_followup(client_id):
+    client = crm.complete_followup(client_id)
+    if not client:
+        abort(404)
+    return jsonify(client)
+
+
+@app.route("/api/crm/calendar")
+def crm_calendar():
+    try:
+        year = int(request.args.get("year"))
+        month = int(request.args.get("month"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "year and month are required"}), 400
+    return jsonify(crm.get_calendar_events(year, month))
 
 
 if __name__ == "__main__":

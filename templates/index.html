@@ -24,6 +24,8 @@
     --danger-fg: #c62828;
     --muted-bg: rgba(102, 112, 133, .12);
     --muted-fg: #667085;
+    --info-bg: rgba(34, 58, 94, .1);
+    --info-fg: #223a5e;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -42,6 +44,8 @@
       --danger-fg: #ff8a8a;
       --muted-bg: rgba(151, 162, 184, .14);
       --muted-fg: #97a2b8;
+      --info-bg: rgba(139, 172, 219, .14);
+      --info-fg: #8bacdb;
     }
   }
 
@@ -58,7 +62,7 @@
     background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
     padding: 18px 28px;
   }
-  .brand { display: flex; align-items: center; gap: 12px; max-width: 880px; margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 12px; max-width: 960px; margin: 0 auto; }
   .brand svg { flex-shrink: 0; }
   .brand-name { color: #fff; font-size: 1.35rem; font-weight: 700; letter-spacing: .04em; }
   .brand-tag {
@@ -70,8 +74,32 @@
     margin-top: 1px;
   }
 
+  .tabs {
+    max-width: 960px;
+    margin: 0 auto;
+    display: flex;
+    gap: 4px;
+    padding: 0 20px;
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    background: none;
+    color: var(--text-secondary);
+    border: none;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    padding: 14px 6px;
+    margin-right: 22px;
+    font-size: .92rem;
+    font-weight: 600;
+  }
+  .tab-btn:hover:not(:disabled) { opacity: 1; color: var(--text); }
+  .tab-btn.active { color: var(--navy); border-bottom-color: var(--gold); }
+  @media (prefers-color-scheme: dark) { .tab-btn.active { color: #fff; } }
+
   main {
-    max-width: 880px;
+    max-width: 960px;
     margin: 0 auto;
     padding: 32px 20px 60px;
   }
@@ -103,14 +131,17 @@
 
   .row { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
   label { font-size: .9rem; color: var(--text-secondary); }
-  input[type=number] {
-    width: 70px;
-    padding: 7px 8px;
+  input[type=number], input[type=text], input[type=email], select, textarea {
+    padding: 8px 10px;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--card-bg);
     color: var(--text);
+    font-size: .9rem;
+    font-family: inherit;
   }
+  input[type=number] { width: 70px; }
+  textarea { width: 100%; resize: vertical; min-height: 64px; }
 
   button {
     background: var(--navy);
@@ -128,6 +159,8 @@
   button:disabled { background: var(--muted-fg); opacity: .5; cursor: not-allowed; }
   button.secondary { background: var(--gold); color: #2a2205; }
   button.danger { background: var(--danger-fg); display: none; }
+  button.ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); }
+  button.small { padding: 6px 12px; font-size: .8rem; }
 
   #status { margin-top: 20px; font-size: .95rem; color: var(--text-secondary); }
 
@@ -162,7 +195,7 @@
   @keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 
   #downloadBox { display: none; margin-top: 20px; }
-  #errorBox {
+  #errorBox, .error-box {
     display: none;
     margin-top: 16px;
     padding: 12px 14px;
@@ -195,11 +228,12 @@
     letter-spacing: .02em;
     white-space: nowrap;
   }
-  .status-pill.FOUND { background: var(--success-bg); color: var(--success-fg); }
+  .status-pill.FOUND, .status-pill.completed { background: var(--success-bg); color: var(--success-fg); }
   .status-pill.NOT_FOUND { background: var(--muted-bg); color: var(--muted-fg); }
-  .status-pill.FOUND_NO_PHONE { background: var(--warn-bg); color: var(--warn-fg); }
-  .status-pill.ERROR { background: var(--danger-bg); color: var(--danger-fg); }
+  .status-pill.FOUND_NO_PHONE, .status-pill.due_today { background: var(--warn-bg); color: var(--warn-fg); }
+  .status-pill.ERROR, .status-pill.overdue { background: var(--danger-bg); color: var(--danger-fg); }
   .status-pill.SKIPPED { background: var(--muted-bg); color: var(--muted-fg); font-style: italic; }
+  .status-pill.next_due, .status-pill.upcoming { background: var(--info-bg); color: var(--info-fg); }
 
   footer.site-footer {
     text-align: center;
@@ -207,6 +241,120 @@
     color: var(--text-secondary);
     font-size: .8rem;
   }
+
+  /* ---- CRM ---- */
+  .crm-subtabs { display: flex; gap: 8px; margin-bottom: 18px; }
+  .crm-subtabs button { background: var(--card-bg); color: var(--text-secondary); border: 1px solid var(--border); }
+  .crm-subtabs button.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+  .client-list { display: grid; gap: 12px; margin-top: 18px; }
+  .client-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    transition: border-color .15s;
+  }
+  .client-card:hover { border-color: var(--gold); }
+  .client-card .name { font-weight: 700; }
+  .client-card .meta { color: var(--text-secondary); font-size: .82rem; margin-top: 2px; }
+  .client-card .followup-tag { font-size: .72rem; white-space: nowrap; }
+  .empty-state { color: var(--text-secondary); font-size: .9rem; padding: 20px 4px; text-align: center; }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 14, 24, .55);
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 16px;
+    overflow-y: auto;
+    z-index: 100;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: var(--card-bg);
+    border-radius: 14px;
+    max-width: 520px;
+    width: 100%;
+    padding: 26px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .3);
+  }
+  .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+  .modal-head h2 { font-size: 1.1rem; margin: 0; }
+  .modal-close { background: none; color: var(--text-secondary); padding: 4px 10px; font-size: 1.1rem; }
+  .form-group { margin-bottom: 14px; }
+  .form-group label { display: block; margin-bottom: 5px; }
+  .form-group input, .form-group select, .form-group textarea { width: 100%; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+  .detail-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .detail-section h3 { font-size: .82rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); margin: 0 0 10px; }
+  .contact-line { font-size: .92rem; margin-bottom: 4px; }
+  .contact-line .lbl { color: var(--text-secondary); display: inline-block; width: 78px; }
+
+  .note-item {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: .88rem;
+  }
+  .note-item:last-child { border-bottom: none; }
+  .note-item .note-time { color: var(--text-secondary); font-size: .74rem; margin-bottom: 3px; }
+
+  .followup-box {
+    background: var(--bg);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .calendar-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .calendar-head h2 { font-size: 1.05rem; margin: 0; }
+  .calendar-nav { display: flex; gap: 8px; }
+  .calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+  }
+  .cal-dow { text-align: center; font-size: .7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .05em; padding-bottom: 4px; }
+  .cal-cell {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-height: 88px;
+    padding: 6px;
+    font-size: .78rem;
+  }
+  .cal-cell.empty { background: transparent; border: none; }
+  .cal-cell.today { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+  .cal-daynum { font-weight: 700; margin-bottom: 4px; color: var(--text-secondary); }
+  .cal-cell.today .cal-daynum { color: var(--gold); }
+  .cal-chip {
+    display: block;
+    background: var(--info-bg);
+    color: var(--info-fg);
+    border-radius: 5px;
+    padding: 2px 5px;
+    margin-bottom: 3px;
+    font-size: .68rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .cal-chip.overdue, .cal-chip.due_today { background: var(--danger-bg); color: var(--danger-fg); }
+  .cal-chip.completed { background: var(--success-bg); color: var(--success-fg); }
 </style>
 </head>
 <body>
@@ -225,7 +373,14 @@
   </div>
 </div>
 
+<div class="tabs">
+  <button class="tab-btn active" id="tabLookupBtn">Owner Lookup</button>
+  <button class="tab-btn" id="tabCrmBtn">URTO CRM</button>
+</div>
+
 <main>
+
+<section id="lookupSection">
   <h1>Owner Lookup</h1>
   <p class="sub">Drag in a CSV of name + address entries, log into FOREWARN when prompted, and get a results CSV back.</p>
 
@@ -307,11 +462,135 @@
       </table>
     </div>
   </div>
+</section>
+
+<section id="crmSection" style="display:none">
+  <h1>URTO CRM</h1>
+  <p class="sub">Manage client relationships and automatic follow-up scheduling.</p>
+
+  <div class="crm-subtabs">
+    <button class="active" id="crmTabClientsBtn">Clients</button>
+    <button id="crmTabCalendarBtn">Calendar</button>
+  </div>
+
+  <div id="crmClientsView">
+    <div class="row" style="margin-top:0">
+      <button id="addClientBtn">+ Add Client</button>
+    </div>
+    <div id="clientList" class="client-list"></div>
+  </div>
+
+  <div id="crmCalendarView" style="display:none">
+    <div class="card">
+      <div class="calendar-head">
+        <div class="calendar-nav">
+          <button class="ghost small" id="calPrevBtn">&larr; Prev</button>
+          <button class="ghost small" id="calTodayBtn">Today</button>
+          <button class="ghost small" id="calNextBtn">Next &rarr;</button>
+        </div>
+        <h2 id="calMonthLabel"></h2>
+        <div></div>
+      </div>
+      <div class="calendar-grid" id="calendarGrid"></div>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer class="site-footer">
   URTO — Ultimate Realtor Tool · Created by Mario Bengochea
 </footer>
+
+<!-- Add / Edit client modal -->
+<div class="modal-overlay" id="clientFormOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="clientFormTitle">Add Client</h2>
+      <button class="modal-close" id="clientFormCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="clientFormError"></div>
+    <form id="clientForm">
+      <input type="hidden" id="clientFormId">
+      <div class="form-group">
+        <label for="cfName">Name *</label>
+        <input type="text" id="cfName" required>
+      </div>
+      <div class="form-group">
+        <label for="cfPhone">Phone Number</label>
+        <input type="text" id="cfPhone">
+      </div>
+      <div class="form-group">
+        <label for="cfContact">Contact Info (email, etc.)</label>
+        <input type="text" id="cfContact">
+      </div>
+      <div class="form-group">
+        <label for="cfAddress">Address</label>
+        <input type="text" id="cfAddress">
+      </div>
+      <div class="form-group">
+        <label for="cfFrequency">Automatic Follow-up</label>
+        <select id="cfFrequency">
+          <option value="none">No automatic follow-up</option>
+          <option value="2_weeks">2 Weeks</option>
+          <option value="3_weeks">3 Weeks</option>
+          <option value="4_weeks" selected>4 Weeks</option>
+          <option value="2_months">2 Months</option>
+          <option value="6_months">6 Months</option>
+          <option value="custom">Custom...</option>
+        </select>
+      </div>
+      <div class="form-group row" id="cfCustomRow" style="display:none; margin-top:0">
+        <input type="number" id="cfCustomAmount" min="1" value="30" style="width:80px">
+        <select id="cfCustomUnit">
+          <option value="days">Days</option>
+          <option value="weeks">Weeks</option>
+          <option value="months">Months</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="clientFormCancelBtn">Cancel</button>
+        <button type="submit">Save Client</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Client detail modal -->
+<div class="modal-overlay" id="clientDetailOverlay">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-head">
+      <h2 id="cdName">Client</h2>
+      <button class="modal-close" id="clientDetailCloseBtn">&times;</button>
+    </div>
+
+    <div class="contact-line"><span class="lbl">Phone</span><span id="cdPhone">—</span></div>
+    <div class="contact-line"><span class="lbl">Contact</span><span id="cdContact">—</span></div>
+    <div class="contact-line"><span class="lbl">Address</span><span id="cdAddress">—</span></div>
+
+    <div class="row">
+      <button class="ghost small" id="cdEditBtn">Edit</button>
+      <button class="danger small" id="cdDeleteBtn" style="display:inline-block; background:var(--danger-fg)">Delete Client</button>
+    </div>
+
+    <div class="detail-section">
+      <h3>Follow-up Schedule</h3>
+      <div class="followup-box">
+        <div id="cdFollowupInfo">No automatic follow-up scheduled.</div>
+        <button class="small" id="cdCompleteFollowupBtn" style="display:none">Mark Follow-up Complete</button>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <h3>Notes</h3>
+      <textarea id="cdNoteInput" placeholder="Add a note about this client..."></textarea>
+      <div class="row">
+        <button class="small" id="cdAddNoteBtn">Add Note</button>
+      </div>
+      <div id="cdNotesList" style="margin-top:14px"></div>
+    </div>
+  </div>
+</div>
 
 <script>
 let selectedFile = null;
@@ -449,6 +728,302 @@ function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s;
   return div.innerHTML;
+}
+
+/* ===================== Tabs ===================== */
+const tabLookupBtn = document.getElementById('tabLookupBtn');
+const tabCrmBtn = document.getElementById('tabCrmBtn');
+const lookupSection = document.getElementById('lookupSection');
+const crmSection = document.getElementById('crmSection');
+
+tabLookupBtn.addEventListener('click', () => {
+  tabLookupBtn.classList.add('active');
+  tabCrmBtn.classList.remove('active');
+  lookupSection.style.display = 'block';
+  crmSection.style.display = 'none';
+});
+tabCrmBtn.addEventListener('click', () => {
+  tabCrmBtn.classList.add('active');
+  tabLookupBtn.classList.remove('active');
+  crmSection.style.display = 'block';
+  lookupSection.style.display = 'none';
+  loadClients();
+});
+
+const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
+const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
+const crmClientsView = document.getElementById('crmClientsView');
+const crmCalendarView = document.getElementById('crmCalendarView');
+
+crmTabClientsBtn.addEventListener('click', () => {
+  crmTabClientsBtn.classList.add('active');
+  crmTabCalendarBtn.classList.remove('active');
+  crmClientsView.style.display = 'block';
+  crmCalendarView.style.display = 'none';
+  loadClients();
+});
+crmTabCalendarBtn.addEventListener('click', () => {
+  crmTabCalendarBtn.classList.add('active');
+  crmTabClientsBtn.classList.remove('active');
+  crmCalendarView.style.display = 'block';
+  crmClientsView.style.display = 'none';
+  renderCalendar();
+});
+
+/* ===================== Clients ===================== */
+const clientList = document.getElementById('clientList');
+const addClientBtn = document.getElementById('addClientBtn');
+
+const clientFormOverlay = document.getElementById('clientFormOverlay');
+const clientForm = document.getElementById('clientForm');
+const clientFormTitle = document.getElementById('clientFormTitle');
+const clientFormError = document.getElementById('clientFormError');
+const clientFormId = document.getElementById('clientFormId');
+const cfName = document.getElementById('cfName');
+const cfPhone = document.getElementById('cfPhone');
+const cfContact = document.getElementById('cfContact');
+const cfAddress = document.getElementById('cfAddress');
+const cfFrequency = document.getElementById('cfFrequency');
+const cfCustomRow = document.getElementById('cfCustomRow');
+const cfCustomAmount = document.getElementById('cfCustomAmount');
+const cfCustomUnit = document.getElementById('cfCustomUnit');
+
+function followupLabel(client) {
+  if (!client.frequency_label) return 'No automatic follow-up';
+  const statusText = {
+    overdue: 'overdue', due_today: 'due today',
+    upcoming: `due ${client.next_followup_date}`,
+  }[client.followup_status] || `due ${client.next_followup_date}`;
+  return `${client.frequency_label} · next follow-up ${statusText}`;
+}
+
+async function loadClients() {
+  const res = await fetch('/api/crm/clients');
+  const clients = await res.json();
+  clientList.innerHTML = '';
+  if (clients.length === 0) {
+    clientList.innerHTML = '<div class="empty-state">No clients yet. Click "+ Add Client" to get started.</div>';
+    return;
+  }
+  for (const c of clients) {
+    const div = document.createElement('div');
+    div.className = 'client-card';
+    const pillClass = c.followup_status || '';
+    div.innerHTML = `
+      <div>
+        <div class="name">${escapeHtml(c.name)}</div>
+        <div class="meta">${escapeHtml(c.phone || 'No phone')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
+      </div>
+      <span class="status-pill followup-tag ${pillClass}">${escapeHtml(followupLabel(c))}</span>
+    `;
+    div.addEventListener('click', () => openClientDetail(c.id));
+    clientList.appendChild(div);
+  }
+}
+
+function resetClientForm() {
+  clientForm.reset();
+  clientFormId.value = '';
+  cfFrequency.value = '4_weeks';
+  cfCustomRow.style.display = 'none';
+  clientFormError.style.display = 'none';
+}
+
+addClientBtn.addEventListener('click', () => {
+  resetClientForm();
+  clientFormTitle.textContent = 'Add Client';
+  clientFormOverlay.classList.add('show');
+});
+
+document.getElementById('clientFormCloseBtn').addEventListener('click', () => clientFormOverlay.classList.remove('show'));
+document.getElementById('clientFormCancelBtn').addEventListener('click', () => clientFormOverlay.classList.remove('show'));
+
+cfFrequency.addEventListener('change', () => {
+  cfCustomRow.style.display = cfFrequency.value === 'custom' ? 'flex' : 'none';
+});
+
+clientForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  clientFormError.style.display = 'none';
+  const payload = {
+    name: cfName.value,
+    phone: cfPhone.value,
+    contact_info: cfContact.value,
+    address: cfAddress.value,
+    frequency_key: cfFrequency.value,
+    custom_amount: cfCustomAmount.value,
+    custom_unit: cfCustomUnit.value,
+  };
+  const id = clientFormId.value;
+  const url = id ? `/api/crm/clients/${id}` : '/api/crm/clients';
+  const method = id ? 'PUT' : 'POST';
+  const res = await fetch(url, {
+    method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    clientFormError.textContent = data.error || 'Could not save client.';
+    clientFormError.style.display = 'block';
+    return;
+  }
+  clientFormOverlay.classList.remove('show');
+  loadClients();
+  if (id) openClientDetail(id);
+});
+
+/* ===================== Client detail ===================== */
+const clientDetailOverlay = document.getElementById('clientDetailOverlay');
+let currentClientId = null;
+
+async function openClientDetail(id) {
+  currentClientId = id;
+  const res = await fetch(`/api/crm/clients/${id}`);
+  if (!res.ok) return;
+  const c = await res.json();
+
+  document.getElementById('cdName').textContent = c.name;
+  document.getElementById('cdPhone').textContent = c.phone || '—';
+  document.getElementById('cdContact').textContent = c.contact_info || '—';
+  document.getElementById('cdAddress').textContent = c.address || '—';
+
+  const followupInfo = document.getElementById('cdFollowupInfo');
+  const completeBtn = document.getElementById('cdCompleteFollowupBtn');
+  if (c.frequency_label) {
+    followupInfo.innerHTML = `<strong>${escapeHtml(c.frequency_label)}</strong><br>` +
+      `<span class="status-pill ${c.followup_status || ''}">next: ${escapeHtml(c.next_followup_date)}</span>`;
+    completeBtn.style.display = 'inline-block';
+  } else {
+    followupInfo.textContent = 'No automatic follow-up scheduled.';
+    completeBtn.style.display = 'none';
+  }
+
+  const notesList = document.getElementById('cdNotesList');
+  notesList.innerHTML = '';
+  if (c.notes.length === 0) {
+    notesList.innerHTML = '<div class="empty-state">No notes yet.</div>';
+  } else {
+    for (const n of c.notes) {
+      const div = document.createElement('div');
+      div.className = 'note-item';
+      div.innerHTML = `<div class="note-time">${escapeHtml(n.created_at)}</div>${escapeHtml(n.text)}`;
+      notesList.appendChild(div);
+    }
+  }
+
+  document.getElementById('cdNoteInput').value = '';
+  clientDetailOverlay.classList.add('show');
+}
+
+document.getElementById('clientDetailCloseBtn').addEventListener('click', () => clientDetailOverlay.classList.remove('show'));
+
+document.getElementById('cdAddNoteBtn').addEventListener('click', async () => {
+  const input = document.getElementById('cdNoteInput');
+  const text = input.value.trim();
+  if (!text) return;
+  await fetch(`/api/crm/clients/${currentClientId}/notes`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
+  });
+  openClientDetail(currentClientId);
+});
+
+document.getElementById('cdCompleteFollowupBtn').addEventListener('click', async () => {
+  await fetch(`/api/crm/clients/${currentClientId}/complete_followup`, { method: 'POST' });
+  openClientDetail(currentClientId);
+  loadClients();
+});
+
+document.getElementById('cdEditBtn').addEventListener('click', async () => {
+  const res = await fetch(`/api/crm/clients/${currentClientId}`);
+  const c = await res.json();
+  resetClientForm();
+  clientFormTitle.textContent = 'Edit Client';
+  clientFormId.value = c.id;
+  cfName.value = c.name;
+  cfPhone.value = c.phone || '';
+  cfContact.value = c.contact_info || '';
+  cfAddress.value = c.address || '';
+  clientDetailOverlay.classList.remove('show');
+  clientFormOverlay.classList.add('show');
+});
+
+document.getElementById('cdDeleteBtn').addEventListener('click', async () => {
+  if (!confirm('Delete this client and all their notes? This cannot be undone.')) return;
+  await fetch(`/api/crm/clients/${currentClientId}`, { method: 'DELETE' });
+  clientDetailOverlay.classList.remove('show');
+  loadClients();
+});
+
+/* ===================== Calendar ===================== */
+const now = new Date();
+let calYear = now.getFullYear();
+let calMonth = now.getMonth() + 1; // JS months are 0-indexed; keep this 1-indexed to match the API
+
+const calendarGrid = document.getElementById('calendarGrid');
+const calMonthLabel = document.getElementById('calMonthLabel');
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+document.getElementById('calPrevBtn').addEventListener('click', () => {
+  calMonth -= 1;
+  if (calMonth < 1) { calMonth = 12; calYear -= 1; }
+  renderCalendar();
+});
+document.getElementById('calNextBtn').addEventListener('click', () => {
+  calMonth += 1;
+  if (calMonth > 12) { calMonth = 1; calYear += 1; }
+  renderCalendar();
+});
+document.getElementById('calTodayBtn').addEventListener('click', () => {
+  const t = new Date();
+  calYear = t.getFullYear();
+  calMonth = t.getMonth() + 1;
+  renderCalendar();
+});
+
+async function renderCalendar() {
+  calMonthLabel.textContent = `${MONTH_NAMES[calMonth - 1]} ${calYear}`;
+  const res = await fetch(`/api/crm/calendar?year=${calYear}&month=${calMonth}`);
+  const events = res.ok ? await res.json() : [];
+
+  const eventsByDay = {};
+  for (const e of events) {
+    (eventsByDay[e.date] = eventsByDay[e.date] || []).push(e);
+  }
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const firstOfMonth = new Date(calYear, calMonth - 1, 1);
+  const startWeekday = firstOfMonth.getDay(); // 0=Sun
+  const daysInMonth = new Date(calYear, calMonth, 0).getDate();
+
+  calendarGrid.innerHTML = '';
+  for (const dow of ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']) {
+    const el = document.createElement('div');
+    el.className = 'cal-dow';
+    el.textContent = dow;
+    calendarGrid.appendChild(el);
+  }
+  for (let i = 0; i < startWeekday; i++) {
+    const el = document.createElement('div');
+    el.className = 'cal-cell empty';
+    calendarGrid.appendChild(el);
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = `${calYear}-${String(calMonth).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const cell = document.createElement('div');
+    cell.className = 'cal-cell' + (dateStr === todayStr ? ' today' : '');
+    const dayNum = document.createElement('div');
+    dayNum.className = 'cal-daynum';
+    dayNum.textContent = day;
+    cell.appendChild(dayNum);
+    for (const e of (eventsByDay[dateStr] || [])) {
+      const chip = document.createElement('div');
+      chip.className = `cal-chip ${e.status}`;
+      chip.textContent = e.client_name;
+      chip.title = `Follow up with ${e.client_name}`;
+      chip.addEventListener('click', () => openClientDetail(e.client_id));
+      cell.appendChild(chip);
+    }
+    calendarGrid.appendChild(cell);
+  }
 }
 </script>
 
