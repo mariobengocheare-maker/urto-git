@@ -3,7 +3,9 @@ Core FOREWARN search/matching logic, shared by the CLI (forewarn_lookup.py)
 and the web app (app.py).
 """
 
+import random
 import re
+import time
 
 from playwright.sync_api import TimeoutError as PWTimeoutError
 
@@ -73,13 +75,32 @@ def wait_for_results_or_none(page, timeout_ms=15000) -> int:
     return int(m.group(1)) if m else 0
 
 
+def human_pause(low=0.3, high=0.9):
+    time.sleep(random.uniform(low, high))
+
+
+def human_fill(locator, text: str):
+    """Types like a person: variable per-character delay, with an
+    occasional longer pause, instead of instantly filling the field."""
+    locator.click()
+    locator.fill("")
+    for ch in text:
+        locator.press_sequentially(ch)
+        time.sleep(random.uniform(0.04, 0.16))
+        if random.random() < 0.08:
+            time.sleep(random.uniform(0.15, 0.45))
+
+
 def run_search(page, first_name, last_name, zip_code):
     page.goto(FOREWARN_SEARCH_URL, wait_until="domcontentloaded")
+    human_pause()
     page.get_by_text("SEARCH BY NAME", exact=False).click()
-    page.get_by_label("First Name", exact=True).fill(first_name)
-    page.get_by_label("Last Name", exact=True).fill(last_name)
-    page.get_by_label("Zip Code", exact=True).fill(zip_code)
-    page.get_by_role("button", name="SEARCH", exact=True).click()
+    human_pause()
+    human_fill(page.get_by_label("First Name", exact=True), first_name)
+    human_fill(page.get_by_label("Last Name", exact=True), last_name)
+    human_fill(page.get_by_label("Zip Code", exact=True), zip_code)
+    human_pause()
+    page.get_by_text("SEARCH", exact=True).click()
 
 
 def extract_first_phone(page) -> str:
