@@ -31,12 +31,6 @@ SEARCH_BUTTON_RE = re.compile(r"^\s*search\s*$", re.IGNORECASE)
 RESULTS_COUNT_RE = re.compile(r"Found\s+(\d+)\s+results?", re.IGNORECASE)
 AGE_TAG_RE = re.compile(r"Age\s*\(\s*\d+\s*\)", re.IGNORECASE)
 
-# Card container heuristic — best guess at the result-card ancestor level
-# based on screenshots, not an inspected DOM. If clicking a card doesn't
-# open the expected detail view, run the CLI with --debug and use
-# Playwright Inspector to find the right level, then update this constant.
-CARD_ANCESTOR_XPATH = "xpath=ancestor::*[3]"
-
 
 def normalize(text: str) -> str:
     text = text.upper()
@@ -142,34 +136,19 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         result["notes"] = "No results returned by FOREWARN for this name/zip."
         return result
 
-    cards = get_result_cards(page)
-    n = cards.count()
+    n = get_result_cards(page).count()
 
+    # Always verify against each candidate's full Address History rather
+    # than the address shown on the results-list card — that card only
+    # shows one associated address per person, and trusting it directly
+    # risks picking the wrong same-name/same-zip person entirely.
     for i in range(n):
-        card_anchor = get_result_cards(page).nth(i)  # re-fetch: DOM may have changed after navigation
-        card = card_anchor.locator(CARD_ANCESTOR_XPATH)
-        try:
-            card_text = card.inner_text()
-        except Exception:
-            card_text = card_anchor.inner_text()
-
-        # Quick win: target address already shown directly under the name.
-        if text_contains_address(card_text, required_tokens):
-            card.click()
-            phone = extract_first_phone(page)
-            if phone:
-                result["phone"] = phone
-                result["status"] = "FOUND"
-                result["notes"] = "Matched on results-list address."
-                return result
-            result["status"] = "FOUND_NO_PHONE"
-            result["notes"] = "Address matched but no phone number on record."
-            return result
-
-        # Otherwise open the candidate and check full Address History.
         if debug:
             page.pause()
-        card.click()
+
+        # Re-fetch fresh each time: the DOM resets after each back-navigation.
+        get_result_cards(page).nth(i).click()
+        human_pause(0.4, 1.0)
         page.get_by_text("Address History", exact=False).click()
         try:
             page.wait_for_load_state("domcontentloaded")
@@ -178,6 +157,7 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         history_text = page.inner_text("body")
 
         if text_contains_address(history_text, required_tokens):
+            human_pause(0.3, 0.8)
             page.go_back()  # -> summary page
             phone = extract_first_phone(page)
             if phone:
@@ -189,8 +169,10 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
             result["notes"] = "Address matched in history but no phone on record."
             return result
         else:
+            human_pause(0.3, 0.8)
             page.go_back()  # -> summary page
             page.go_back()  # -> results list
+            human_pause(0.3, 0.7)
 
     result["notes"] = f"Checked {n} candidate(s), none matched the target address."
     return result

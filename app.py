@@ -21,7 +21,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from playwright.sync_api import sync_playwright
 
-from input_parser import OUTPUT_FIELDS, load_rows
+from input_parser import OUTPUT_FIELDS, build_output_row, load_rows
 from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
 app = Flask(__name__)
@@ -36,6 +36,7 @@ JOBS_LOCK = threading.Lock()
 def run_job(job_id, rows):
     job = JOBS[job_id]
     output_path = OUTPUT_DIR / f"{job_id}.csv"
+    job["output_path"] = str(output_path)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -45,12 +46,17 @@ def run_job(job_id, rows):
         job["status"] = "awaiting_login"
         job["login_event"].wait()
 
-        job["status"] = "running"
         with open(output_path, "w", newline="", encoding="utf-8") as out_f:
             writer = csv.DictWriter(out_f, fieldnames=OUTPUT_FIELDS)
             writer.writeheader()
 
+            if not job["stop_event"].is_set():
+                job["status"] = "running"
+
             for row in rows:
+                if job["stop_event"].is_set():
+                    break
+
                 skip_reason = row.pop("skip_reason", "")
                 if skip_reason:
                     result = {"phone": "", "status": "SKIPPED", "notes": skip_reason}
@@ -60,8 +66,7 @@ def run_job(job_id, rows):
                     except Exception as e:
                         result = {"phone": "", "status": "ERROR", "notes": str(e)}
 
-                out_row = {k: row.get(k, "") for k in OUTPUT_FIELDS if k in row}
-                out_row.update(result)
+                out_row = build_output_row(row, result)
                 writer.writerow(out_row)
                 out_f.flush()
 
@@ -74,8 +79,7 @@ def run_job(job_id, rows):
 
         browser.close()
 
-    job["output_path"] = str(output_path)
-    job["status"] = "done"
+    job["status"] = "stopped" if job["stop_event"].is_set() else "done"
 
 
 def run_job_safe(job_id, rows):
@@ -125,6 +129,7 @@ def upload():
         "processed": 0,
         "rows": [],
         "login_event": threading.Event(),
+        "stop_event": threading.Event(),
         "delay": delay,
         "output_path": None,
         "error": None,
@@ -141,6 +146,18 @@ def confirm_login(job_id):
     job = JOBS.get(job_id)
     if not job:
         abort(404)
+    job["login_event"].set()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/stop/<job_id>", methods=["POST"])
+def stop(job_id):
+    job = JOBS.get(job_id)
+    if not job:
+        abort(404)
+    job["stop_event"].set()
+    # In case it's paused waiting on login confirmation, wake it so it can
+    # exit cleanly instead of hanging forever.
     job["login_event"].set()
     return jsonify({"ok": True})
 

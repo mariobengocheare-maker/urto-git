@@ -26,7 +26,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 
-from input_parser import OUTPUT_FIELDS, load_rows
+from input_parser import OUTPUT_FIELDS, build_output_row, load_rows
 from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
 
@@ -80,8 +80,7 @@ def main():
                         result = {"phone": "", "status": "ERROR", "notes": str(e)}
                         print(f"  -> ERROR: {e}")
 
-                out_row = {k: row.get(k, "") for k in OUTPUT_FIELDS if k in row}
-                out_row.update(result)
+                out_row = build_output_row(row, result)
                 writer.writerow(out_row)
                 out_f.flush()
 

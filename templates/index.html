@@ -41,6 +41,7 @@
   }
   button:disabled { background: #aaa; cursor: not-allowed; }
   button.secondary { background: #1a9c56; }
+  button.danger { background: #c0392b; display: none; }
   #status { margin-top: 20px; font-size: .95rem; }
   #loginBox {
     display: none;
@@ -98,6 +99,7 @@
   <label for="delay">Delay between lookups (seconds):</label>
   <input type="number" id="delay" value="5" min="1">
   <button id="startBtn" disabled>Start Lookup</button>
+  <button id="stopBtn" class="danger">Stop</button>
 </div>
 
 <div id="errorBox"></div>
@@ -170,6 +172,7 @@ let pollTimer = null;
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
 const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
 const delayInput = document.getElementById('delay');
 const loginBox = document.getElementById('loginBox');
 const loginBtn = document.getElementById('loginBtn');
@@ -216,6 +219,9 @@ startBtn.addEventListener('click', async () => {
   }
   jobId = data.job_id;
   resultsTable.style.display = 'table';
+  stopBtn.style.display = 'inline-block';
+  stopBtn.disabled = false;
+  stopBtn.textContent = 'Stop';
   pollTimer = setInterval(poll, 1500);
 });
 
@@ -223,6 +229,12 @@ loginBtn.addEventListener('click', async () => {
   loginBtn.disabled = true;
   await fetch(`/api/confirm_login/${jobId}`, { method: 'POST' });
   loginBox.style.display = 'none';
+});
+
+stopBtn.addEventListener('click', async () => {
+  stopBtn.disabled = true;
+  stopBtn.textContent = 'Stopping...';
+  await fetch(`/api/stop/${jobId}`, { method: 'POST' });
 });
 
 downloadBtn.addEventListener('click', () => {
@@ -247,15 +259,24 @@ async function poll() {
   } else if (data.status === 'running') {
     loginBox.style.display = 'none';
     statusDiv.textContent = `Processing: ${data.processed} / ${data.total}`;
+  } else if (data.status === 'stopped') {
+    statusDiv.textContent = `Stopped — ${data.processed} / ${data.total} processed.`;
+    stopBtn.style.display = 'none';
+    startBtn.disabled = false;
+    clearInterval(pollTimer);
   } else if (data.status === 'done') {
     statusDiv.textContent = `Done — ${data.processed} / ${data.total} processed.`;
-    downloadBox.style.display = 'block';
+    stopBtn.style.display = 'none';
+    startBtn.disabled = false;
     clearInterval(pollTimer);
   } else if (data.status === 'error') {
     showError(data.error || 'Something went wrong.');
+    stopBtn.style.display = 'none';
+    startBtn.disabled = false;
     clearInterval(pollTimer);
   }
 
+  downloadBox.style.display = data.rows.length > 0 ? 'block' : 'none';
   renderRows(data.rows);
 }
 
@@ -263,9 +284,8 @@ function renderRows(rows) {
   resultsBody.innerHTML = '';
   for (const r of rows) {
     const tr = document.createElement('tr');
-    const owner = r.owner_name_raw || `${r.first_name || ''} ${r.last_name || ''}`.trim();
     tr.innerHTML = `
-      <td>${escapeHtml(owner)}</td>
+      <td>${escapeHtml(r.owner || '')}</td>
       <td>${escapeHtml(r.address || '')}</td>
       <td>${escapeHtml(r.zip || '')}</td>
       <td>${escapeHtml(r.phone || '')}</td>

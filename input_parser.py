@@ -18,9 +18,8 @@ review rather than burning a FOREWARN search on garbage input.
 import re
 
 OUTPUT_FIELDS = [
-    "owner_name_raw", "first_name", "last_name",
-    "address", "city", "state", "zip",
-    "phone", "status", "notes",
+    "owner", "address", "city", "state", "zip",
+    "phone", "status", "notes", "input_owner_name",
 ]
 
 SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
@@ -169,3 +168,23 @@ def load_rows(fieldnames, raw_rows) -> list:
         "'first_name,last_name,address,city,state,zip' or a county export "
         "with 'Owner Name 1, House Number, ..., Zip Code' columns."
     )
+
+
+def build_output_row(row: dict, result: dict) -> dict:
+    """Build one output CSV row. 'owner' is the single resolved person that
+    was actually searched (not the raw input field, which may list multiple
+    co-owners) — falls back to the raw name only for skipped rows that were
+    never parsed into a first/last name."""
+    owner = f"{row.get('first_name', '')} {row.get('last_name', '')}".strip()
+    owner = owner or row.get("owner_name_raw", "")
+    return {
+        "owner": owner,
+        "address": row.get("address", ""),
+        "city": row.get("city", ""),
+        "state": row.get("state", ""),
+        "zip": row.get("zip", ""),
+        "phone": result.get("phone", ""),
+        "status": result.get("status", ""),
+        "notes": result.get("notes", ""),
+        "input_owner_name": row.get("owner_name_raw", ""),
+    }
