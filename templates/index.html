@@ -355,6 +355,50 @@
   }
   .cal-chip.overdue, .cal-chip.due_today { background: var(--danger-bg); color: var(--danger-fg); }
   .cal-chip.completed { background: var(--success-bg); color: var(--success-fg); }
+
+  /* ---- Dialer ---- */
+  .source-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+  .source-bar button { background: var(--card-bg); color: var(--text); border: 1px solid var(--border); }
+  .source-bar button.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+  .dialer-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 34px;
+    text-align: center;
+  }
+  .dialer-progress { color: var(--text-secondary); font-size: .85rem; margin-bottom: 14px; }
+  .dialer-name { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
+  .dialer-phone {
+    font-size: 2.2rem;
+    font-weight: 800;
+    color: var(--navy);
+    letter-spacing: .02em;
+    text-decoration: none;
+    display: inline-block;
+    margin-bottom: 6px;
+  }
+  @media (prefers-color-scheme: dark) { .dialer-phone { color: #fff; } }
+  .dialer-meta { color: var(--text-secondary); font-size: .9rem; margin-bottom: 4px; }
+  .dialer-hint { color: var(--text-secondary); font-size: .78rem; margin-top: 18px; }
+  .dialer-controls { display: flex; justify-content: center; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
+  .dialer-controls button.call-btn { background: var(--success-fg); padding: 12px 28px; font-size: 1rem; }
+
+  .dialer-list { margin-top: 22px; max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+  .dialer-list-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: .85rem;
+    cursor: pointer;
+  }
+  .dialer-list-row:last-child { border-bottom: none; }
+  .dialer-list-row:hover { background: var(--bg); }
+  .dialer-list-row.current { background: var(--warn-bg); font-weight: 700; }
+  .dialer-empty { color: var(--text-secondary); font-size: .9rem; text-align: center; padding: 30px; }
 </style>
 </head>
 <body>
@@ -376,6 +420,7 @@
 <div class="tabs">
   <button class="tab-btn active" id="tabLookupBtn">Owner Lookup</button>
   <button class="tab-btn" id="tabCrmBtn">URTO CRM</button>
+  <button class="tab-btn" id="tabDialerBtn">URTO Dialer</button>
 </div>
 
 <main>
@@ -493,6 +538,48 @@
       </div>
       <div class="calendar-grid" id="calendarGrid"></div>
     </div>
+  </div>
+</section>
+
+<section id="dialerSection" style="display:none">
+  <h1>URTO Dialer</h1>
+  <p class="sub">Load a list, then press Enter to call the current number or use the arrow keys to move through the list. Calling hands off to whatever phone app is set up on this PC (e.g. Phone Link) — URTO doesn't place calls itself.</p>
+
+  <div class="source-bar">
+    <button class="active" id="dialerSourcePasteBtn">Paste / Upload List</button>
+    <button id="dialerSourceCrmBtn">From CRM Clients</button>
+    <button id="dialerSourceLookupBtn">From Last Lookup Results</button>
+  </div>
+
+  <div class="card" id="dialerPasteBox">
+    <div class="form-group">
+      <label for="dialerPasteArea">Paste a list — one per line, "Name, Phone" (name is optional; just a phone number per line also works)</label>
+      <textarea id="dialerPasteArea" rows="6" placeholder="Jose Bengochea, 305-555-1212&#10;305-555-9999"></textarea>
+    </div>
+    <div class="row" style="margin-top:0">
+      <button id="dialerLoadPasteBtn">Load List</button>
+      <span style="color:var(--text-secondary)">or</span>
+      <button class="ghost" id="dialerUploadBtn">Upload CSV/TXT</button>
+      <input type="file" id="dialerFileInput" accept=".csv,.txt" style="display:none">
+    </div>
+  </div>
+
+  <div id="dialerEmpty" class="dialer-empty">No list loaded yet.</div>
+
+  <div id="dialerCardWrap" style="display:none">
+    <div class="dialer-card">
+      <div class="dialer-progress" id="dialerProgress"></div>
+      <div class="dialer-name" id="dialerName"></div>
+      <a href="#" class="dialer-phone" id="dialerPhone"></a>
+      <div class="dialer-meta" id="dialerMeta"></div>
+      <div class="dialer-controls">
+        <button class="ghost" id="dialerPrevBtn">&larr; Previous</button>
+        <button class="call-btn" id="dialerCallBtn">Call (Enter)</button>
+        <button class="ghost" id="dialerNextBtn">Next &rarr;</button>
+      </div>
+      <div class="dialer-hint">Enter = call current number &nbsp;·&nbsp; &larr;/&rarr; = move through the list</div>
+    </div>
+    <div class="dialer-list" id="dialerListEl"></div>
   </div>
 </section>
 
@@ -733,22 +820,29 @@ function escapeHtml(s) {
 /* ===================== Tabs ===================== */
 const tabLookupBtn = document.getElementById('tabLookupBtn');
 const tabCrmBtn = document.getElementById('tabCrmBtn');
+const tabDialerBtn = document.getElementById('tabDialerBtn');
 const lookupSection = document.getElementById('lookupSection');
 const crmSection = document.getElementById('crmSection');
+const dialerSection = document.getElementById('dialerSection');
 
-tabLookupBtn.addEventListener('click', () => {
-  tabLookupBtn.classList.add('active');
-  tabCrmBtn.classList.remove('active');
-  lookupSection.style.display = 'block';
-  crmSection.style.display = 'none';
-});
-tabCrmBtn.addEventListener('click', () => {
-  tabCrmBtn.classList.add('active');
-  tabLookupBtn.classList.remove('active');
-  crmSection.style.display = 'block';
-  lookupSection.style.display = 'none';
-  loadClients();
-});
+const TOP_TABS = [
+  { btn: tabLookupBtn, section: lookupSection, onShow: null },
+  { btn: tabCrmBtn, section: crmSection, onShow: () => loadClients() },
+  { btn: tabDialerBtn, section: dialerSection, onShow: null },
+];
+
+function showTopTab(target) {
+  for (const t of TOP_TABS) {
+    const active = t === target;
+    t.btn.classList.toggle('active', active);
+    t.section.style.display = active ? 'block' : 'none';
+  }
+  if (target.onShow) target.onShow();
+}
+
+tabLookupBtn.addEventListener('click', () => showTopTab(TOP_TABS[0]));
+tabCrmBtn.addEventListener('click', () => showTopTab(TOP_TABS[1]));
+tabDialerBtn.addEventListener('click', () => showTopTab(TOP_TABS[2]));
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
 const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
@@ -1025,6 +1119,183 @@ async function renderCalendar() {
     calendarGrid.appendChild(cell);
   }
 }
+
+/* ===================== Dialer ===================== */
+let dialerList = [];
+let dialerIndex = 0;
+
+const dialerSourcePasteBtn = document.getElementById('dialerSourcePasteBtn');
+const dialerSourceCrmBtn = document.getElementById('dialerSourceCrmBtn');
+const dialerSourceLookupBtn = document.getElementById('dialerSourceLookupBtn');
+const dialerPasteBox = document.getElementById('dialerPasteBox');
+const dialerEmpty = document.getElementById('dialerEmpty');
+const dialerCardWrap = document.getElementById('dialerCardWrap');
+const dialerProgress = document.getElementById('dialerProgress');
+const dialerNameEl = document.getElementById('dialerName');
+const dialerPhoneEl = document.getElementById('dialerPhone');
+const dialerMetaEl = document.getElementById('dialerMeta');
+const dialerListEl = document.getElementById('dialerListEl');
+
+const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn];
+function setDialerSourceActive(btn) {
+  for (const b of DIALER_SOURCE_BTNS) b.classList.toggle('active', b === btn);
+  dialerPasteBox.style.display = btn === dialerSourcePasteBtn ? 'block' : 'none';
+}
+
+dialerSourcePasteBtn.addEventListener('click', () => setDialerSourceActive(dialerSourcePasteBtn));
+
+dialerSourceCrmBtn.addEventListener('click', async () => {
+  setDialerSourceActive(dialerSourceCrmBtn);
+  const res = await fetch('/api/crm/clients');
+  const clients = await res.json();
+  const urgency = { overdue: 0, due_today: 1, upcoming: 2 };
+  const withPhones = clients
+    .filter(c => c.phone && c.phone.trim())
+    .sort((a, b) => {
+      const ua = urgency[a.followup_status] ?? 3;
+      const ub = urgency[b.followup_status] ?? 3;
+      return ua !== ub ? ua - ub : a.name.localeCompare(b.name);
+    });
+  if (withPhones.length === 0) {
+    alert('No CRM clients with a phone number on file yet.');
+    return;
+  }
+  loadDialerList(withPhones.map(c => ({
+    name: c.name, phone: c.phone,
+    meta: [c.address, followupLabel(c)].filter(Boolean).join(' · '),
+  })));
+});
+
+dialerSourceLookupBtn.addEventListener('click', async () => {
+  setDialerSourceActive(dialerSourceLookupBtn);
+  if (!jobId) {
+    alert('No Owner Lookup results in this session yet. Run a lookup first, in the Owner Lookup tab.');
+    return;
+  }
+  const res = await fetch(`/api/status/${jobId}`);
+  const data = await res.json();
+  const found = (data.rows || []).filter(r => r.status === 'FOUND' && r.phone);
+  if (found.length === 0) {
+    alert('No FOUND results with a phone number in the current lookup session yet.');
+    return;
+  }
+  loadDialerList(found.map(r => ({ name: r.owner, phone: r.phone, meta: r.address })));
+});
+
+document.getElementById('dialerLoadPasteBtn').addEventListener('click', () => {
+  const text = document.getElementById('dialerPasteArea').value;
+  const parsed = parseDialerText(text);
+  if (parsed.length === 0) {
+    alert('No phone numbers found in that text.');
+    return;
+  }
+  loadDialerList(parsed);
+});
+
+const dialerUploadBtn = document.getElementById('dialerUploadBtn');
+const dialerFileInput = document.getElementById('dialerFileInput');
+dialerUploadBtn.addEventListener('click', () => dialerFileInput.click());
+dialerFileInput.addEventListener('change', () => {
+  const file = dialerFileInput.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const parsed = parseDialerText(reader.result);
+    if (parsed.length === 0) {
+      alert('No phone numbers found in that file.');
+      return;
+    }
+    loadDialerList(parsed);
+  };
+  reader.readAsText(file);
+});
+
+function parseDialerText(text) {
+  const phoneRe = /(\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/;
+  const entries = [];
+  for (const rawLine of (text || '').split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const m = line.match(phoneRe);
+    if (!m) continue;
+    const phone = m[1].trim();
+    let name = (line.slice(0, m.index) + line.slice(m.index + m[0].length))
+      .replace(/^[,:\-\s]+|[,:\-\s]+$/g, '').trim();
+    entries.push({ name: name || 'Unknown', phone });
+  }
+  return entries;
+}
+
+function loadDialerList(entries) {
+  dialerList = entries;
+  dialerIndex = 0;
+  dialerEmpty.style.display = dialerList.length ? 'none' : 'block';
+  dialerCardWrap.style.display = dialerList.length ? 'block' : 'none';
+  renderDialerCard();
+}
+
+function normalizePhone(raw) {
+  const justDigits = (raw || '').replace(/\D/g, '');
+  if (!justDigits) return '';
+  if (justDigits.length === 10) return '+1' + justDigits;
+  if (justDigits.length === 11 && justDigits.startsWith('1')) return '+' + justDigits;
+  return '+' + justDigits;
+}
+
+function renderDialerCard() {
+  if (dialerList.length === 0) return;
+  const entry = dialerList[dialerIndex];
+  dialerProgress.textContent = `${dialerIndex + 1} / ${dialerList.length}`;
+  dialerNameEl.textContent = entry.name || 'Unknown';
+  dialerPhoneEl.textContent = entry.phone || '—';
+  dialerPhoneEl.href = 'tel:' + normalizePhone(entry.phone);
+  dialerMetaEl.textContent = entry.meta || '';
+
+  dialerListEl.innerHTML = '';
+  dialerList.forEach((e, i) => {
+    const row = document.createElement('div');
+    row.className = 'dialer-list-row' + (i === dialerIndex ? ' current' : '');
+    row.innerHTML = `<span>${escapeHtml(e.name || 'Unknown')}</span><span>${escapeHtml(e.phone || '')}</span>`;
+    row.addEventListener('click', () => { dialerIndex = i; renderDialerCard(); });
+    dialerListEl.appendChild(row);
+  });
+}
+
+function callCurrentDialerEntry() {
+  if (dialerList.length === 0) return;
+  const tel = normalizePhone(dialerList[dialerIndex].phone);
+  if (!tel) { alert('No valid phone number for this entry.'); return; }
+  window.location.href = 'tel:' + tel;
+}
+
+function dialerNext() {
+  if (dialerIndex < dialerList.length - 1) { dialerIndex++; renderDialerCard(); }
+}
+function dialerPrev() {
+  if (dialerIndex > 0) { dialerIndex--; renderDialerCard(); }
+}
+
+document.getElementById('dialerCallBtn').addEventListener('click', callCurrentDialerEntry);
+document.getElementById('dialerNextBtn').addEventListener('click', dialerNext);
+document.getElementById('dialerPrevBtn').addEventListener('click', dialerPrev);
+
+document.addEventListener('keydown', (e) => {
+  if (dialerSection.style.display !== 'block') return;
+  if (dialerList.length === 0) return;
+  const tag = (document.activeElement.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    callCurrentDialerEntry();
+  } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    dialerNext();
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    dialerPrev();
+  }
+});
 </script>
 
 </body>
