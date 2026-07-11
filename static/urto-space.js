@@ -251,6 +251,182 @@ function buildLogo() {
   });
 }
 
+/* ---- Occasional skywriting rocket ---- */
+const FLYBY_TEXT = 'Made by Mario Bengochea';
+let flyby = null;
+
+function makeSmokeTextTexture(text) {
+  const w = 2048, h = 256;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '800 118px "Segoe UI", -apple-system, Roboto, sans-serif';
+  // Layer several blurred passes so the letters read like puffy smoke.
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.shadowColor = 'rgba(220,235,255,0.9)';
+  for (const blur of [46, 30, 16, 6]) {
+    ctx.shadowBlur = blur;
+    ctx.fillText(text, w / 2, h / 2 + 6);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function makeRocketTexture() {
+  const s = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const ctx = c.getContext('2d');
+  ctx.translate(s / 2, s / 2);
+  // Body (points right)
+  ctx.fillStyle = '#e9eef7';
+  ctx.beginPath();
+  ctx.moveTo(96, 0);
+  ctx.quadraticCurveTo(40, -34, -60, -30);
+  ctx.lineTo(-60, 30);
+  ctx.quadraticCurveTo(40, 34, 96, 0);
+  ctx.fill();
+  // Nose accent
+  ctx.fillStyle = '#f2536e';
+  ctx.beginPath();
+  ctx.moveTo(96, 0);
+  ctx.quadraticCurveTo(58, -26, 26, -24);
+  ctx.quadraticCurveTo(52, 0, 26, 24);
+  ctx.quadraticCurveTo(58, 26, 96, 0);
+  ctx.fill();
+  // Window
+  ctx.fillStyle = '#5fd0ff';
+  ctx.beginPath();
+  ctx.arc(-6, 0, 15, 0, Math.PI * 2);
+  ctx.fill();
+  // Fins
+  ctx.fillStyle = '#c33f57';
+  ctx.beginPath();
+  ctx.moveTo(-50, -28); ctx.lineTo(-84, -52); ctx.lineTo(-58, -18); ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-50, 28); ctx.lineTo(-84, 52); ctx.lineTo(-58, 18); ctx.closePath(); ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function buildFlyby() {
+  renderer.localClippingEnabled = true;
+
+  // The written trail: a wide plane whose reveal is controlled by a clipping
+  // plane that rides along with the rocket, so the words are "drawn" left→right.
+  const clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 24);
+  const textW = 44, textH = textW * (256 / 2048);
+  const textMat = new THREE.MeshBasicMaterial({
+    map: makeSmokeTextTexture(FLYBY_TEXT),
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    depthTest: false,
+    blending: THREE.AdditiveBlending,
+    clippingPlanes: [clip],
+    side: THREE.DoubleSide,
+  });
+  const textMesh = new THREE.Mesh(new THREE.PlaneGeometry(textW, textH), textMat);
+  textMesh.renderOrder = 5;
+  textMesh.visible = false;
+  scene.add(textMesh);
+
+  const rocketMat = new THREE.SpriteMaterial({ map: makeRocketTexture(), transparent: true, depthTest: false });
+  const rocket = new THREE.Sprite(rocketMat);
+  rocket.scale.set(4.4, 4.4, 1);
+  rocket.renderOrder = 6;
+  rocket.visible = false;
+  scene.add(rocket);
+
+  const flameMat = new THREE.SpriteMaterial({
+    map: makeRadialTexture('rgba(255,210,120,0.95)', 'rgba(255,120,40,0)'),
+    transparent: true, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false,
+  });
+  const flame = new THREE.Sprite(flameMat);
+  flame.scale.set(3.2, 2.0, 1);
+  flame.renderOrder = 6;
+  flame.visible = false;
+  scene.add(flame);
+
+  flyby = {
+    clip, textMesh, textMat, textW, rocket, flame,
+    state: 'idle',
+    nextAt: 6,             // first flyby a few seconds in
+    t: 0,
+    xStart: -30, xEnd: 30,
+    y: 15, z: -4,
+    duration: 7.5,
+  };
+}
+
+function updateFlyby(dt, now) {
+  if (!flyby) return;
+  const f = flyby;
+
+  if (f.state === 'idle') {
+    if (now >= f.nextAt) {
+      f.state = 'writing';
+      f.t = 0;
+      f.y = 11 + Math.random() * 4;
+      f.z = -6 + Math.random() * 8;
+      f.duration = 7 + Math.random() * 2;
+      f.textMesh.position.set(0, f.y, f.z);
+      f.textMesh.material.opacity = 0.9;
+      f.textMesh.visible = true;
+      f.rocket.visible = true;
+      f.flame.visible = true;
+    }
+    return;
+  }
+
+  if (f.state === 'writing') {
+    f.t += dt / f.duration;
+    const p = Math.min(f.t, 1);
+    const eased = p < 1 ? p : 1;
+    const rocketX = f.xStart + (f.xEnd - f.xStart) * eased;
+    f.clip.constant = rocketX; // normal is (-1,0,0): keeps x <= rocketX (text left of the rocket)
+    const bob = Math.sin(now * 4) * 0.4;
+    f.rocket.position.set(rocketX + 2.2, f.y + textHalf(f) + bob + 1.2, f.z + 0.5);
+    f.flame.position.set(rocketX - 0.6, f.y + textHalf(f) + bob + 1.2, f.z + 0.4);
+    f.flame.material.opacity = 0.6 + Math.random() * 0.4;
+    if (p >= 1) {
+      f.state = 'holding';
+      f.t = 0;
+      f.rocket.visible = false;
+      f.flame.visible = false;
+    }
+    return;
+  }
+
+  if (f.state === 'holding') {
+    f.t += dt;
+    if (f.t > 2.6) { f.state = 'fading'; f.t = 0; }
+    return;
+  }
+
+  if (f.state === 'fading') {
+    f.t += dt / 3.2;
+    f.textMesh.material.opacity = 0.9 * (1 - Math.min(f.t, 1));
+    f.textMesh.position.y = f.y + f.t * 2.2;       // drift upward as it dissipates
+    f.textMesh.scale.setScalar(1 + f.t * 0.12);
+    if (f.t >= 1) {
+      f.textMesh.visible = false;
+      f.textMesh.scale.setScalar(1);
+      f.state = 'idle';
+      f.nextAt = now + 26 + Math.random() * 24;      // next flyby in ~26–50s
+    }
+    return;
+  }
+}
+
+function textHalf(f) {
+  return f.textW * (256 / 2048) / 2;
+}
+
 function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -285,6 +461,7 @@ function init() {
   buildRings();
   buildOrbs();
   buildLogo();
+  buildFlyby();
 
   composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
@@ -443,6 +620,7 @@ function tick() {
     orb.light.intensity = 90 + orb.hoverT * 120;
   }
 
+  updateFlyby(dt, t);
   updateHover();
   composer.render();
 }
