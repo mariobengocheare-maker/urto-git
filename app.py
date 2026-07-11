@@ -31,6 +31,16 @@ OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 crm.init_db()
+crm.backup_now("startup")
+
+
+def _backup_watcher():
+    while True:
+        time.sleep(60)
+        crm.backup_if_dirty()
+
+
+threading.Thread(target=_backup_watcher, daemon=True).start()
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
@@ -271,6 +281,16 @@ def crm_complete_followup(client_id):
     if not client:
         abort(404)
     return jsonify(client)
+
+
+@app.route("/api/backup/status")
+def backup_status():
+    return jsonify(crm.get_backup_status())
+
+
+@app.route("/api/backup/run", methods=["POST"])
+def backup_run():
+    return jsonify(crm.backup_now("manual"))
 
 
 @app.route("/api/crm/calendar")

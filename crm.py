@@ -5,11 +5,73 @@ follow-up data and schedule math.
 """
 
 import calendar
+import os
+import shutil
 import sqlite3
-from datetime import date, timedelta
+import threading
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "urto_crm.db"
+
+# ---- Automatic backup ----
+# urto_crm.db lives only on this PC and is gitignored on purpose (it holds
+# real client data). If Windows' OneDrive sync is present (the standard
+# OneDrive env var it sets for every signed-in install), back up there so a
+# dead/stolen PC doesn't mean losing every client — otherwise fall back to a
+# local backups/ folder, which still protects against file corruption.
+_backup_lock = threading.Lock()
+_dirty = False
+_last_backup = {"at": None, "path": None}
+
+
+def resolve_backup_dir() -> Path:
+    onedrive = os.environ.get("OneDriveConsumer") or os.environ.get("OneDrive")
+    base = Path(onedrive) / "URTO Backups" if onedrive else Path(__file__).parent / "backups"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def mark_dirty():
+    global _dirty
+    _dirty = True
+
+
+def backup_now(reason="manual", keep=30) -> dict:
+    """Copies the live DB to a timestamped file in the backup dir and prunes
+    old copies. Safe to call anytime — sqlite3's file copy of a closed
+    connection is just a plain file copy."""
+    global _dirty, _last_backup
+    with _backup_lock:
+        if not DB_PATH.exists():
+            return _last_backup
+        backup_dir = resolve_backup_dir()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = backup_dir / f"urto_crm_{stamp}.db"
+        shutil.copy2(DB_PATH, dest)
+
+        backups = sorted(backup_dir.glob("urto_crm_*.db"))
+        for old in backups[:-keep]:
+            old.unlink(missing_ok=True)
+
+        _dirty = False
+        _last_backup = {"at": datetime.now().isoformat(timespec="seconds"), "path": str(dest), "reason": reason}
+        return _last_backup
+
+
+def backup_if_dirty():
+    if _dirty:
+        backup_now("auto")
+
+
+def get_backup_status() -> dict:
+    onedrive = os.environ.get("OneDriveConsumer") or os.environ.get("OneDrive")
+    return {
+        "backup_dir": str(resolve_backup_dir()),
+        "onedrive_detected": bool(onedrive),
+        "last_backup_at": _last_backup["at"],
+        "last_backup_path": _last_backup["path"],
+    }
 
 FREQUENCY_PRESETS = {
     "2_weeks": ("2 Weeks", 14),
@@ -96,6 +158,7 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
         (name, phone, contact_info, address, created_at, label, interval_days, next_followup_date),
     )
     conn.commit()
+    mark_dirty()
     client_id = cur.lastrowid
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
@@ -139,6 +202,7 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
         (name, phone, contact_info, address, label, interval_days, next_followup_date, client_id),
     )
     conn.commit()
+    mark_dirty()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
     return client_to_dict(row)
@@ -148,6 +212,7 @@ def delete_client(client_id):
     conn = get_conn()
     conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
     conn.commit()
+    mark_dirty()
     conn.close()
 
 
@@ -165,6 +230,7 @@ def complete_followup(client_id) -> dict:
     new_due = current_due + timedelta(days=row["interval_days"])
     conn.execute("UPDATE clients SET next_followup_date = ? WHERE id = ?", (new_due.isoformat(), client_id))
     conn.commit()
+    mark_dirty()
     updated = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
     return client_to_dict(updated)
@@ -178,6 +244,7 @@ def add_note(client_id, text) -> dict:
         (client_id, text, created_at),
     )
     conn.commit()
+    mark_dirty()
     note = conn.execute("SELECT * FROM notes WHERE id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
     return dict(note)

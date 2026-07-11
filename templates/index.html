@@ -230,6 +230,13 @@
   }
 
   /* ---- CRM ---- */
+  .backup-bar {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+    padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card-bg); font-size: .82rem; color: var(--text-secondary);
+  }
+  .backup-bar .ok { color: #3fce7a; }
+  .backup-bar .warn { color: #e0a52c; }
   .crm-subtabs { display: flex; gap: 8px; margin-bottom: 18px; }
   .crm-subtabs button { background: var(--card-bg); color: var(--text-secondary); border: 1px solid var(--border); }
   .crm-subtabs button.active { background: var(--navy); color: #fff; border-color: var(--navy); }
@@ -575,6 +582,11 @@
   <h1>URTO CRM</h1>
   <p class="sub">Manage client relationships and automatic follow-up scheduling.</p>
 
+  <div class="backup-bar">
+    <span id="backupStatusText">Checking backup status…</span>
+    <button class="ghost small" id="backupNowBtn">Backup Now</button>
+  </div>
+
   <div class="crm-subtabs">
     <button class="active" id="crmTabClientsBtn">Clients</button>
     <button id="crmTabCalendarBtn">Calendar</button>
@@ -892,7 +904,7 @@ const dialerSection = document.getElementById('dialerSection');
 const TOP_TABS = [
   { key: 'home', btn: tabHomeBtn, section: homeSection, onShow: null },
   { key: 'lookup', btn: tabLookupBtn, section: lookupSection, onShow: null },
-  { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => loadClients() },
+  { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
 ];
 
@@ -932,6 +944,42 @@ setTimeout(() => {
     window.__urtoSpaceFailed();
   }
 }, 5000);
+
+const backupStatusText = document.getElementById('backupStatusText');
+const backupNowBtn = document.getElementById('backupNowBtn');
+
+function formatBackupTime(iso) {
+  if (!iso) return 'never';
+  const d = new Date(iso);
+  const diffMin = Math.round((Date.now() - d.getTime()) / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin} min ago`;
+  return d.toLocaleString();
+}
+
+async function refreshBackupStatus() {
+  try {
+    const res = await fetch('/api/backup/status');
+    const s = await res.json();
+    const where = s.onedrive_detected ? 'OneDrive' : 'local backups folder (OneDrive not detected)';
+    const cls = s.onedrive_detected ? 'ok' : 'warn';
+    backupStatusText.innerHTML = `<span class="${cls}">●</span> Last backup: ${formatBackupTime(s.last_backup_at)} — saved to ${where}`;
+  } catch (e) {
+    backupStatusText.textContent = 'Backup status unavailable';
+  }
+}
+
+backupNowBtn.addEventListener('click', async () => {
+  backupNowBtn.disabled = true;
+  backupNowBtn.textContent = 'Backing up…';
+  try {
+    await fetch('/api/backup/run', { method: 'POST' });
+    await refreshBackupStatus();
+  } finally {
+    backupNowBtn.disabled = false;
+    backupNowBtn.textContent = 'Backup Now';
+  }
+});
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
 const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
