@@ -2,6 +2,19 @@
 
 Solo-user local tool for a Miami-Dade real estate agent (Mario Bengochea). Flask + vanilla HTML/CSS/JS — **no build step, no npm install, no React/Tailwind/TypeScript**. Runs as `python app.py`, opened at `http://localhost:5000` on the user's own Windows PC.
 
+## Current status
+
+**Everything below is built, working, and verified — not a plan, not in progress.** Working tree is clean; every commit is pushed to `origin/claude/hi-dvwvqw`. There is no known open bug and no half-finished feature. The natural next step in a new session is whatever Mario asks for next (a new feature, a tweak, or a bug he found by using it) — don't assume there's a backlog to pick up.
+
+Build order, roughly (see `git log` for exact commits):
+1. Owner Lookup CSV automation (Playwright + FOREWARN) — CLI first, then a Flask/drag-drop web UI.
+2. Hardened it against real bugs found by the user running it live: MUI selector failures, a wrong-person phone-matching bug, human-like typing/pacing, a Stop button, always-available partial-results download.
+3. Rebranded the page as "URTO" (navy/gold design).
+4. Added URTO CRM (SQLite-backed clients/notes/recurring-follow-up calendar) and URTO Dialer (click-to-call power dialer) as new tabs.
+5. Replaced the Home tab with a from-scratch WebGL space scene (Three.js, vendored — see Architecture) after the user wanted something far more dramatic than the first CSS attempt; orbs are now the only navigation on Home.
+6. Added a decorative skywriting rocket easter egg on Home, then refined it twice for legibility/visibility per user feedback.
+7. Wrote this file as a session handoff.
+
 ## User context (read this first)
 
 - **Mario is not a developer.** He needs explicit, numbered, Windows-specific steps for everything — which button to click in File Explorer, that "paste into cmd" is not how you update a code file, etc. Never assume familiarity with terminals/git beyond what's been walked through already.
