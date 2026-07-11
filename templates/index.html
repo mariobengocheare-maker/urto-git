@@ -4,49 +4,37 @@
 <meta charset="utf-8">
 <title>URTO — Ultimate Realtor Tool</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2316233c'/%3E%3Cpath d='M16 6 L27 15 H23 V26 H9 V15 H5 Z' fill='%23d4af37'/%3E%3Crect x='13' y='18' width='6' height='8' fill='%2316233c'/%3E%3C/svg%3E">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three/three.module.js",
+    "three/addons/": "/static/vendor/three/addons/"
+  }
+}
+</script>
 <style>
   :root {
-    color-scheme: light dark;
-    --navy: #16233c;
-    --navy-light: #223a5e;
+    /* URTO is dark-only: one futuristic theme everywhere. */
+    color-scheme: dark;
+    --navy: #0e1830;
+    --navy-light: #1c2e4d;
     --gold: #c9a227;
     --gold-bright: #d4af37;
-    --bg: #f3f1ec;
-    --card-bg: #ffffff;
-    --text: #1f2430;
-    --text-secondary: #667085;
-    --border: #e3e0d8;
-    --success-bg: rgba(31, 122, 63, .12);
-    --success-fg: #1f7a3f;
-    --warn-bg: rgba(138, 109, 26, .14);
-    --warn-fg: #8a6d1a;
-    --danger-bg: rgba(198, 40, 40, .12);
-    --danger-fg: #c62828;
-    --muted-bg: rgba(102, 112, 133, .12);
-    --muted-fg: #667085;
-    --info-bg: rgba(34, 58, 94, .1);
-    --info-fg: #223a5e;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --navy: #0e1830;
-      --navy-light: #1c2e4d;
-      --bg: #0c1220;
-      --card-bg: #131c2e;
-      --text: #e7e9ee;
-      --text-secondary: #97a2b8;
-      --border: #263349;
-      --success-bg: rgba(72, 199, 118, .16);
-      --success-fg: #6bd694;
-      --warn-bg: rgba(224, 185, 60, .16);
-      --warn-fg: #e0b93c;
-      --danger-bg: rgba(255, 99, 99, .16);
-      --danger-fg: #ff8a8a;
-      --muted-bg: rgba(151, 162, 184, .14);
-      --muted-fg: #97a2b8;
-      --info-bg: rgba(139, 172, 219, .14);
-      --info-fg: #8bacdb;
-    }
+    --bg: #0c1220;
+    --card-bg: #131c2e;
+    --text: #e7e9ee;
+    --text-secondary: #97a2b8;
+    --border: #263349;
+    --success-bg: rgba(72, 199, 118, .16);
+    --success-fg: #6bd694;
+    --warn-bg: rgba(224, 185, 60, .16);
+    --warn-fg: #e0b93c;
+    --danger-bg: rgba(255, 99, 99, .16);
+    --danger-fg: #ff8a8a;
+    --muted-bg: rgba(151, 162, 184, .14);
+    --muted-fg: #97a2b8;
+    --info-bg: rgba(139, 172, 219, .14);
+    --info-fg: #8bacdb;
   }
 
   * { box-sizing: border-box; }
@@ -95,8 +83,7 @@
     font-weight: 600;
   }
   .tab-btn:hover:not(:disabled) { opacity: 1; color: var(--text); }
-  .tab-btn.active { color: var(--navy); border-bottom-color: var(--gold); }
-  @media (prefers-color-scheme: dark) { .tab-btn.active { color: #fff; } }
+  .tab-btn.active { color: #fff; border-bottom-color: var(--gold); }
 
   main {
     max-width: 960px;
@@ -373,13 +360,12 @@
   .dialer-phone {
     font-size: 2.2rem;
     font-weight: 800;
-    color: var(--navy);
+    color: #fff;
     letter-spacing: .02em;
     text-decoration: none;
     display: inline-block;
     margin-bottom: 6px;
   }
-  @media (prefers-color-scheme: dark) { .dialer-phone { color: #fff; } }
   .dialer-meta { color: var(--text-secondary); font-size: .9rem; margin-bottom: 4px; }
   .dialer-hint { color: var(--text-secondary); font-size: .78rem; margin-top: 18px; }
   .dialer-controls { display: flex; justify-content: center; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
@@ -400,256 +386,73 @@
   .dialer-list-row.current { background: var(--warn-bg); font-weight: 700; }
   .dialer-empty { color: var(--text-secondary); font-size: .9rem; text-align: center; padding: 30px; }
 
-  /* ---- Home orbital ---- */
-  .home-scene {
-    position: relative;
-    height: calc(100vh - 220px);
-    min-height: 520px;
-    border-radius: 16px;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    user-select: none;
-    -webkit-user-select: none;
-    cursor: default;
-    caret-color: transparent;
-    perspective: 900px;
-    background:
-      radial-gradient(ellipse 60% 45% at 22% 18%, rgba(88, 60, 190, .22), transparent 70%),
-      radial-gradient(ellipse 55% 40% at 80% 78%, rgba(20, 120, 190, .18), transparent 70%),
-      radial-gradient(ellipse 45% 35% at 70% 15%, rgba(190, 55, 130, .10), transparent 70%),
-      radial-gradient(ellipse at center, #0b1224 0%, #070b18 55%, #04060d 100%);
-  }
+  /* ---- Space home (WebGL) ---- */
+  body.space-mode { overflow: hidden; background: #04060d; }
+  body.space-mode .topbar,
+  body.space-mode .tabs,
+  body.space-mode footer.site-footer { display: none; }
 
-  .home-star {
-    position: absolute;
-    border-radius: 50%;
-    background: #cfe0ff;
-    animation: starTwinkle 4s ease-in-out infinite;
-    pointer-events: none;
-  }
-  @keyframes starTwinkle {
-    0%, 100% { opacity: .15; }
-    50% { opacity: .9; }
-  }
+  #spaceStage { position: fixed; inset: 0; z-index: 0; }
+  #spaceStage canvas { display: block; }
 
-  .home-orbit-ring {
-    position: absolute;
-    border-radius: 50%;
-    pointer-events: none;
-  }
-  .home-orbit-ring.r1 {
-    width: 360px;
-    height: 360px;
-    border: 1px solid rgba(120, 160, 255, .22);
-    box-shadow: inset 0 0 60px rgba(80, 120, 255, .07), 0 0 30px rgba(80, 120, 255, .06);
-  }
-  .home-orbit-ring.r2 {
-    width: 480px;
-    height: 480px;
-    border: 1px dashed rgba(120, 160, 255, .12);
-    animation: ringSpin 80s linear infinite;
-  }
-  .home-orbit-ring.r3 {
-    width: 240px;
-    height: 240px;
-    border: 1px solid rgba(167, 139, 250, .14);
-    animation: ringSpin 45s linear infinite reverse;
-  }
-  @keyframes ringSpin { to { transform: rotate(360deg); } }
-
-  .home-core {
-    position: absolute;
-    z-index: 100;
-    text-align: center;
-    transform-style: preserve-3d;
-    animation: coreTilt 10s ease-in-out infinite;
-    pointer-events: none;
-  }
-  @keyframes coreTilt {
-    0%, 100% { transform: rotateX(8deg) rotateY(-7deg); }
-    25% { transform: rotateX(-5deg) rotateY(6deg); }
-    50% { transform: rotateX(7deg) rotateY(8deg); }
-    75% { transform: rotateX(-6deg) rotateY(-6deg); }
-  }
-  .home-core-glow {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 300px;
-    height: 140px;
-    transform: translate(-50%, -50%);
-    background: radial-gradient(ellipse, rgba(99, 141, 255, .30), rgba(167, 139, 250, .12) 55%, transparent 75%);
-    filter: blur(6px);
-    animation: coreBreath 4.5s ease-in-out infinite;
-  }
-  @keyframes coreBreath {
-    0%, 100% { opacity: .65; transform: translate(-50%, -50%) scale(1); }
-    50% { opacity: 1; transform: translate(-50%, -50%) scale(1.12); }
-  }
-  .home-title {
-    /* Back layer: transparent glyphs carrying the 3D extrusion shadows.
-       The gradient face lives on ::after (z-index 1) because negative
-       z-index pseudo-elements paint ABOVE a parent's background — and
-       with background-clip:text the face IS the background. */
-    position: relative;
-    font-size: clamp(3.2rem, 9vw, 5rem);
-    font-weight: 900;
-    letter-spacing: .14em;
-    line-height: 1;
-    padding-right: .14em; /* compensate trailing letter-spacing so it centers true */
-    color: transparent;
-    text-shadow:
-      1px 1px 0 #1d2c52, 2px 2px 0 #1a2849, 3px 3px 0 #172440,
-      4px 4px 0 #142038, 5px 5px 0 #111c30, 6px 6px 0 #0e1828,
-      7px 7px 0 #0b1420, 8px 8px 0 #081018,
-      0 16px 34px rgba(0, 0, 0, .75);
-    filter: drop-shadow(0 0 26px rgba(120, 160, 255, .55));
-  }
-  .home-title::after {
-    content: attr(data-text);
-    position: absolute;
-    inset: 0;
-    padding-right: .14em;
-    z-index: 1;
-    text-shadow: none;
-    background: linear-gradient(180deg, #ffffff 0%, #eaf1ff 30%, #c3d3f5 48%, #8aa5df 62%, #ffffff 68%, #9db4e8 78%, #5c79bb 92%, #47609c 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-  }
-  .home-tagline {
-    margin-top: 12px;
-    font-size: .68rem;
-    font-weight: 600;
-    letter-spacing: .5em;
-    padding-left: .5em;
-    color: rgba(180, 200, 245, .55);
-    text-transform: uppercase;
-  }
-
-  .home-node {
-    --accent: 120, 160, 255;
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    margin-left: -30px;
-    margin-top: -30px;
-    transition: opacity .4s ease;
-    cursor: pointer;
-  }
-  .home-node-inner { animation: homeFloat 3.6s ease-in-out infinite; }
-  @keyframes homeFloat {
-    0%, 100% { transform: translateY(0) rotate(0deg); }
-    35% { transform: translateY(-8px) rotate(1.2deg); }
-    70% { transform: translateY(3px) rotate(-1deg); }
-  }
-
-  .home-node-circle {
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-    background:
-      radial-gradient(circle at 30% 25%, rgba(255, 255, 255, .22), transparent 45%),
-      radial-gradient(circle at 65% 75%, rgba(var(--accent), .38), transparent 65%),
-      radial-gradient(circle, rgba(14, 20, 40, .92), rgba(8, 12, 26, .96));
-    border: 1px solid rgba(var(--accent), .55);
-    box-shadow:
-      0 0 20px rgba(var(--accent), .35),
-      inset 0 0 14px rgba(var(--accent), .18);
-    backdrop-filter: blur(4px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: rgb(var(--accent));
-    transition: all .3s ease;
-  }
-  .home-node:hover .home-node-circle {
-    box-shadow: 0 0 32px rgba(var(--accent), .55), inset 0 0 16px rgba(var(--accent), .3);
-  }
-  .home-node.expanded .home-node-circle {
-    color: #fff;
-    border-color: rgba(var(--accent), .95);
-    box-shadow:
-      0 0 44px rgba(var(--accent), .75),
-      inset 0 0 22px rgba(var(--accent), .5);
-    transform: scale(1.18);
-  }
-  .home-node-label {
-    position: absolute;
-    top: 68px;
+  #spaceOverlay { pointer-events: none; }
+  #spaceTagline {
+    position: fixed;
+    top: calc(50% + 96px);
     left: 50%;
     transform: translateX(-50%);
+    z-index: 2;
+    font-size: .78rem;
+    font-weight: 600;
+    letter-spacing: .58em;
+    padding-left: .58em;
+    text-transform: uppercase;
+    color: rgba(185, 202, 245, .55);
+    text-shadow: 0 0 18px rgba(110, 150, 255, .5);
     white-space: nowrap;
-    font-size: .72rem;
+    animation: taglineIn 2.6s ease-out both;
+  }
+  @keyframes taglineIn { from { opacity: 0; letter-spacing: .9em; } to { opacity: 1; letter-spacing: .58em; } }
+  #spaceCaption {
+    position: fixed;
+    bottom: 64px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    font-size: 1rem;
     font-weight: 700;
     letter-spacing: .12em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, .65);
-    text-shadow: 0 0 12px rgba(var(--accent), .8);
-    transition: color .3s ease;
-  }
-  .home-node.expanded .home-node-label { color: #fff; }
-
-  .home-detail-card {
-    position: absolute;
-    top: 96px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 244px;
-    background: linear-gradient(160deg, rgba(16, 24, 48, .96), rgba(8, 12, 26, .97));
-    border: 1px solid rgba(var(--accent), .45);
-    border-radius: 12px;
-    padding: 16px;
-    text-align: center;
-    box-shadow: 0 14px 44px rgba(0, 0, 0, .55), 0 0 30px rgba(var(--accent), .16);
-    animation: cardIn .35s cubic-bezier(.2, .9, .3, 1.2);
-  }
-  @keyframes cardIn {
-    from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(.94); }
-    to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
-  }
-  .home-detail-card::before {
-    content: "";
-    position: absolute;
-    top: -13px;
-    left: 50%;
-    width: 1px;
-    height: 13px;
-    background: linear-gradient(to bottom, transparent, rgba(var(--accent), .7));
-  }
-  .home-detail-card h4 {
-    margin: 0 0 7px;
     color: #fff;
-    font-size: .95rem;
-    letter-spacing: .05em;
+    text-shadow: 0 0 22px rgba(140, 180, 255, .9);
+    opacity: 0;
+    transition: opacity .25s ease;
+    white-space: nowrap;
   }
-  .home-detail-card p { margin: 0 0 13px; color: rgba(210, 222, 250, .72); font-size: .78rem; line-height: 1.5; }
-  .home-detail-card button {
-    width: 100%;
-    padding: 9px;
-    font-size: .8rem;
-    letter-spacing: .06em;
-    background: linear-gradient(135deg, rgba(var(--accent), .9), rgba(var(--accent), .65));
-    color: #060a14;
-    font-weight: 800;
-  }
-
-  .home-hint {
-    position: absolute;
-    bottom: 14px;
+  #spaceHint {
+    position: fixed;
+    bottom: 26px;
     left: 50%;
     transform: translateX(-50%);
-    color: rgba(170, 190, 235, .38);
+    z-index: 2;
     font-size: .72rem;
-    letter-spacing: .05em;
-    pointer-events: none;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: rgba(150, 170, 215, .4);
+    white-space: nowrap;
   }
+  #spaceFade {
+    position: fixed;
+    inset: 0;
+    z-index: 4;
+    background: #04060d;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .45s ease;
+  }
+
 </style>
 </head>
-<body>
+<body class="space-mode">
 
 <div class="topbar">
   <div class="brand">
@@ -675,19 +478,13 @@
 <main>
 
 <section id="homeSection">
-  <div class="home-scene" id="homeScene">
-    <div id="homeStars"></div>
-    <div class="home-orbit-ring r2"></div>
-    <div class="home-orbit-ring r1"></div>
-    <div class="home-orbit-ring r3"></div>
-    <div class="home-core">
-      <div class="home-core-glow"></div>
-      <div class="home-title" data-text="URTO">URTO</div>
-      <div class="home-tagline">Ultimate Realtor Tool</div>
-    </div>
-    <div id="homeOrbitNodes"></div>
-    <div class="home-hint">Click a node to learn more &nbsp;·&nbsp; click anywhere else to let it orbit again</div>
+  <div id="spaceStage"></div>
+  <div id="spaceOverlay">
+    <div id="spaceTagline">Ultimate Realtor Tool</div>
+    <div id="spaceCaption"></div>
+    <div id="spaceHint">Click an orb to enter</div>
   </div>
+  <div id="spaceFade"></div>
 </section>
 
 <section id="lookupSection" style="display:none">
@@ -1093,7 +890,7 @@ const crmSection = document.getElementById('crmSection');
 const dialerSection = document.getElementById('dialerSection');
 
 const TOP_TABS = [
-  { key: 'home', btn: tabHomeBtn, section: homeSection, onShow: () => initHomeOrbit() },
+  { key: 'home', btn: tabHomeBtn, section: homeSection, onShow: null },
   { key: 'lookup', btn: tabLookupBtn, section: lookupSection, onShow: null },
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => loadClients() },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
@@ -1105,7 +902,11 @@ function showTopTab(target) {
     t.btn.classList.toggle('active', active);
     t.section.style.display = active ? 'block' : 'none';
   }
-  if (target.key !== 'home') stopHomeOrbit();
+  const isHome = target.key === 'home';
+  document.body.classList.toggle('space-mode', isHome);
+  if (window.URTO_SPACE) {
+    if (isHome) window.URTO_SPACE.start(); else window.URTO_SPACE.stop();
+  }
   if (target.onShow) target.onShow();
 }
 
@@ -1118,6 +919,19 @@ tabHomeBtn.addEventListener('click', () => showTopTab(TOP_TABS[0]));
 tabLookupBtn.addEventListener('click', () => showTopTab(TOP_TABS[1]));
 tabCrmBtn.addEventListener('click', () => showTopTab(TOP_TABS[2]));
 tabDialerBtn.addEventListener('click', () => showTopTab(TOP_TABS[3]));
+
+/* Bridges for the WebGL scene (module script) */
+window.__urtoEnterSection = (key) => showTopTabByKey(key);
+window.__urtoSpaceFailed = () => {
+  // WebGL unavailable: fall back to classic tab navigation.
+  document.body.classList.remove('space-mode');
+  showTopTabByKey('lookup');
+};
+setTimeout(() => {
+  if (!window.URTO_SPACE_READY && document.body.classList.contains('space-mode')) {
+    window.__urtoSpaceFailed();
+  }
+}, 5000);
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
 const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
@@ -1572,219 +1386,9 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-/* ===================== Home orbital ===================== */
-const ICON_SEARCH = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10" cy="10" r="6"/><line x1="20" y1="20" x2="14.5" y2="14.5"/></svg>';
-const ICON_PEOPLE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="3"/><path d="M2 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="8" r="2.3"/><path d="M14.7 14.1c2.6.5 4.6 2.8 4.6 5.9"/></svg>';
-const ICON_PHONE = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.4c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.4 0 .8-.2 1L6.6 10.8z"/></svg>';
-
-const HOME_NODES = [
-  { key: 'lookup', title: 'URTO Skip Trace', desc: 'Drag in a CSV, automate FOREWARN owner-phone lookups, and get results back.', icon: ICON_SEARCH, accent: '56, 217, 255' },
-  { key: 'crm', title: 'URTO CRM', desc: 'Manage clients, log notes, and keep follow-ups on an automatic schedule.', icon: ICON_PEOPLE, accent: '167, 139, 250' },
-  { key: 'dialer', title: 'URTO Dialer', desc: 'Load a call list and power through it — Enter to call, arrows to move on.', icon: ICON_PHONE, accent: '244, 114, 182' },
-];
-
-let homeInitialized = false;
-let homeRotation = 0;
-let homeAutoRotate = true;
-let homeExpandedKey = null;
-let homeTimer = null;
-const homeNodeEls = {};
-
-function buildStarfield() {
-  const container = document.getElementById('homeStars');
-  for (let i = 0; i < 90; i++) {
-    const star = document.createElement('div');
-    star.className = 'home-star';
-    const size = (Math.random() * 1.8 + 0.6).toFixed(1);
-    star.style.width = size + 'px';
-    star.style.height = size + 'px';
-    star.style.left = (Math.random() * 100).toFixed(2) + '%';
-    star.style.top = (Math.random() * 100).toFixed(2) + '%';
-    star.style.animationDuration = (Math.random() * 4 + 2.5).toFixed(2) + 's';
-    star.style.animationDelay = (Math.random() * 5).toFixed(2) + 's';
-    container.appendChild(star);
-  }
-}
-
-function initHomeOrbit() {
-  if (!homeInitialized) {
-    buildStarfield();
-    const container = document.getElementById('homeOrbitNodes');
-    HOME_NODES.forEach((node, i) => {
-      const el = document.createElement('div');
-      el.className = 'home-node';
-      el.style.setProperty('--accent', node.accent);
-      el.innerHTML = `
-        <div class="home-node-inner" style="animation-duration:${(3.2 + i * 0.7).toFixed(1)}s;animation-delay:${(i * 0.9).toFixed(1)}s">
-          <div class="home-node-circle">${node.icon}</div>
-          <div class="home-node-label">${escapeHtml(node.title)}</div>
-        </div>
-      `;
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleHomeNode(node.key);
-      });
-      container.appendChild(el);
-      homeNodeEls[node.key] = el;
-    });
-    document.getElementById('homeScene').addEventListener('click', () => {
-      homeExpandedKey = null;
-      homeAutoRotate = true;
-      renderHomeNodes();
-    });
-    homeInitialized = true;
-  }
-  startHomeTimer();
-  renderHomeNodes();
-}
-
-function startHomeTimer() {
-  stopHomeOrbit();
-  homeTimer = setInterval(() => {
-    if (!homeAutoRotate) return;
-    homeRotation = (homeRotation + 0.4) % 360;
-    renderHomeNodes();
-  }, 50);
-}
-
-function stopHomeOrbit() {
-  if (homeTimer) { clearInterval(homeTimer); homeTimer = null; }
-}
-
-function toggleHomeNode(key) {
-  if (homeExpandedKey === key) {
-    homeExpandedKey = null;
-    homeAutoRotate = true;
-  } else {
-    homeExpandedKey = key;
-    homeAutoRotate = false;
-  }
-  renderHomeNodes();
-}
-
-function renderHomeNodes() {
-  const total = HOME_NODES.length;
-  const radius = 180;
-  HOME_NODES.forEach((node, i) => {
-    const el = homeNodeEls[node.key];
-    if (!el) return;
-    const isExpanded = homeExpandedKey === node.key;
-    const angle = ((i / total) * 360 + homeRotation) % 360;
-    const rad = (angle * Math.PI) / 180;
-    const x = radius * Math.cos(rad);
-    const y = radius * Math.sin(rad);
-    const zIndex = Math.round(100 + 50 * Math.cos(rad));
-    const opacity = (homeExpandedKey && !isExpanded)
-      ? 0.35
-      : Math.max(0.55, Math.min(1, 0.55 + 0.45 * ((1 + Math.sin(rad)) / 2)));
-
-    el.style.transform = `translate(${x}px, ${y}px)`;
-    el.style.zIndex = isExpanded ? 300 : zIndex;
-    el.style.opacity = opacity;
-    el.classList.toggle('expanded', isExpanded);
-
-    let card = el.querySelector('.home-detail-card');
-    if (isExpanded && !card) {
-      card = document.createElement('div');
-      card.className = 'home-detail-card';
-      card.innerHTML = `<h4>${escapeHtml(node.title)}</h4><p>${escapeHtml(node.desc)}</p><button type="button">Open &rarr;</button>`;
-      card.addEventListener('click', (e) => e.stopPropagation());
-      card.querySelector('button').addEventListener('click', () => showTopTabByKey(node.key));
-      el.appendChild(card);
-    } else if (!isExpanded && card) {
-      card.remove();
-    }
-  });
-}
-
-initHomeOrbit();
-
-/* ===================== Intro sound + voice ===================== */
-let introDone = false;
-
-function playIntroSound(ctx) {
-  const now = ctx.currentTime;
-  const master = ctx.createGain();
-  master.gain.setValueAtTime(0.0001, now);
-  master.gain.exponentialRampToValueAtTime(0.22, now + 0.45);
-  master.gain.exponentialRampToValueAtTime(0.0001, now + 1.7);
-  master.connect(ctx.destination);
-
-  // Rising shimmer: three detuned sweeps landing on an A-major-ish stack.
-  const sweeps = [
-    { from: 220, to: 880, type: 'triangle', gain: 0.20 },
-    { from: 330, to: 1318, type: 'triangle', gain: 0.14 },
-    { from: 554, to: 2217, type: 'sine', gain: 0.07 },
-  ];
-  for (const s of sweeps) {
-    const osc = ctx.createOscillator();
-    osc.type = s.type;
-    osc.frequency.setValueAtTime(s.from, now);
-    osc.frequency.exponentialRampToValueAtTime(s.to, now + 1.15);
-    const g = ctx.createGain();
-    g.gain.value = s.gain;
-    osc.connect(g);
-    g.connect(master);
-    osc.start(now);
-    osc.stop(now + 1.8);
-  }
-
-  // A soft "arrival" bell once the sweep lands.
-  const bell = ctx.createOscillator();
-  bell.type = 'sine';
-  bell.frequency.setValueAtTime(1760, now + 1.05);
-  const bellGain = ctx.createGain();
-  bellGain.gain.setValueAtTime(0.0001, now + 1.05);
-  bellGain.gain.exponentialRampToValueAtTime(0.12, now + 1.12);
-  bellGain.gain.exponentialRampToValueAtTime(0.0001, now + 2.2);
-  bell.connect(bellGain);
-  bellGain.connect(ctx.destination);
-  bell.start(now + 1.05);
-  bell.stop(now + 2.3);
-}
-
-function speakWelcome() {
-  if (!('speechSynthesis' in window)) return;
-  const speak = () => {
-    const u = new SpeechSynthesisUtterance('Welcome to URTO');
-    u.rate = 0.92;
-    u.pitch = 1.12;
-    u.volume = 0.9;
-    const voices = speechSynthesis.getVoices();
-    const preferred =
-      voices.find(v => v.lang.startsWith('en') && /aria|jenny|zira|samantha|sonia|libby|female/i.test(v.name)) ||
-      voices.find(v => v.lang.startsWith('en') && /google/i.test(v.name)) ||
-      voices.find(v => v.lang.startsWith('en'));
-    if (preferred) u.voice = preferred;
-    speechSynthesis.speak(u);
-  };
-  if (speechSynthesis.getVoices().length === 0) {
-    speechSynthesis.addEventListener('voiceschanged', speak, { once: true });
-  } else {
-    speak();
-  }
-}
-
-function tryIntro() {
-  if (introDone) return;
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) { introDone = true; speakWelcome(); return; }
-  const ctx = new AC();
-  if (ctx.state === 'suspended') {
-    // Browser autoplay policy: no sound until the user interacts.
-    // Leave introDone false so the first click/keypress triggers us again.
-    ctx.close();
-    return;
-  }
-  introDone = true;
-  try { playIntroSound(ctx); } catch (e) { /* sound is decorative; never block the page */ }
-  setTimeout(speakWelcome, 1100);
-}
-
-tryIntro();
-document.addEventListener('pointerdown', tryIntro);
-document.addEventListener('keydown', tryIntro);
 </script>
+
+<script type="module" src="/static/urto-space.js"></script>
 
 </body>
 </html>
