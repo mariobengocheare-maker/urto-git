@@ -262,14 +262,36 @@ function makeSmokeTextTexture(text) {
   const ctx = c.getContext('2d');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '800 118px "Segoe UI", -apple-system, Roboto, sans-serif';
-  // Layer several blurred passes so the letters read like puffy smoke.
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.shadowColor = 'rgba(220,235,255,0.9)';
-  for (const blur of [46, 30, 16, 6]) {
+  ctx.font = '800 116px "Segoe UI", -apple-system, Roboto, sans-serif';
+  // Soft grey-white "smoke": a diffuse blurred halo plus a restrained core.
+  // Kept dim on purpose — bright white + additive blend + bloom was blowing
+  // the fresh letters out so they weren't legible, so this uses muted greys
+  // and the material draws with normal (non-additive) blending.
+  ctx.shadowColor = 'rgba(150,165,190,0.55)';
+  ctx.fillStyle = 'rgba(150,165,190,0.30)';
+  for (const blur of [26, 14]) {
     ctx.shadowBlur = blur;
     ctx.fillText(text, w / 2, h / 2 + 6);
   }
+  ctx.shadowBlur = 4;
+  ctx.fillStyle = 'rgba(214,224,240,0.72)';
+  ctx.fillText(text, w / 2, h / 2 + 6);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function makePuffTexture() {
+  const s = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0, 'rgba(200,210,228,0.5)');
+  g.addColorStop(0.5, 'rgba(170,182,205,0.22)');
+  g.addColorStop(1, 'rgba(170,182,205,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, s, s);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -326,7 +348,7 @@ function buildFlyby() {
     opacity: 0,
     depthWrite: false,
     depthTest: false,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,   // not additive — keeps the letters legible under bloom
     clippingPlanes: [clip],
     side: THREE.DoubleSide,
   });
@@ -337,8 +359,8 @@ function buildFlyby() {
 
   const rocketMat = new THREE.SpriteMaterial({ map: makeRocketTexture(), transparent: true, depthTest: false });
   const rocket = new THREE.Sprite(rocketMat);
-  rocket.scale.set(4.4, 4.4, 1);
-  rocket.renderOrder = 6;
+  rocket.scale.set(5.2, 5.2, 1);
+  rocket.renderOrder = 7;
   rocket.visible = false;
   scene.add(rocket);
 
@@ -347,35 +369,80 @@ function buildFlyby() {
     transparent: true, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false,
   });
   const flame = new THREE.Sprite(flameMat);
-  flame.scale.set(3.2, 2.0, 1);
-  flame.renderOrder = 6;
+  flame.scale.set(3.0, 1.8, 1);
+  flame.renderOrder = 7;
   flame.visible = false;
   scene.add(flame);
 
+  // Puff particle pool: soft smoke that spurts from the exhaust and lingers,
+  // so the written words read as the rocket's own exhaust trail.
+  const puffTex = makePuffTexture();
+  const puffs = [];
+  for (let i = 0; i < 48; i++) {
+    const m = new THREE.SpriteMaterial({ map: puffTex, transparent: true, opacity: 0, depthTest: false, depthWrite: false });
+    const sp = new THREE.Sprite(m);
+    sp.visible = false;
+    sp.renderOrder = 4;
+    scene.add(sp);
+    puffs.push({ sp, life: 0, maxLife: 1, vx: 0, vy: 0, baseScale: 1 });
+  }
+
   flyby = {
     clip, textMesh, textMat, textW, rocket, flame,
+    puffs, puffCursor: 0, puffTimer: 0,
     state: 'idle',
     nextAt: 6,             // first flyby a few seconds in
     t: 0,
-    xStart: -30, xEnd: 30,
-    y: 15, z: -4,
+    xStart: -32, xEnd: 32,
+    y: 9, z: -4,
     duration: 7.5,
   };
+}
+
+function spawnPuff(f, x, y, z) {
+  const p = f.puffs[f.puffCursor];
+  f.puffCursor = (f.puffCursor + 1) % f.puffs.length;
+  p.life = 0;
+  p.maxLife = 1.6 + Math.random() * 1.2;
+  p.vx = -1.6 - Math.random() * 1.2;              // drift back along the trail
+  p.vy = (Math.random() - 0.5) * 0.7;
+  p.baseScale = 1.4 + Math.random() * 1.6;
+  p.sp.position.set(x + (Math.random() - 0.5) * 0.6, y + (Math.random() - 0.5) * 0.6, z);
+  p.sp.scale.setScalar(p.baseScale);
+  p.sp.material.opacity = 0.5;
+  p.sp.visible = true;
+}
+
+function updatePuffs(f, dt) {
+  for (const p of f.puffs) {
+    if (!p.sp.visible) continue;
+    p.life += dt;
+    const k = p.life / p.maxLife;
+    if (k >= 1) { p.sp.visible = false; continue; }
+    p.sp.position.x += p.vx * dt;
+    p.sp.position.y += p.vy * dt;
+    p.sp.scale.setScalar(p.baseScale * (1 + k * 1.8));   // billow outward
+    p.sp.material.opacity = 0.5 * (1 - k);
+  }
 }
 
 function updateFlyby(dt, now) {
   if (!flyby) return;
   const f = flyby;
 
+  updatePuffs(f, dt);
+
   if (f.state === 'idle') {
     if (now >= f.nextAt) {
       f.state = 'writing';
       f.t = 0;
-      f.y = 11 + Math.random() * 4;
-      f.z = -6 + Math.random() * 8;
+      f.y = 6 + Math.random() * 5;           // low enough that the rocket stays on-screen
+      f.z = -5 + Math.random() * 6;
       f.duration = 7 + Math.random() * 2;
+      f.puffTimer = 0;
       f.textMesh.position.set(0, f.y, f.z);
-      f.textMesh.material.opacity = 0.9;
+      f.textMesh.scale.setScalar(1);
+      f.textMesh.material.opacity = 1;
       f.textMesh.visible = true;
       f.rocket.visible = true;
       f.flame.visible = true;
@@ -386,13 +453,25 @@ function updateFlyby(dt, now) {
   if (f.state === 'writing') {
     f.t += dt / f.duration;
     const p = Math.min(f.t, 1);
-    const eased = p < 1 ? p : 1;
-    const rocketX = f.xStart + (f.xEnd - f.xStart) * eased;
+    const rocketX = f.xStart + (f.xEnd - f.xStart) * p;
     f.clip.constant = rocketX; // normal is (-1,0,0): keeps x <= rocketX (text left of the rocket)
-    const bob = Math.sin(now * 4) * 0.4;
-    f.rocket.position.set(rocketX + 2.2, f.y + textHalf(f) + bob + 1.2, f.z + 0.5);
-    f.flame.position.set(rocketX - 0.6, f.y + textHalf(f) + bob + 1.2, f.z + 0.4);
-    f.flame.material.opacity = 0.6 + Math.random() * 0.4;
+
+    const bob = Math.sin(now * 3.5) * 0.35;
+    // Rocket rides at the vertical center of the trail, just past the reveal
+    // edge, so the smoke words pour straight out of its exhaust.
+    const ry = f.y + bob;
+    f.rocket.position.set(rocketX + 3.0, ry, f.z + 0.6);
+    f.flame.position.set(rocketX + 0.4, ry, f.z + 0.5);
+    f.flame.material.opacity = 0.55 + Math.random() * 0.35;
+    f.flame.scale.set(2.6 + Math.random() * 0.8, 1.7, 1);
+
+    // Spurt puffs from the exhaust while the engine is firing.
+    f.puffTimer += dt;
+    while (f.puffTimer > 0.045) {
+      f.puffTimer -= 0.045;
+      spawnPuff(f, rocketX + 0.6, ry, f.z - 0.2);
+    }
+
     if (p >= 1) {
       f.state = 'holding';
       f.t = 0;
@@ -410,7 +489,7 @@ function updateFlyby(dt, now) {
 
   if (f.state === 'fading') {
     f.t += dt / 3.2;
-    f.textMesh.material.opacity = 0.9 * (1 - Math.min(f.t, 1));
+    f.textMesh.material.opacity = 1 - Math.min(f.t, 1);
     f.textMesh.position.y = f.y + f.t * 2.2;       // drift upward as it dissipates
     f.textMesh.scale.setScalar(1 + f.t * 0.12);
     if (f.t >= 1) {
@@ -421,10 +500,6 @@ function updateFlyby(dt, now) {
     }
     return;
   }
-}
-
-function textHalf(f) {
-  return f.textW * (256 / 2048) / 2;
 }
 
 function init() {
