@@ -622,7 +622,13 @@
   .dialer-client-info-head { font-weight: 700; margin-bottom: 8px; color: var(--gold); }
   .dialer-client-info-followup { font-size: .85rem; margin: 6px 0; }
   .dialer-client-info-notes-head { font-weight: 600; font-size: .85rem; margin-top: 10px; color: var(--text-secondary); }
-  .dictate-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .dictate-box { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); text-align: left; }
+  .dictate-box-head { font-weight: 700; font-size: .85rem; color: var(--gold); margin-bottom: 8px; }
+  .dictate-ok {
+    margin-top: 8px; padding: 8px 12px; border-radius: 8px;
+    background: var(--success-bg); color: var(--success-fg);
+    border: 1px solid rgba(72,199,118,.35); font-size: .82rem; font-weight: 600;
+  }
   .dictate-btn { background: linear-gradient(180deg, var(--gold-bright), var(--gold)); color: #2a2205; border-color: transparent; }
   .dictate-btn.recording { background: var(--danger-fg); color: #fff; animation: dictatePulse 1.2s ease-in-out infinite; }
   @keyframes dictatePulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,99,99,.5); } 50% { box-shadow: 0 0 0 8px rgba(255,99,99,0); } }
@@ -919,21 +925,26 @@
         <div id="dciFollowup" class="dialer-client-info-followup"></div>
         <div class="dialer-client-info-notes-head">Notes</div>
         <div id="dciNotes"></div>
+      </div>
 
-        <div class="dictate-box" id="dictateBox">
-          <button class="dictate-btn" id="dictateBtn">🎙 Dictate a call note</button>
-          <div class="dictate-hint" id="dictateHint">Click and speak your recap — it's typed out for you and saved to this client's notes. Free, no account.</div>
-          <div class="dictate-live" id="dictateLive" style="display:none"></div>
-          <div class="dictate-review" id="dictateReview" style="display:none">
-            <label>Note (edit if needed):</label>
-            <textarea id="dictateSummary" rows="5"></textarea>
-            <div class="row" style="margin-top:8px">
-              <button class="small" id="dictateSaveBtn">Save to Notes</button>
-              <button class="ghost small" id="dictateDiscardBtn">Discard</button>
-            </div>
+      <!-- Call notes work for ANY dialer entry, in your CRM or not. For a lead
+           who isn't a client yet, saving a note quietly creates a contact from
+           the dial entry so the note has somewhere to live. -->
+      <div class="dictate-box" id="dictateBox">
+        <div class="dictate-box-head">📝 Call note</div>
+        <button class="dictate-btn" id="dictateBtn">🎙 Dictate a call note</button>
+        <div class="dictate-hint" id="dictateHint">Click and speak your recap — it's typed out for you and saved as a call note. Free, no account.</div>
+        <div class="dictate-live" id="dictateLive" style="display:none"></div>
+        <div class="dictate-review" id="dictateReview" style="display:none">
+          <label>Note (edit if needed):</label>
+          <textarea id="dictateSummary" rows="5"></textarea>
+          <div class="row" style="margin-top:8px">
+            <button class="small" id="dictateSaveBtn">Save note</button>
+            <button class="ghost small" id="dictateDiscardBtn">Discard</button>
           </div>
-          <div class="dictate-error error-box" id="dictateError" style="margin-top:8px"></div>
         </div>
+        <div class="dictate-ok" id="dictateOk" style="display:none"></div>
+        <div class="dictate-error error-box" id="dictateError" style="margin-top:8px"></div>
       </div>
       <div class="dialer-controls">
         <button class="ghost" id="dialerPrevBtn">&larr; Previous</button>
@@ -1908,6 +1919,9 @@ function renderDialerCard() {
   // Offer "Add to CRM" only for entries not already tied to a client.
   dialerAddCrmBtn.style.display = entry.clientId ? 'none' : 'inline-block';
 
+  // Fresh call-note box for each entry so a half-written note never carries
+  // over to the next person.
+  resetDictation();
   updateDialerClientInfo(entry);
 }
 
@@ -1957,8 +1971,6 @@ async function updateDialerClientInfo(entry) {
     }
   }
 
-  resetDictation();
-  dialerDictateClientId = c.id;
   dialerClientInfoEl.style.display = 'block';
 }
 
@@ -1970,7 +1982,7 @@ const dictateLive = document.getElementById('dictateLive');
 const dictateReview = document.getElementById('dictateReview');
 const dictateSummary = document.getElementById('dictateSummary');
 const dictateError = document.getElementById('dictateError');
-let dialerDictateClientId = null;
+const dictateOk = document.getElementById('dictateOk');
 let recognition = null;
 let recognizing = false;
 let manualStop = false;
@@ -1979,7 +1991,7 @@ let dictateFinalText = '';
 if (!SpeechRec) {
   // No browser speech support (e.g. Firefox): fall back to typing a note.
   dictateBtn.textContent = '➕ Add a note';
-  dictateHint.textContent = 'Type a quick note for this client below.';
+  dictateHint.textContent = 'Type a quick call note below.';
 }
 
 function resetDictation() {
@@ -1993,6 +2005,7 @@ function resetDictation() {
   dictateReview.style.display = 'none';
   dictateSummary.value = '';
   dictateError.style.display = 'none';
+  dictateOk.style.display = 'none';
 }
 
 function showDictateError(msg) {
@@ -2073,14 +2086,49 @@ dictateBtn.addEventListener('click', () => {
 document.getElementById('dictateSaveBtn').addEventListener('click', async () => {
   const text = dictateSummary.value.trim();
   if (!text) { showDictateError('Note is empty.'); return; }
-  if (!dialerDictateClientId) return;
-  await fetch(`/api/crm/clients/${dialerDictateClientId}/notes`, {
+  const entry = dialerList[dialerIndex];
+  if (!entry) return;
+
+  let clientId = entry.clientId;
+  let createdName = '';
+
+  // If this person isn't in the CRM yet, create a lightweight contact from the
+  // dial entry so the note has somewhere permanent to live — the same way a
+  // realtor would jot "called them, left a message" against a lead.
+  if (!clientId) {
+    const name = (entry.name && entry.name !== 'Unknown') ? entry.name
+               : (entry.phone || 'New lead');
+    const res = await fetch('/api/crm/clients', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        phone: entry.phone || '',
+        address: entry.address || '',
+        frequency_key: 'none',
+      }),
+    });
+    if (!res.ok) { showDictateError('Could not save the note. Try again.'); return; }
+    const c = await res.json();
+    clientId = c.id;
+    entry.clientId = clientId;   // subsequent notes on this entry stay together
+    createdName = name;
+  }
+
+  const noteRes = await fetch(`/api/crm/clients/${clientId}/notes`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
   });
-  const savedFor = dialerDictateClientId;
-  // Refresh the panel so the new note shows immediately (only if still on this entry).
-  const entry = dialerList[dialerIndex];
-  if (entry && entry.clientId === savedFor) updateDialerClientInfo(entry);
+  if (!noteRes.ok) { showDictateError('Could not save the note. Try again.'); return; }
+
+  // Refresh the dialer UI for this entry: the CRM panel + note list appear, the
+  // "Add to CRM" button hides, and the list row gets its 📇. renderDialerCard
+  // resets the dictation box, so show the confirmation right after.
+  if (dialerList[dialerIndex] === entry) renderDialerCard();
+  if (createdName) loadClients();   // keep the CRM tab's client list in sync
+
+  dictateOk.textContent = createdName
+    ? `✓ Saved — ${createdName} added to your CRM`
+    : '✓ Saved to notes';
+  dictateOk.style.display = 'block';
 });
 
 document.getElementById('dictateDiscardBtn').addEventListener('click', resetDictation);

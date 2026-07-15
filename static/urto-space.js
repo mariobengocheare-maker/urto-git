@@ -262,11 +262,13 @@ function makeSmokePointTexture() {
   const c = document.createElement('canvas');
   c.width = c.height = s;
   const ctx = c.getContext('2d');
+  // Harder core than a typical smoke puff so densely-packed points render
+  // crisp letter strokes rather than a soft haze.
   const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
   g.addColorStop(0.0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.22, 'rgba(238,245,255,0.82)');
-  g.addColorStop(0.55, 'rgba(206,222,248,0.30)');
-  g.addColorStop(1.0, 'rgba(206,222,248,0)');
+  g.addColorStop(0.42, 'rgba(240,246,255,0.92)');
+  g.addColorStop(0.72, 'rgba(210,225,250,0.28)');
+  g.addColorStop(1.0, 'rgba(210,225,250,0)');
   ctx.fillStyle = g;
   ctx.beginPath(); ctx.arc(s / 2, s / 2, s / 2, 0, Math.PI * 2); ctx.fill();
   const tex = new THREE.CanvasTexture(c);
@@ -294,7 +296,7 @@ function sampleTextPoints(text, worldW) {
   ctx.fillText(text, cw / 2, ch / 2);
 
   const data = ctx.getImageData(0, 0, cw, ch).data;
-  const step = 6;
+  const step = 4;   // dense sampling → tight, legible letter strokes
   const worldH = worldW * (ch / cw);
   const positions = [], reveals = [], seeds = [];
   for (let py = 0; py < ch; py += step) {
@@ -517,32 +519,33 @@ function buildSkywriting(worldW) {
       uProgress: { value: 0 },
       uTime: { value: 0 },
       uFade: { value: 1 },
-      uSize: { value: 2.5 },
+      uDrift: { value: 0 },
+      uSize: { value: 1.55 },
       uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-      uColor: { value: new THREE.Color(0x7286b6) },
+      uColor: { value: new THREE.Color(0x5f7099) },
       uTex: { value: makeSmokePointTexture() },
     },
     vertexShader: `
       attribute float aReveal;
       attribute float aSeed;
-      uniform float uProgress, uTime, uSize, uPixelRatio;
+      uniform float uProgress, uTime, uSize, uPixelRatio, uDrift;
       varying float vAlpha;
       void main() {
         float age = uProgress - aReveal;          // time since this column was written
-        float appear = smoothstep(0.0, 0.025, age);
-        float grow = smoothstep(0.0, 0.10, age);  // puff outward just after written
-        // Let the oldest smoke thin out a little so the trail doesn't build to
-        // an overexposed slab on the left — keeps the whole message legible.
-        vAlpha = appear * (1.0 - 0.32 * smoothstep(0.25, 1.1, age));
-        float t = max(age, 0.0);
-        float sway  = sin(uTime * 0.9 + aSeed * 6.2831);
-        float sway2 = cos(uTime * 0.7 + aSeed * 12.566);
+        float appear = smoothstep(0.0, 0.02, age);
+        float grow = smoothstep(0.0, 0.05, age);  // pop to full size quickly
+        vAlpha = appear;
+        float sway = sin(uTime * 1.1 + aSeed * 6.2831);
         vec3 pos = position;
-        pos.x += (-0.55 * t) + sway * 0.20 * t;   // drift back along the trail
-        pos.y += 0.40 * t + sway2 * 0.18 * t;     // gentle rise + billow
-        pos.z += sway * 0.28 * t;
+        // Letters hold their exact sampled shape while being written and while
+        // the message rests — only a whisper of shimmer. The billow/rise that
+        // used to smear them is gated behind uDrift, which only ramps up once
+        // the message starts dissipating (fade phase).
+        pos.x += sway * 0.05 + (-0.7 - aSeed * 0.6) * uDrift;
+        pos.y += (0.5 + aSeed * 0.6) * uDrift + sway * 0.12 * uDrift;
+        pos.z += sway * 0.10 * uDrift;
         vec4 mv = modelViewMatrix * vec4(pos, 1.0);
-        float size = uSize * (0.35 + 0.65 * grow) * (1.0 + t * 0.18);
+        float size = uSize * (0.55 + 0.45 * grow) * (1.0 + uDrift * 1.6);
         gl_PointSize = size * uPixelRatio * (300.0 / -mv.z);
         gl_Position = projectionMatrix * mv;
       }
@@ -708,6 +711,7 @@ function updateFlyby(dt, now) {
       f.sky.points.position.set(0, f.y, f.z);
       f.sky.mat.uniforms.uProgress.value = 0;
       f.sky.mat.uniforms.uFade.value = 1;
+      f.sky.mat.uniforms.uDrift.value = 0;
       f.sky.mat.uniforms.uTime.value = now;
       f.sky.points.visible = true;
       f.rocket.visible = true;
@@ -769,6 +773,7 @@ function updateFlyby(dt, now) {
   if (f.state === 'fading') {
     f.t += dt / 3.4;
     f.sky.mat.uniforms.uFade.value = 1 - Math.min(f.t, 1);
+    f.sky.mat.uniforms.uDrift.value = Math.min(f.t, 1);  // now let the crisp letters billow apart
     f.sky.points.position.y = f.y + f.t * 1.8;       // whole trail drifts up as it dissipates
     if (f.t >= 1) {
       f.sky.points.visible = false;
