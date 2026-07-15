@@ -283,6 +283,53 @@ def crm_complete_followup(client_id):
     return jsonify(client)
 
 
+@app.route("/api/crm/events", methods=["POST"])
+def crm_create_event():
+    data = request.get_json(force=True)
+    title = (data.get("title") or "").strip()
+    date_str = (data.get("date") or "").strip()
+    if not title or not date_str:
+        return jsonify({"error": "Title and date are required"}), 400
+    client_id = data.get("client_id") or None
+    if client_id and not crm.get_client(client_id):
+        return jsonify({"error": "Client not found"}), 404
+    event = crm.create_event(
+        client_id=client_id, title=title, date_str=date_str,
+        time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
+    )
+    return jsonify(event)
+
+
+@app.route("/api/crm/events/<int:event_id>", methods=["PUT"])
+def crm_update_event(event_id):
+    data = request.get_json(force=True)
+    title = (data.get("title") or "").strip()
+    date_str = (data.get("date") or "").strip()
+    if not title or not date_str:
+        return jsonify({"error": "Title and date are required"}), 400
+    client_id = data.get("client_id") or None
+    if client_id and not crm.get_client(client_id):
+        return jsonify({"error": "Client not found"}), 404
+    event = crm.update_event(
+        event_id, client_id=client_id, title=title, date_str=date_str,
+        time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
+    )
+    if not event:
+        abort(404)
+    return jsonify(event)
+
+
+@app.route("/api/crm/events/<int:event_id>", methods=["DELETE"])
+def crm_delete_event(event_id):
+    crm.delete_event(event_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/crm/followups/today")
+def crm_followups_today():
+    return jsonify(crm.get_today_followups())
+
+
 @app.route("/api/backup/status")
 def backup_status():
     return jsonify(crm.get_backup_status())

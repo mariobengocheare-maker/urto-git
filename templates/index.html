@@ -328,8 +328,10 @@
     min-height: 88px;
     padding: 6px;
     font-size: .78rem;
+    cursor: pointer;
   }
-  .cal-cell.empty { background: transparent; border: none; }
+  .cal-cell:hover:not(.empty) { border-color: var(--gold); }
+  .cal-cell.empty { background: transparent; border: none; cursor: default; }
   .cal-cell.today { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
   .cal-daynum { font-weight: 700; margin-bottom: 4px; color: var(--text-secondary); }
   .cal-cell.today .cal-daynum { color: var(--gold); }
@@ -349,6 +351,7 @@
   }
   .cal-chip.overdue, .cal-chip.due_today { background: var(--danger-bg); color: var(--danger-fg); }
   .cal-chip.completed { background: var(--success-bg); color: var(--success-fg); }
+  .cal-chip.manual { background: var(--gold); color: #2a2200; }
 
   /* ---- Dialer ---- */
   .source-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -374,6 +377,17 @@
     margin-bottom: 6px;
   }
   .dialer-meta { color: var(--text-secondary); font-size: .9rem; margin-bottom: 4px; }
+  .dialer-client-info {
+    text-align: left;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-top: 18px;
+  }
+  .dialer-client-info-head { font-weight: 700; margin-bottom: 8px; color: var(--gold); }
+  .dialer-client-info-followup { font-size: .85rem; margin: 6px 0; }
+  .dialer-client-info-notes-head { font-weight: 600; font-size: .85rem; margin-top: 10px; color: var(--text-secondary); }
   .dialer-hint { color: var(--text-secondary); font-size: .78rem; margin-top: 18px; }
   .dialer-controls { display: flex; justify-content: center; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
   .dialer-controls button.call-btn { background: var(--success-fg); padding: 12px 28px; font-size: 1rem; }
@@ -623,6 +637,7 @@
     <button class="active" id="dialerSourcePasteBtn">Paste / Upload List</button>
     <button id="dialerSourceCrmBtn">From CRM Clients</button>
     <button id="dialerSourceLookupBtn">From Last Lookup Results</button>
+    <button id="dialerSourceTodayBtn">Today's Follow-ups</button>
   </div>
 
   <div class="card" id="dialerPasteBox">
@@ -646,6 +661,15 @@
       <div class="dialer-name" id="dialerName"></div>
       <a href="#" class="dialer-phone" id="dialerPhone"></a>
       <div class="dialer-meta" id="dialerMeta"></div>
+      <div id="dialerClientInfo" class="dialer-client-info" style="display:none">
+        <div class="dialer-client-info-head">📇 In your CRM</div>
+        <div class="contact-line"><span class="lbl">Phone</span><span id="dciPhone">—</span></div>
+        <div class="contact-line"><span class="lbl">Contact</span><span id="dciContact">—</span></div>
+        <div class="contact-line"><span class="lbl">Address</span><span id="dciAddress">—</span></div>
+        <div id="dciFollowup" class="dialer-client-info-followup"></div>
+        <div class="dialer-client-info-notes-head">Notes</div>
+        <div id="dciNotes"></div>
+      </div>
       <div class="dialer-controls">
         <button class="ghost" id="dialerPrevBtn">&larr; Previous</button>
         <button class="call-btn" id="dialerCallBtn">Call (Enter)</button>
@@ -750,6 +774,49 @@
       </div>
       <div id="cdNotesList" style="margin-top:14px"></div>
     </div>
+  </div>
+</div>
+
+<!-- Add / Edit calendar event modal -->
+<div class="modal-overlay" id="eventFormOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="eventFormTitle">Add Event</h2>
+      <button class="modal-close" id="eventFormCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="eventFormError"></div>
+    <form id="eventForm">
+      <input type="hidden" id="efId">
+      <div class="form-group">
+        <label for="efTitle">Title *</label>
+        <input type="text" id="efTitle" required placeholder="e.g. Call about listing renewal">
+      </div>
+      <div class="row" style="margin-top:0">
+        <div class="form-group" style="flex:1">
+          <label for="efDate">Date *</label>
+          <input type="date" id="efDate" required>
+        </div>
+        <div class="form-group" style="flex:1">
+          <label for="efTime">Time (optional)</label>
+          <input type="time" id="efTime">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="efClient">Link to Client (optional — makes this a follow-up)</label>
+        <select id="efClient">
+          <option value="">— No client —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="efNotes">Notes</label>
+        <textarea id="efNotes" rows="3"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="danger small" id="efDeleteBtn" style="display:none; background:var(--danger-fg); margin-right:auto">Delete</button>
+        <button type="button" class="ghost" id="eventFormCancelBtn">Cancel</button>
+        <button type="submit">Save Event</button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -1241,21 +1308,110 @@ async function renderCalendar() {
     const dateStr = `${calYear}-${String(calMonth).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const cell = document.createElement('div');
     cell.className = 'cal-cell' + (dateStr === todayStr ? ' today' : '');
+    cell.title = 'Click to add an event';
     const dayNum = document.createElement('div');
     dayNum.className = 'cal-daynum';
     dayNum.textContent = day;
     cell.appendChild(dayNum);
     for (const e of (eventsByDay[dateStr] || [])) {
       const chip = document.createElement('div');
-      chip.className = `cal-chip ${e.status}`;
-      chip.textContent = e.client_name;
-      chip.title = `Follow up with ${e.client_name}`;
-      chip.addEventListener('click', () => openClientDetail(e.client_id));
+      const label = e.kind === 'manual' ? (e.client_name ? `${e.time ? e.time + ' ' : ''}${e.title}` : e.title) : e.client_name;
+      chip.className = `cal-chip ${e.kind === 'manual' ? 'manual' : e.status}`;
+      chip.textContent = label;
+      chip.title = e.kind === 'manual' ? e.title : `Follow up with ${e.client_name}`;
+      chip.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (e.kind === 'manual') openEventForm(dateStr, e);
+        else openClientDetail(e.client_id);
+      });
       cell.appendChild(chip);
     }
+    cell.addEventListener('click', () => openEventForm(dateStr, null));
     calendarGrid.appendChild(cell);
   }
 }
+
+/* ===================== Calendar events (manual, click-to-add) ===================== */
+const eventFormOverlay = document.getElementById('eventFormOverlay');
+const eventForm = document.getElementById('eventForm');
+const eventFormTitle = document.getElementById('eventFormTitle');
+const eventFormError = document.getElementById('eventFormError');
+const efId = document.getElementById('efId');
+const efTitle = document.getElementById('efTitle');
+const efDate = document.getElementById('efDate');
+const efTime = document.getElementById('efTime');
+const efClient = document.getElementById('efClient');
+const efNotes = document.getElementById('efNotes');
+const efDeleteBtn = document.getElementById('efDeleteBtn');
+
+async function openEventForm(dateStr, existing) {
+  eventFormError.style.display = 'none';
+  eventForm.reset();
+
+  const res = await fetch('/api/crm/clients');
+  const clients = res.ok ? await res.json() : [];
+  efClient.innerHTML = '<option value="">— No client —</option>' +
+    clients.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+
+  if (existing) {
+    eventFormTitle.textContent = 'Edit Event';
+    efId.value = existing.event_id;
+    efTitle.value = existing.title;
+    efDate.value = existing.date;
+    efTime.value = existing.time || '';
+    efClient.value = existing.client_id || '';
+    efNotes.value = existing.notes || '';
+    efDeleteBtn.style.display = 'inline-block';
+  } else {
+    eventFormTitle.textContent = 'Add Event';
+    efId.value = '';
+    efDate.value = dateStr;
+    efDeleteBtn.style.display = 'none';
+  }
+  eventFormOverlay.classList.add('show');
+}
+
+document.getElementById('eventFormCloseBtn').addEventListener('click', () => eventFormOverlay.classList.remove('show'));
+document.getElementById('eventFormCancelBtn').addEventListener('click', () => eventFormOverlay.classList.remove('show'));
+
+efClient.addEventListener('change', () => {
+  if (efClient.value && !efTitle.value.trim()) {
+    const name = efClient.options[efClient.selectedIndex].textContent;
+    efTitle.value = `Follow up with ${name}`;
+  }
+});
+
+eventForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  eventFormError.style.display = 'none';
+  const payload = {
+    title: efTitle.value,
+    date: efDate.value,
+    time: efTime.value,
+    client_id: efClient.value ? Number(efClient.value) : null,
+    notes: efNotes.value,
+  };
+  const id = efId.value;
+  const url = id ? `/api/crm/events/${id}` : '/api/crm/events';
+  const method = id ? 'PUT' : 'POST';
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (!res.ok) {
+    eventFormError.textContent = data.error || 'Could not save event.';
+    eventFormError.style.display = 'block';
+    return;
+  }
+  eventFormOverlay.classList.remove('show');
+  renderCalendar();
+});
+
+efDeleteBtn.addEventListener('click', async () => {
+  if (!efId.value) return;
+  if (!confirm('Delete this event?')) return;
+  await fetch(`/api/crm/events/${efId.value}`, { method: 'DELETE' });
+  eventFormOverlay.classList.remove('show');
+  renderCalendar();
+});
 
 /* ===================== Dialer ===================== */
 let dialerList = [];
@@ -1273,7 +1429,9 @@ const dialerPhoneEl = document.getElementById('dialerPhone');
 const dialerMetaEl = document.getElementById('dialerMeta');
 const dialerListEl = document.getElementById('dialerListEl');
 
-const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn];
+const dialerSourceTodayBtn = document.getElementById('dialerSourceTodayBtn');
+
+const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn, dialerSourceTodayBtn];
 function setDialerSourceActive(btn) {
   for (const b of DIALER_SOURCE_BTNS) b.classList.toggle('active', b === btn);
   dialerPasteBox.style.display = btn === dialerSourcePasteBtn ? 'block' : 'none';
@@ -1298,7 +1456,7 @@ dialerSourceCrmBtn.addEventListener('click', async () => {
     return;
   }
   loadDialerList(withPhones.map(c => ({
-    name: c.name, phone: c.phone,
+    name: c.name, phone: c.phone, clientId: c.id,
     meta: [c.address, followupLabel(c)].filter(Boolean).join(' · '),
   })));
 });
@@ -1316,7 +1474,22 @@ dialerSourceLookupBtn.addEventListener('click', async () => {
     alert('No FOUND results with a phone number in the current lookup session yet.');
     return;
   }
-  loadDialerList(found.map(r => ({ name: r.owner, phone: r.phone, meta: r.address })));
+  await loadDialerList(found.map(r => ({ name: r.owner, phone: r.phone, meta: r.address })));
+});
+
+dialerSourceTodayBtn.addEventListener('click', async () => {
+  setDialerSourceActive(dialerSourceTodayBtn);
+  const res = await fetch('/api/crm/followups/today');
+  const items = res.ok ? await res.json() : [];
+  const withPhones = items.filter(i => i.phone && i.phone.trim());
+  if (withPhones.length === 0) {
+    alert('No follow-ups due today with a phone number on file.');
+    return;
+  }
+  loadDialerList(withPhones.map(i => ({
+    name: i.client_name || i.title, phone: i.phone, clientId: i.client_id,
+    meta: [i.time, i.title, i.status === 'overdue' ? 'OVERDUE' : ''].filter(Boolean).join(' · '),
+  })));
 });
 
 document.getElementById('dialerLoadPasteBtn').addEventListener('click', () => {
@@ -1347,6 +1520,30 @@ dialerFileInput.addEventListener('change', () => {
   reader.readAsText(file);
 });
 
+/* Cross-reference any dialer entry that didn't already come tagged with a
+ * CRM client id (pasted lists, lookup results) against the CRM's clients by
+ * phone number, so "if it's a person in my CRM, show their info" works
+ * regardless of where the list was loaded from. */
+async function matchEntriesToClients(entries) {
+  const needsMatch = entries.some(e => !e.clientId);
+  if (!needsMatch) return entries;
+  const res = await fetch('/api/crm/clients');
+  if (!res.ok) return entries;
+  const clients = await res.json();
+  const byPhone = new Map();
+  for (const c of clients) {
+    const key = normalizePhone(c.phone);
+    if (key) byPhone.set(key, c.id);
+  }
+  for (const e of entries) {
+    if (!e.clientId) {
+      const key = normalizePhone(e.phone);
+      if (key && byPhone.has(key)) e.clientId = byPhone.get(key);
+    }
+  }
+  return entries;
+}
+
 function parseDialerText(text) {
   const phoneRe = /(\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/;
   const entries = [];
@@ -1363,8 +1560,8 @@ function parseDialerText(text) {
   return entries;
 }
 
-function loadDialerList(entries) {
-  dialerList = entries;
+async function loadDialerList(entries) {
+  dialerList = await matchEntriesToClients(entries);
   dialerIndex = 0;
   dialerEmpty.style.display = dialerList.length ? 'none' : 'block';
   dialerCardWrap.style.display = dialerList.length ? 'block' : 'none';
@@ -1379,6 +1576,9 @@ function normalizePhone(raw) {
   return '+' + justDigits;
 }
 
+const dialerClientInfoEl = document.getElementById('dialerClientInfo');
+let dialerInfoToken = 0;
+
 function renderDialerCard() {
   if (dialerList.length === 0) return;
   const entry = dialerList[dialerIndex];
@@ -1392,10 +1592,48 @@ function renderDialerCard() {
   dialerList.forEach((e, i) => {
     const row = document.createElement('div');
     row.className = 'dialer-list-row' + (i === dialerIndex ? ' current' : '');
-    row.innerHTML = `<span>${escapeHtml(e.name || 'Unknown')}</span><span>${escapeHtml(e.phone || '')}</span>`;
+    row.innerHTML = `<span>${escapeHtml(e.name || 'Unknown')}${e.clientId ? ' 📇' : ''}</span><span>${escapeHtml(e.phone || '')}</span>`;
     row.addEventListener('click', () => { dialerIndex = i; renderDialerCard(); });
     dialerListEl.appendChild(row);
   });
+
+  updateDialerClientInfo(entry);
+}
+
+async function updateDialerClientInfo(entry) {
+  const token = ++dialerInfoToken;
+  if (!entry.clientId) {
+    dialerClientInfoEl.style.display = 'none';
+    return;
+  }
+  const res = await fetch(`/api/crm/clients/${entry.clientId}`);
+  if (token !== dialerInfoToken) return; // a newer entry was selected while this was loading
+  if (!res.ok) { dialerClientInfoEl.style.display = 'none'; return; }
+  const c = await res.json();
+
+  document.getElementById('dciPhone').textContent = c.phone || '—';
+  document.getElementById('dciContact').textContent = c.contact_info || '—';
+  document.getElementById('dciAddress').textContent = c.address || '—';
+
+  const followupEl = document.getElementById('dciFollowup');
+  followupEl.innerHTML = c.frequency_label
+    ? `<span class="status-pill ${c.followup_status || ''}">${escapeHtml(followupLabel(c))}</span>`
+    : '';
+
+  const notesEl = document.getElementById('dciNotes');
+  notesEl.innerHTML = '';
+  if (!c.notes || c.notes.length === 0) {
+    notesEl.innerHTML = '<div class="empty-state">No notes yet.</div>';
+  } else {
+    for (const n of c.notes) {
+      const div = document.createElement('div');
+      div.className = 'note-item';
+      div.innerHTML = `<div class="note-time">${escapeHtml(n.created_at)}</div>${escapeHtml(n.text)}`;
+      notesEl.appendChild(div);
+    }
+  }
+
+  dialerClientInfoEl.style.display = 'block';
 }
 
 function callCurrentDialerEntry() {

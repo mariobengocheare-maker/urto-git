@@ -112,6 +112,17 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            date TEXT NOT NULL,
+            time TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -264,6 +275,118 @@ def _now_time():
     return datetime.now().strftime("%H:%M")
 
 
+EVENT_JOIN_SELECT = """
+    SELECT events.*, clients.name AS client_name, clients.phone AS client_phone,
+           clients.address AS client_address
+    FROM events LEFT JOIN clients ON clients.id = events.client_id
+"""
+
+
+def _event_to_dict(row) -> dict:
+    d = dict(row)
+    d["kind"] = "manual"
+    return d
+
+
+def create_event(client_id, title, date_str, time_str, notes) -> dict:
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO events (client_id, title, date, time, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (client_id or None, title, date_str, time_str or None, notes or "", datetime.now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    mark_dirty()
+    row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    return _event_to_dict(row)
+
+
+def update_event(event_id, client_id, title, date_str, time_str, notes) -> dict:
+    conn = get_conn()
+    existing = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return None
+    conn.execute(
+        "UPDATE events SET client_id=?, title=?, date=?, time=?, notes=? WHERE id=?",
+        (client_id or None, title, date_str, time_str or None, notes or "", event_id),
+    )
+    conn.commit()
+    mark_dirty()
+    row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (event_id,)).fetchone()
+    conn.close()
+    return _event_to_dict(row)
+
+
+def delete_event(event_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+    conn.commit()
+    mark_dirty()
+    conn.close()
+
+
+def list_events_for_month(year: int, month: int) -> list:
+    month_start = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    month_end = date(year, month, last_day)
+    conn = get_conn()
+    rows = conn.execute(
+        EVENT_JOIN_SELECT + " WHERE events.date >= ? AND events.date <= ? ORDER BY events.date, events.time",
+        (month_start.isoformat(), month_end.isoformat()),
+    ).fetchall()
+    conn.close()
+    return [_event_to_dict(r) for r in rows]
+
+
+def list_events_for_date(date_str: str) -> list:
+    conn = get_conn()
+    rows = conn.execute(
+        EVENT_JOIN_SELECT + " WHERE events.date = ? ORDER BY events.time", (date_str,)
+    ).fetchall()
+    conn.close()
+    return [_event_to_dict(r) for r in rows]
+
+
+def get_today_followups() -> list:
+    """Everything due for a call today: any client whose automatic follow-up
+    schedule has them overdue or due today, plus any manually-added event
+    dated today (whether or not it's linked to a client) — deduped so a
+    client showing up both ways (e.g. a manual reminder added for a client
+    who's also automatically due) only appears once, with the manual
+    event's title/time/notes taking precedence since it's the more specific
+    entry."""
+    today_str = date.today().isoformat()
+
+    items_by_client = {}
+    standalone = []
+
+    for c in list_clients():
+        if c["followup_status"] in ("overdue", "due_today"):
+            items_by_client[c["id"]] = {
+                "kind": "auto", "client_id": c["id"], "client_name": c["name"],
+                "phone": c["phone"], "address": c["address"],
+                "title": f"Follow up with {c['name']}", "time": None,
+                "status": c["followup_status"], "notes": "", "event_id": None,
+            }
+
+    for e in list_events_for_date(today_str):
+        item = {
+            "kind": "manual", "client_id": e["client_id"], "client_name": e.get("client_name"),
+            "phone": e.get("client_phone"), "address": e.get("client_address"),
+            "title": e["title"], "time": e["time"],
+            "status": "manual", "notes": e.get("notes") or "", "event_id": e["id"],
+        }
+        if e["client_id"]:
+            items_by_client[e["client_id"]] = item
+        else:
+            standalone.append(item)
+
+    results = list(items_by_client.values()) + standalone
+    results.sort(key=lambda i: (i["time"] or "99:99"))
+    return results
+
+
 def get_calendar_events(year: int, month: int) -> list:
     """Computes every follow-up occurrence (past-completed, next-due, and
     indefinitely-recurring future ones) that falls within the given month,
@@ -299,8 +422,9 @@ def get_calendar_events(year: int, month: int) -> list:
                 else:
                     status = "completed"
                 events.append({
-                    "client_id": c["id"], "client_name": c["name"],
+                    "kind": "auto", "client_id": c["id"], "client_name": c["name"],
                     "date": d.isoformat(), "status": status,
+                    "event_id": None, "title": None, "time": None, "notes": None,
                 })
             d -= timedelta(days=interval)
 
@@ -308,10 +432,22 @@ def get_calendar_events(year: int, month: int) -> list:
         d = anchor + timedelta(days=interval)
         while d <= month_end:
             events.append({
-                "client_id": c["id"], "client_name": c["name"],
+                "kind": "auto", "client_id": c["id"], "client_name": c["name"],
                 "date": d.isoformat(), "status": "upcoming",
+                "event_id": None, "title": None, "time": None, "notes": None,
             })
             d += timedelta(days=interval)
 
-    events.sort(key=lambda e: e["date"])
+    # Manually-added events (the "click a day to add an event" feature) are
+    # merged in alongside the automatic occurrences above, not stored as
+    # part of the recurring schedule math.
+    for e in list_events_for_month(year, month):
+        events.append({
+            "kind": "manual", "event_id": e["id"],
+            "client_id": e["client_id"], "client_name": e.get("client_name"),
+            "date": e["date"], "time": e["time"], "title": e["title"],
+            "notes": e.get("notes") or "", "status": "manual",
+        })
+
+    events.sort(key=lambda e: (e["date"], e.get("time") or ""))
     return events
