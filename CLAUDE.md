@@ -4,54 +4,81 @@ Solo-user local tool for a Miami-Dade real estate agent (Mario Bengochea). Flask
 
 ## Current status
 
-**Everything below is built, working, and verified — not a plan, not in progress.** Working tree is clean; every commit is pushed to `origin/claude/hi-dvwvqw`. There is no known open bug and no half-finished feature. The natural next step in a new session is whatever Mario asks for next (a new feature, a tweak, or a bug he found by using it) — don't assume there's a backlog to pick up.
+**Everything below is built, working, and verified — not a plan, not in progress.** Working tree is clean; every commit is pushed to `origin/claude/setup-confirmation-oyq8oa`. There is no known open bug and no half-finished feature. The natural next step in a new session is whatever Mario asks for next — don't assume there's a backlog to pick up.
+
+**⚠️ Branch note:** `claude/hi-dvwvqw` is the branch referenced in older commit messages / earlier docs, but it is **stale** — 8 commits behind. All current work is on **`claude/setup-confirmation-oyq8oa`**, which has diverged from `hi-dvwvqw`. Push there unless Mario explicitly says otherwise. If a fresh session was auto-assigned a different new branch name, check `git log` on it before assuming it has the latest work — rebase onto/compare against `origin/claude/setup-confirmation-oyq8oa` if unsure.
 
 Build order, roughly (see `git log` for exact commits):
 1. Owner Lookup CSV automation (Playwright + FOREWARN) — CLI first, then a Flask/drag-drop web UI.
 2. Hardened it against real bugs found by the user running it live: MUI selector failures, a wrong-person phone-matching bug, human-like typing/pacing, a Stop button, always-available partial-results download.
 3. Rebranded the page as "URTO" (navy/gold design).
 4. Added URTO CRM (SQLite-backed clients/notes/recurring-follow-up calendar) and URTO Dialer (click-to-call power dialer) as new tabs.
-5. Replaced the Home tab with a from-scratch WebGL space scene (Three.js, vendored — see Architecture) after the user wanted something far more dramatic than the first CSS attempt; orbs are now the only navigation on Home.
-6. Added a decorative skywriting rocket easter egg on Home, then refined it twice for legibility/visibility per user feedback.
-7. Wrote this file as a session handoff.
+5. Replaced the Home tab with a from-scratch WebGL space scene (Three.js, vendored), orbs as the only nav on Home.
+6. Added a decorative skywriting rocket on Home, refined twice for legibility.
+7. Wrote first CLAUDE.md session handoff.
+8. Upgraded the rocket from a flat canvas sprite to a real lit 3D mesh (nose/body/fins/nozzle/window), layered flame + spark particles, shaded volumetric smoke.
+9. Added automatic CRM backup: instant OneDrive mirror (`urto_crm_latest.db`) refreshed on every client/note/event change (including deletions), plus periodic timestamped snapshots. Auto-detects OneDrive via env var, falls back to a local `backups/` folder.
+10. Rewrote CSV parsing (`input_parser.py`) to match columns by meaning/alias instead of exact hardcoded names — fixes real-world exports (e.g. Miami-Dade GIS using "Postal Code"/"State Abbreviation") that were being rejected outright.
+11. Added manual calendar events (click a day → add/edit modal, optionally linked to a CRM client as a follow-up), a "Today's Follow-ups" Dialer source, and a live "In your CRM" info panel on the Dialer (phone/notes/follow-up status) whenever the current entry matches a client — including by phone-number cross-reference for pasted/uploaded lists.
+12. Added "+ Add to CRM" on the Dialer for non-CRM leads — prefills the shared client form from the dialer entry.
+13. Full cosmetic pass: brought the WebGL home screen's glass/starfield/gold-glow look to every other page, modal, and control. Purely visual, no feature changes.
+14. Added free, in-browser voice-dictated call notes on the Dialer (Web Speech API, no API key, no cost) — a "🎙 Dictate a call note" button transcribes a spoken recap and saves it straight to the current client's CRM notes.
+
+**Explicitly declined / out of scope:** AI-generated call summaries via the Anthropic API were prototyped and then deliberately backed out at Mario's request — he didn't want a per-call API cost or a separate Anthropic billing account. Don't reintroduce that path unless he asks again; the dictation feature (#14) is the free alternative that shipped instead.
 
 ## User context (read this first)
 
-- **Mario is not a developer.** He needs explicit, numbered, Windows-specific steps for everything — which button to click in File Explorer, that "paste into cmd" is not how you update a code file, etc. Never assume familiarity with terminals/git beyond what's been walked through already.
-- **Update workflow he prefers: ZIP download, not `git pull`.** A `git clone` setup was offered and works, but he defaults to: download the branch ZIP from GitHub → extract → replace files in his project folder → rerun `python app.py`. Give him the download link (`https://github.com/mariobengocheare-maker/urto-git/tree/<branch>`) after every push.
-- **He iterates by screenshot.** He runs the app locally and pastes screenshots of what he sees (including DevTools "Inspect" panels when a selector is wrong). Treat screenshots as ground truth over assumptions.
-- **Always test before claiming done.** This repo has caught real bugs via headless-Chromium screenshot testing (Playwright, `/opt/pw-browsers/chromium` + `--use-gl=angle --use-angle=swiftshader` for WebGL) before shipping. Don't just eyeball code — render it.
-- **He enjoys creative/fun asks** (a cat animation during long lookups, a skywriting rocket on the home screen) — don't undersell scope on these, but keep them decorative/non-blocking to core functionality.
-- Branch: `claude/hi-dvwvqw` on `mariobengocheare-maker/urto-git`. Push directly there unless told otherwise.
+- **Mario is not a developer.** He needs explicit, numbered, Windows-specific steps for everything. Never assume familiarity with terminals/git beyond what's been walked through already.
+- **Update workflow he prefers: ZIP download, not `git pull`.** Download the branch ZIP from GitHub → extract → replace files in his project folder → rerun `python app.py`. Give him the download link (`https://github.com/mariobengocheare-maker/urto-git/tree/<branch>`) after every push.
+- **To run it, the command is `python app.py`** (or `python3 app.py` / `py app.py` depending on his machine) from inside the project folder, then open `http://localhost:5000`.
+- **He iterates by screenshot.** Treat screenshots as ground truth over assumptions.
+- **Always test before claiming done.** This repo has caught real bugs via headless-Chromium screenshot testing (Playwright, `/opt/pw-browsers/chromium` + `--use-gl=angle --use-angle=swiftshader` for WebGL) before shipping. Don't just eyeball code — render it. For anything gated behind a rare/random event (like the skywriting rocket), force-trigger it via a debug hook during testing rather than waiting — remember to remove the hook before committing.
+- **He's cost-conscious about anything beyond the flat ZIP/local-app model.** He asked about cloud-hosting the CRM (discussed, not yet built) and about AI call summaries (built, then explicitly declined over per-use API cost — see status log #14). Always flag clearly, before writing code, when a feature would introduce a recurring cost, a new account, or a dependency beyond his own PC — let him opt in rather than assuming.
+- **He enjoys creative/fun asks** (a cat animation during long lookups, a skywriting rocket, a full WebGL home scene) — don't undersell scope on these, but keep them decorative/non-blocking to core functionality.
+- Branch: `claude/setup-confirmation-oyq8oa` on `mariobengocheare-maker/urto-git`. Push directly there unless told otherwise (see branch note above).
 
 ## Architecture
 
-- `app.py` — Flask app, all routes (lookup jobs, CRM API, calendar API).
-- `lookup_engine.py` — Playwright automation of **FOREWARN** (app.forewarn.com), a third-party owner/phone lookup service. User logs in manually in a headed Chromium window the script opens; automation takes over from there.
-- `input_parser.py` — normalizes two CSV input shapes (clean `first_name,last_name,address,zip` OR raw Miami-Dade county property-tax-roll exports) into the canonical row format, flags non-individual rows (LLCs/trusts/estates/placeholders) as `SKIPPED` instead of guessing.
+- `app.py` — Flask app, all routes (lookup jobs, CRM API, calendar/events API, backup API).
+- `lookup_engine.py` — Playwright automation of **FOREWARN** (app.forewarn.com). User logs in manually in a headed Chromium window the script opens; automation takes over from there.
+- `input_parser.py` — normalizes CSV input into the canonical row format by matching columns **by meaning** (`resolve_headers`/`HEADER_ALIASES`, not exact names) — handles a combined owner-name field (county "LAST FIRST" convention) or separate first/last columns, and either a combined address or house-number/street-name components. Flags non-individuals (LLCs/trusts/estates/placeholders) as skipped instead of guessing. Never guesses name order for an ambiguous single "Name" column — only the known county convention.
 - `forewarn_lookup.py` — CLI entry point (same engine as the web app).
-- `crm.py` — SQLite-backed CRM (clients, notes, recurring follow-up scheduling). DB file `urto_crm.db` is gitignored — **never commit real client data**.
-- `templates/index.html` — the entire frontend. One file, four tabs: **Home**, **Owner Lookup** (branded "URTO Skip Trace" in-app), **URTO CRM**, **URTO Dialer**. All vanilla JS, no framework.
-- `static/urto-space.js` — Three.js WebGL scene for the Home tab (see below).
-- `static/vendor/three/` — **vendored Three.js + addons**, pulled from the npm tarball (`registry.npmjs.org`), not a CDN. `cdn.jsdelivr.net` and similar CDNs are **blocked by this environment's network policy** — if you ever need another JS package, fetch the npm tarball directly, don't try a CDN.
+- `crm.py` — SQLite-backed CRM: clients, notes, recurring follow-ups, **and manual calendar `events`** (separate table, merged into calendar/Dialer views rather than touching the recurring-schedule math). Also owns the **automatic backup system** (see below). DB file `urto_crm.db` is gitignored — **never commit real client data**.
+- `templates/index.html` — the entire frontend. One file, four tabs: **Home**, **Owner Lookup** ("URTO Skip Trace" in-app), **URTO CRM**, **URTO Dialer**. All vanilla JS, no framework. Shared space-themed CSS (`.space-bg`, glass cards, gold glow) applies to every page.
+- `static/urto-space.js` — Three.js WebGL scene for the Home tab, including the 3D skywriting rocket + particle smoke.
+- `static/stars.svg` — small static starfield SVG used as the tiled background layer on non-Home pages.
+- `static/vendor/three/` — **vendored Three.js + addons**, pulled from the npm tarball (`registry.npmjs.org`), not a CDN. `cdn.jsdelivr.net` and similar CDNs are **blocked by this environment's network policy**.
+
+## Backup system (crm.py)
+
+- **Instant mirror**: every CRM mutation (client add/edit/delete, note added, event add/edit/delete, follow-up completed) calls `on_data_changed()`, which immediately rewrites `urto_crm_latest.db` in the backup dir — so deletions propagate to the backup right away, not just additions.
+- **Periodic snapshots**: `backup_now()` also writes a timestamped `urto_crm_YYYYMMDD_HHMMSS.db` snapshot (capped at 30, oldest pruned) — run on app startup, on the "Backup Now" button (`/api/backup/run`), and by a slow background watcher.
+- **Location**: auto-detects Windows OneDrive via the `OneDrive`/`OneDriveConsumer` env vars → `<OneDrive>/URTO Backups/`; falls back to a local `backups/` folder (gitignored) if OneDrive isn't present. Status surfaced via `/api/backup/status` and a status bar in the CRM tab.
 
 ## Features (all working, verified)
 
-1. **Owner Lookup / Skip Trace** — drag a CSV in, automates FOREWARN name+zip search, opens **every** same-name candidate's Address History page to verify the target address before taking a phone number (no shortcuts — see gotcha below), returns the top-ranked phone. Human-like typing/pacing. Stop button + partial-results download.
-2. **URTO CRM** — add/edit/delete clients, timestamped append-only notes log, automatic recurring follow-ups (2/3/4wk, 2/6mo, or custom interval) computed on-the-fly from a single anchor date per client (not pre-generated rows — scales to "forever" for free). Month calendar view.
-3. **URTO Dialer** — power dialer: Enter calls the current entry via `tel:` link (hands off to Windows Phone Link etc., URTO never touches the actual call), arrows navigate. Loads from pasted text, CSV upload, CRM clients, or the current session's lookup results.
-4. **Home** — full-viewport Three.js scene: starfield, nebulas, a chrome extruded 3D "URTO" wordmark, three orbs (Skip Trace/CRM/Dialer) on tilted orbits that are the **only navigation** on this screen (top bar/tabs are hidden on Home, click an orb to fly in). Occasional rocket flies across trailing a skywriting exhaust plume reading "Made by Mario Bengochea".
+1. **Owner Lookup / Skip Trace** — drag a CSV in (flexible column matching — see `input_parser.py` above), automates FOREWARN name+zip search, opens **every** same-name candidate's Address History page to verify the target address before taking a phone number (no shortcuts — see gotcha below), returns the top-ranked phone. Human-like typing/pacing. Stop button + partial-results download.
+2. **URTO CRM** — add/edit/delete clients (with an optional initial note on add), timestamped append-only notes log, automatic recurring follow-ups (2/3/4wk, 2/6mo, or custom interval) computed on-the-fly from a single anchor date per client. **Calendar tab**: click any day to add a manual event (title/date/time/notes, optionally linked to a client as a follow-up); click an existing manual event to edit/delete it; automatic recurring occurrences and manual events render together, visually distinguished.
+3. **URTO Dialer** — power dialer: Enter calls the current entry via `tel:` link, arrows navigate. Sources: pasted text, CSV upload, CRM clients, last lookup results, or **Today's Follow-ups** (auto-due-today + overdue clients, deduped with any manual event for today). Whenever the current entry matches a CRM client — by direct load or by phone-number cross-reference — an **"In your CRM"** panel shows their info, follow-up status, and notes live. Non-CRM entries get a **"+ Add to CRM"** button that opens the (prefilled) client form. A **"🎙 Dictate a call note"** button uses the browser's free built-in speech recognition to transcribe a spoken recap straight into that client's notes (typing fallback on browsers without speech support).
+4. **Home** — full-viewport Three.js scene: starfield, nebulas, a chrome extruded 3D "URTO" wordmark, three orbs (Skip Trace/CRM/Dialer) on tilted orbits that are the **only navigation** on this screen. Occasional rocket — now a real lit 3D model (nose/body/fins/nozzle/glass window), layered flame + spark particles, shaded volumetric smoke puffs — flies across trailing a skywriting exhaust plume reading "Made by Mario Bengochea".
 
 ## Hard-won gotchas (don't re-discover these)
 
-- **FOREWARN's form fields use Material-UI floating `<label>`s, not native `placeholder` attributes.** Use `page.get_by_label(...)`, never `get_by_placeholder(...)` — the latter silently times out.
-- **The SEARCH button contains a nested `<span>`**, so `get_by_text()` on it hits a strict-mode "2 elements" error. Use `get_by_role("button", name=<case-insensitive regex>)` instead — MUI renders the button text mixed-case even though CSS displays it uppercase.
-- **Never trust the results-list card's address for a match.** Multiple same-name people can share a zip; the card only shows one associated address. Always open each candidate's actual **Address History** page and check it before taking a phone number — a prior "quick win" shortcut here caused a real wrong-person bug.
+- **FOREWARN's form fields use Material-UI floating `<label>`s, not native `placeholder` attributes.** Use `page.get_by_label(...)`, never `get_by_placeholder(...)`.
+- **The SEARCH button contains a nested `<span>`**, so `get_by_text()` hits a strict-mode "2 elements" error. Use `get_by_role("button", name=<case-insensitive regex>)`.
+- **Never trust the results-list card's address for a match.** Always open each candidate's actual **Address History** page and check it before taking a phone number — a prior shortcut here caused a real wrong-person bug.
 - **CDNs are blocked**; use `registry.npmjs.org` tarballs for any new frontend dependency.
-- WebGL testing in this sandbox: `p.chromium.launch(executable_path="/opt/pw-browsers/chromium", args=["--enable-unsafe-swiftshader","--use-gl=angle","--use-angle=swiftshader"])`. A hovered orb intentionally slows its own orbit (`orb.hoverT`) so it's easier to click — factor that in if writing click-path tests (project + click must happen in the same synchronous tick, or the camera parallax will have moved it).
+- **CSV parsing must match columns by meaning, not exact name.** Real-world exports vary ("Zip Code" vs "Postal Code" vs "Zip"). Never blind-guess name order for a single ambiguous "Name" column — only the known Miami-Dade county "LAST FIRST" convention on a recognized combined owner-name column. Guessing wrong here is exactly the wrong-person bug class above.
+- **3D rocket meshes need `depthTest: false`** on their materials (with staggered `renderOrder`) — otherwise they get incorrectly occluded by the logo/orbs/rings that share the same depth range, since the rest of the Home scene uses real opaque 3D geometry.
+- **`crm.py`'s backup globals need `global _dirty, _last_backup`** in `backup_now()` — a missed `global` on a reassigned module-level dict silently shadows it with a local, so the function *works* (returns the right value) but the module-level state never updates. Bit us once; if a status endpoint ever looks "stuck," suspect this pattern first.
+- **Manual calendar events are a separate `events` table**, deliberately not folded into the recurring-followup math — keeps ad-hoc events from disturbing a client's automatic schedule anchor. `get_calendar_events()` merges both into one list tagged by `kind` ("auto"/"manual").
+- **The Dialer's Enter/arrow keyboard shortcuts must not fire while a modal is open** ("Add to CRM" sits on top of the Dialer) — guarded via `document.querySelector('.modal-overlay.show')` in the keydown handler.
+- WebGL testing in this sandbox: `p.chromium.launch(executable_path="/opt/pw-browsers/chromium", args=["--enable-unsafe-swiftshader","--use-gl=angle","--use-angle=swiftshader"])`. A hovered orb intentionally slows its own orbit (`orb.hoverT`) so it's easier to click. **The scene's game-clock (`elapsed`) is heavily throttled in a headless/backgrounded browser** (rAF fires far slower than wall-clock) — for anything timing-gated (like the rocket), temporarily force the trigger via a debug hook (e.g. `window.__flybyDebug().nextAt = 0`) rather than waiting real seconds, and strip the hook before committing.
 
 ## Don't do this
 
 - Don't introduce React/Tailwind/shadcn/TypeScript/a build step — evaluated once already and explicitly rejected in favor of staying single-file-vanilla so Mario's update flow (download ZIP → replace → rerun) keeps working.
-- Don't commit `urto_crm.db`, `outputs/`, or `flasklog.txt` — all gitignored, keep it that way.
+- Don't commit `urto_crm.db`, `outputs/`, `flasklog.txt`, or `backups/` — all gitignored, keep it that way.
 - Don't add telephony/Twilio integration unless explicitly asked — the Dialer is deliberately just `tel:` click-to-call (free, no account, no TCPA/compliance surface).
+- Don't reintroduce paid AI call-summarization (Anthropic API calls per dictation) — explicitly tried and declined by Mario over cost/account concerns. The free browser-speech dictation feature is what shipped instead. If he asks for AI summarization again, get explicit confirmation he understands it needs a separate paid Anthropic API account before building anything.
+- Don't build the "cloud-hosted CRM" idea (discussed with Mario: split CRM+Calendar onto a small hosted server with a real database, separate from the local Skip Trace/Dialer) without him first creating a hosting account (e.g. Render) — that step can't be done on his behalf.
