@@ -377,6 +377,15 @@
     margin-bottom: 6px;
   }
   .dialer-meta { color: var(--text-secondary); font-size: .9rem; margin-bottom: 4px; }
+  .dialer-add-crm {
+    margin-top: 12px;
+    background: transparent;
+    border: 1px solid var(--gold);
+    color: var(--gold);
+    font-size: .85rem;
+    padding: 7px 16px;
+  }
+  .dialer-add-crm:hover { background: var(--gold); color: #2a2200; }
   .dialer-client-info {
     text-align: left;
     background: var(--bg);
@@ -661,6 +670,7 @@
       <div class="dialer-name" id="dialerName"></div>
       <a href="#" class="dialer-phone" id="dialerPhone"></a>
       <div class="dialer-meta" id="dialerMeta"></div>
+      <button class="dialer-add-crm" id="dialerAddCrmBtn" style="display:none">+ Add to CRM</button>
       <div id="dialerClientInfo" class="dialer-client-info" style="display:none">
         <div class="dialer-client-info-head">📇 In your CRM</div>
         <div class="contact-line"><span class="lbl">Phone</span><span id="dciPhone">—</span></div>
@@ -732,6 +742,10 @@
           <option value="weeks">Weeks</option>
           <option value="months">Months</option>
         </select>
+      </div>
+      <div class="form-group" id="cfNotesRow">
+        <label for="cfNotes">Notes (optional)</label>
+        <textarea id="cfNotes" rows="3" placeholder="e.g. Interested in selling by fall, prefers calls after 5pm"></textarea>
       </div>
       <div class="modal-actions">
         <button type="button" class="ghost" id="clientFormCancelBtn">Cancel</button>
@@ -1085,6 +1099,12 @@ const cfFrequency = document.getElementById('cfFrequency');
 const cfCustomRow = document.getElementById('cfCustomRow');
 const cfCustomAmount = document.getElementById('cfCustomAmount');
 const cfCustomUnit = document.getElementById('cfCustomUnit');
+const cfNotes = document.getElementById('cfNotes');
+const cfNotesRow = document.getElementById('cfNotesRow');
+// Where the client form was launched from, so a successful create can hand
+// control back appropriately (e.g. tag the current dialer entry as now-in-CRM
+// instead of jumping to the client-detail modal).
+let clientFormOrigin = null;
 
 function followupLabel(client) {
   if (!client.frequency_label) return 'No automatic follow-up';
@@ -1125,6 +1145,10 @@ function resetClientForm() {
   cfFrequency.value = '4_weeks';
   cfCustomRow.style.display = 'none';
   clientFormError.style.display = 'none';
+  clientFormOrigin = null;
+  // Notes are captured on this form only when adding a brand-new client; when
+  // editing, notes are managed in the client-detail view instead.
+  cfNotesRow.style.display = 'block';
 }
 
 addClientBtn.addEventListener('click', () => {
@@ -1164,9 +1188,29 @@ clientForm.addEventListener('submit', async (e) => {
     clientFormError.style.display = 'block';
     return;
   }
+
+  // For a brand-new client, save the optional initial note (a separate
+  // endpoint) before doing anything else that reads the client back.
+  if (!id) {
+    const noteText = cfNotes.value.trim();
+    if (noteText) {
+      await fetch(`/api/crm/clients/${data.id}/notes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: noteText }),
+      });
+    }
+  }
+
   clientFormOverlay.classList.remove('show');
   loadClients();
-  if (id) openClientDetail(id);
+
+  if (id) {
+    openClientDetail(id);
+  } else if (clientFormOrigin === 'dialer') {
+    // Tag the current dialer entry as now in the CRM so the "In your CRM"
+    // panel appears (and the Add-to-CRM button hides) without leaving the call.
+    if (dialerList[dialerIndex]) dialerList[dialerIndex].clientId = data.id;
+    renderDialerCard();
+  }
 });
 
 /* ===================== Client detail ===================== */
@@ -1240,6 +1284,7 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
   cfPhone.value = c.phone || '';
   cfContact.value = c.contact_info || '';
   cfAddress.value = c.address || '';
+  cfNotesRow.style.display = 'none'; // editing: notes are managed in the detail view
   clientDetailOverlay.classList.remove('show');
   clientFormOverlay.classList.add('show');
 });
@@ -1428,6 +1473,7 @@ const dialerNameEl = document.getElementById('dialerName');
 const dialerPhoneEl = document.getElementById('dialerPhone');
 const dialerMetaEl = document.getElementById('dialerMeta');
 const dialerListEl = document.getElementById('dialerListEl');
+const dialerAddCrmBtn = document.getElementById('dialerAddCrmBtn');
 
 const dialerSourceTodayBtn = document.getElementById('dialerSourceTodayBtn');
 
@@ -1474,7 +1520,7 @@ dialerSourceLookupBtn.addEventListener('click', async () => {
     alert('No FOUND results with a phone number in the current lookup session yet.');
     return;
   }
-  await loadDialerList(found.map(r => ({ name: r.owner, phone: r.phone, meta: r.address })));
+  await loadDialerList(found.map(r => ({ name: r.owner, phone: r.phone, address: r.address, meta: r.address })));
 });
 
 dialerSourceTodayBtn.addEventListener('click', async () => {
@@ -1597,8 +1643,24 @@ function renderDialerCard() {
     dialerListEl.appendChild(row);
   });
 
+  // Offer "Add to CRM" only for entries not already tied to a client.
+  dialerAddCrmBtn.style.display = entry.clientId ? 'none' : 'inline-block';
+
   updateDialerClientInfo(entry);
 }
+
+dialerAddCrmBtn.addEventListener('click', () => {
+  const entry = dialerList[dialerIndex];
+  if (!entry) return;
+  resetClientForm();
+  clientFormTitle.textContent = 'Add to CRM';
+  clientFormOrigin = 'dialer';
+  // Pre-fill everything we already know; Mario just adds notes + follow-up.
+  cfName.value = (entry.name && entry.name !== 'Unknown') ? entry.name : '';
+  cfPhone.value = entry.phone || '';
+  cfAddress.value = entry.address || '';
+  clientFormOverlay.classList.add('show');
+});
 
 async function updateDialerClientInfo(entry) {
   const token = ++dialerInfoToken;
@@ -1657,6 +1719,8 @@ document.getElementById('dialerPrevBtn').addEventListener('click', dialerPrev);
 document.addEventListener('keydown', (e) => {
   if (dialerSection.style.display !== 'block') return;
   if (dialerList.length === 0) return;
+  // Don't hijack Enter/arrows while a modal (e.g. Add to CRM) is open over the dialer.
+  if (document.querySelector('.modal-overlay.show')) return;
   const tag = (document.activeElement.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
 
