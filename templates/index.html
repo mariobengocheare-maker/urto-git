@@ -42,14 +42,53 @@
     font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
     margin: 0;
     color: var(--text);
-    background: var(--bg);
+    background: #05070f;
   }
 
-  .topbar {
-    background: var(--navy);
-    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
-    padding: 18px 28px;
+  /* Space backdrop shared with the WebGL home screen's vibe: deep navy with
+     soft nebula glows and a faint drifting starfield, behind every page's
+     content (hidden on the home tab, where the real WebGL scene takes over). */
+  .space-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(1100px 760px at 12% -12%, rgba(201,162,39,.10), transparent 60%),
+      radial-gradient(1000px 900px at 112% 6%, rgba(47,140,255,.12), transparent 55%),
+      radial-gradient(950px 900px at 50% 122%, rgba(124,92,255,.10), transparent 60%),
+      radial-gradient(1400px 1000px at 50% 40%, #0a1122 0%, #05070f 70%);
   }
+  .space-bg::before {
+    content: "";
+    position: absolute;
+    inset: -50% -50% 0 -50%;
+    width: 200%;
+    height: 200%;
+    background-image: url('/static/stars.svg');
+    background-size: 600px 600px;
+    opacity: .5;
+    animation: starDrift 220s linear infinite, starTwinkle 6s ease-in-out infinite;
+  }
+  @keyframes starDrift { from { transform: translate3d(0,0,0); } to { transform: translate3d(-600px,-300px,0); } }
+  @keyframes starTwinkle { 0%,100% { opacity: .38; } 50% { opacity: .6; } }
+  body.space-mode .space-bg { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .space-bg::before { animation: none; }
+  }
+
+  .topbar, .tabs, main, footer.site-footer { position: relative; z-index: 1; }
+
+  .topbar {
+    background: linear-gradient(135deg, rgba(14,24,48,.82) 0%, rgba(28,46,77,.78) 100%);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: 18px 28px;
+    border-bottom: 1px solid rgba(201,162,39,.28);
+    box-shadow: 0 6px 30px rgba(0,0,0,.4), 0 1px 0 rgba(201,162,39,.15);
+  }
+  .brand svg { filter: drop-shadow(0 0 10px rgba(212,175,55,.45)); }
+  .brand-name { text-shadow: 0 0 18px rgba(201,162,39,.35); }
   .brand { display: flex; align-items: center; gap: 12px; max-width: 960px; margin: 0 auto; }
   .brand svg { flex-shrink: 0; }
   .brand-name { color: #fff; font-size: 1.35rem; font-weight: 700; letter-spacing: .04em; }
@@ -68,7 +107,9 @@
     display: flex;
     gap: 4px;
     padding: 0 20px;
-    background: var(--card-bg);
+    background: rgba(15,22,38,.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
   }
   .tab-btn {
@@ -81,9 +122,14 @@
     margin-right: 22px;
     font-size: .92rem;
     font-weight: 600;
+    transition: color .15s, border-color .15s;
   }
   .tab-btn:hover:not(:disabled) { opacity: 1; color: var(--text); }
-  .tab-btn.active { color: #fff; border-bottom-color: var(--gold); }
+  .tab-btn.active {
+    color: #fff;
+    border-bottom-color: var(--gold);
+    text-shadow: 0 0 16px rgba(201,162,39,.5);
+  }
 
   main {
     max-width: 960px;
@@ -91,15 +137,26 @@
     padding: 32px 20px 60px;
   }
 
-  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  h1 {
+    font-size: 1.35rem;
+    margin: 0 0 4px;
+    letter-spacing: .01em;
+    background: linear-gradient(180deg, #fff 0%, #dfe6f5 60%, #c9a227 190%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 26px rgba(120,150,220,.18);
+  }
   .sub { color: var(--text-secondary); margin: 0 0 24px; font-size: .95rem; }
 
   .card {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
+    background: rgba(19, 28, 46, .72);
+    backdrop-filter: blur(9px);
+    -webkit-backdrop-filter: blur(9px);
+    border: 1px solid rgba(201,162,39,.14);
     border-radius: 14px;
     padding: 24px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255,255,255,.04);
   }
 
   #dropzone {
@@ -108,46 +165,58 @@
     padding: 40px 20px;
     text-align: center;
     cursor: pointer;
-    background: var(--bg);
-    transition: border-color .15s, background .15s;
+    background: rgba(8, 13, 24, .4);
+    transition: border-color .15s, background .15s, box-shadow .15s;
   }
-  #dropzone.drag { border-color: var(--gold); background: var(--warn-bg); }
+  #dropzone:hover { border-color: rgba(201,162,39,.5); }
+  #dropzone.drag { border-color: var(--gold); background: var(--warn-bg); box-shadow: 0 0 24px rgba(201,162,39,.25); }
   #dropzone p { margin: 4px 0; color: var(--text-secondary); }
   #dropzone p strong { color: var(--text); }
   #fileInput { display: none; }
 
   .row { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
   label { font-size: .9rem; color: var(--text-secondary); }
-  input[type=number], input[type=text], input[type=email], select, textarea {
+  input[type=number], input[type=text], input[type=email], input[type=date], input[type=time], select, textarea {
     padding: 8px 10px;
     border: 1px solid var(--border);
     border-radius: 6px;
-    background: var(--card-bg);
+    background: rgba(8, 13, 24, .6);
     color: var(--text);
     font-size: .9rem;
     font-family: inherit;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--gold);
+    box-shadow: 0 0 0 3px rgba(201,162,39,.16);
   }
   input[type=number] { width: 70px; }
   textarea { width: 100%; resize: vertical; min-height: 64px; }
 
   button {
-    background: var(--navy);
+    background: linear-gradient(180deg, var(--navy-light) 0%, var(--navy) 100%);
     color: #fff;
-    border: none;
+    border: 1px solid rgba(201,162,39,.30);
     padding: 10px 20px;
     border-radius: 7px;
     font-size: .9rem;
     font-weight: 600;
     cursor: pointer;
-    transition: opacity .15s, transform .05s;
+    transition: box-shadow .15s, transform .05s, border-color .15s, opacity .15s;
   }
-  button:hover:not(:disabled) { opacity: .9; }
+  button:hover:not(:disabled) {
+    border-color: var(--gold);
+    box-shadow: 0 0 18px rgba(201,162,39,.28);
+  }
   button:active:not(:disabled) { transform: translateY(1px); }
-  button:disabled { background: var(--muted-fg); opacity: .5; cursor: not-allowed; }
-  button.secondary { background: var(--gold); color: #2a2205; }
-  button.danger { background: var(--danger-fg); display: none; }
-  button.ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); }
+  button:disabled { background: var(--muted-fg); border-color: transparent; opacity: .5; cursor: not-allowed; }
+  button.secondary { background: linear-gradient(180deg, var(--gold-bright), var(--gold)); color: #2a2205; border-color: transparent; }
+  button.danger { background: var(--danger-fg); border-color: transparent; display: none; }
+  button.ghost { background: rgba(255,255,255,.02); color: var(--text-secondary); border: 1px solid var(--border); }
+  button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--gold); }
   button.small { padding: 6px 12px; font-size: .8rem; }
+  .call-btn, button.call-btn { border-color: transparent; }
 
   #status { margin-top: 20px; font-size: .95rem; color: var(--text-secondary); }
 
@@ -232,19 +301,22 @@
   /* ---- CRM ---- */
   .backup-bar {
     display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
-    padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px;
-    background: var(--card-bg); font-size: .82rem; color: var(--text-secondary);
+    padding: 8px 14px; border: 1px solid rgba(201,162,39,.12); border-radius: 8px;
+    background: rgba(19,28,46,.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    font-size: .82rem; color: var(--text-secondary);
   }
   .backup-bar .ok { color: #3fce7a; }
   .backup-bar .warn { color: #e0a52c; }
   .crm-subtabs { display: flex; gap: 8px; margin-bottom: 18px; }
-  .crm-subtabs button { background: var(--card-bg); color: var(--text-secondary); border: 1px solid var(--border); }
-  .crm-subtabs button.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .crm-subtabs button { background: rgba(19,28,46,.5); color: var(--text-secondary); border: 1px solid var(--border); }
+  .crm-subtabs button.active { background: linear-gradient(180deg, var(--navy-light), var(--navy)); color: #fff; border-color: var(--gold); box-shadow: 0 0 16px rgba(201,162,39,.25); }
 
   .client-list { display: grid; gap: 12px; margin-top: 18px; }
   .client-card {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
+    background: rgba(19, 28, 46, .62);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(201,162,39,.12);
     border-radius: 10px;
     padding: 14px 16px;
     cursor: pointer;
@@ -252,9 +324,9 @@
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    transition: border-color .15s;
+    transition: border-color .15s, box-shadow .15s;
   }
-  .client-card:hover { border-color: var(--gold); }
+  .client-card:hover { border-color: var(--gold); box-shadow: 0 0 20px rgba(201,162,39,.18); }
   .client-card .name { font-weight: 700; }
   .client-card .meta { color: var(--text-secondary); font-size: .82rem; margin-top: 2px; }
   .client-card .followup-tag { font-size: .72rem; white-space: nowrap; }
@@ -264,7 +336,9 @@
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(10, 14, 24, .55);
+    background: rgba(5, 8, 16, .68);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
     align-items: flex-start;
     justify-content: center;
     padding: 40px 16px;
@@ -273,16 +347,20 @@
   }
   .modal-overlay.show { display: flex; }
   .modal {
-    background: var(--card-bg);
+    background: linear-gradient(180deg, rgba(24,34,56,.94), rgba(15,22,38,.94));
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(201,162,39,.22);
     border-radius: 14px;
     max-width: 520px;
     width: 100%;
     padding: 26px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, .3);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255,255,255,.05);
   }
   .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
   .modal-head h2 { font-size: 1.1rem; margin: 0; }
-  .modal-close { background: none; color: var(--text-secondary); padding: 4px 10px; font-size: 1.1rem; }
+  .modal-close { background: none; border: none; color: var(--text-secondary); padding: 4px 10px; font-size: 1.1rem; }
+  .modal-close:hover { box-shadow: none; color: var(--text); }
   .form-group { margin-bottom: 14px; }
   .form-group label { display: block; margin-bottom: 5px; }
   .form-group input, .form-group select, .form-group textarea { width: 100%; }
@@ -355,16 +433,20 @@
 
   /* ---- Dialer ---- */
   .source-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
-  .source-bar button { background: var(--card-bg); color: var(--text); border: 1px solid var(--border); }
-  .source-bar button.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .source-bar button { background: rgba(19,28,46,.5); color: var(--text); border: 1px solid var(--border); }
+  .source-bar button.active { background: linear-gradient(180deg, var(--navy-light), var(--navy)); color: #fff; border-color: var(--gold); box-shadow: 0 0 16px rgba(201,162,39,.25); }
 
   .dialer-card {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
+    background: rgba(19, 28, 46, .72);
+    backdrop-filter: blur(9px);
+    -webkit-backdrop-filter: blur(9px);
+    border: 1px solid rgba(201,162,39,.16);
     border-radius: 14px;
     padding: 34px;
     text-align: center;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255,255,255,.04);
   }
+  .dialer-phone { text-shadow: 0 0 26px rgba(120,160,255,.45); }
   .dialer-progress { color: var(--text-secondary); font-size: .85rem; margin-bottom: 14px; }
   .dialer-name { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
   .dialer-phone {
@@ -483,6 +565,8 @@
 </style>
 </head>
 <body class="space-mode">
+
+<div class="space-bg"></div>
 
 <div class="topbar">
   <div class="brand">

@@ -20,6 +20,15 @@ DB_PATH = Path(__file__).parent / "urto_crm.db"
 # OneDrive env var it sets for every signed-in install), back up there so a
 # dead/stolen PC doesn't mean losing every client — otherwise fall back to a
 # local backups/ folder, which still protects against file corruption.
+#
+# Two things live in the backup folder:
+#   * urto_crm_latest.db — a *live mirror* rewritten the instant anything
+#     changes (client saved, note added, contact deleted). This is always the
+#     current state, so a deletion is reflected on OneDrive immediately.
+#   * urto_crm_YYYYMMDD_HHMMSS.db — periodic timestamped snapshots kept for
+#     point-in-time history (startup, the "Backup Now" button, and a slow
+#     watcher), capped so they don't accumulate forever.
+LATEST_NAME = "urto_crm_latest.db"
 _backup_lock = threading.Lock()
 _dirty = False
 _last_backup = {"at": None, "path": None}
@@ -37,26 +46,56 @@ def mark_dirty():
     _dirty = True
 
 
-def backup_now(reason="manual", keep=30) -> dict:
-    """Copies the live DB to a timestamped file in the backup dir and prunes
-    old copies. Safe to call anytime — sqlite3's file copy of a closed
-    connection is just a plain file copy."""
+def _write_backup(reason, snapshot: bool, keep=30) -> dict:
+    """Copy the live DB to the backup dir. Always refreshes the live mirror;
+    when snapshot=True also writes a timestamped copy and prunes old ones.
+    Copying a plain (non-WAL) sqlite file with no open write transaction is a
+    consistent, safe file copy."""
     global _dirty, _last_backup
     with _backup_lock:
         if not DB_PATH.exists():
             return _last_backup
         backup_dir = resolve_backup_dir()
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = backup_dir / f"urto_crm_{stamp}.db"
-        shutil.copy2(DB_PATH, dest)
 
-        backups = sorted(backup_dir.glob("urto_crm_*.db"))
-        for old in backups[:-keep]:
-            old.unlink(missing_ok=True)
+        mirror = backup_dir / LATEST_NAME
+        shutil.copy2(DB_PATH, mirror)
+        dest = mirror
+
+        if snapshot:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = backup_dir / f"urto_crm_{stamp}.db"
+            shutil.copy2(DB_PATH, dest)
+            snaps = sorted(backup_dir.glob("urto_crm_[0-9]*.db"))
+            for old in snaps[:-keep]:
+                old.unlink(missing_ok=True)
 
         _dirty = False
         _last_backup = {"at": datetime.now().isoformat(timespec="seconds"), "path": str(dest), "reason": reason}
         return _last_backup
+
+
+def backup_now(reason="manual", keep=30) -> dict:
+    """Full backup: refresh the live mirror and write a timestamped snapshot."""
+    return _write_backup(reason, snapshot=True, keep=keep)
+
+
+def backup_instant(reason="save") -> dict:
+    """Instant backup after a data change: refresh the live mirror only, so the
+    current state (including deletions) is on OneDrive immediately without
+    churning through the capped snapshot history on every single edit."""
+    return _write_backup(reason, snapshot=False)
+
+
+def on_data_changed(reason="save"):
+    """Called after any CRM mutation: mirror to OneDrive right away, and flag
+    the DB so the slow watcher also lays down a timestamped history snapshot."""
+    mark_dirty()
+    try:
+        backup_instant(reason)
+    except Exception:
+        # A backup failure (e.g. OneDrive folder briefly locked) must never
+        # break the actual save — the dirty flag means the watcher retries.
+        pass
 
 
 def backup_if_dirty():
@@ -169,10 +208,10 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
         (name, phone, contact_info, address, created_at, label, interval_days, next_followup_date),
     )
     conn.commit()
-    mark_dirty()
     client_id = cur.lastrowid
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
+    on_data_changed("client added")
     return client_to_dict(row)
 
 
@@ -213,9 +252,9 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
         (name, phone, contact_info, address, label, interval_days, next_followup_date, client_id),
     )
     conn.commit()
-    mark_dirty()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
+    on_data_changed("client updated")
     return client_to_dict(row)
 
 
@@ -223,8 +262,10 @@ def delete_client(client_id):
     conn = get_conn()
     conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
     conn.commit()
-    mark_dirty()
     conn.close()
+    # Refresh the OneDrive mirror right away so the deleted contact is gone
+    # from the backup too, not just the local DB.
+    on_data_changed("client deleted")
 
 
 def complete_followup(client_id) -> dict:
@@ -241,9 +282,9 @@ def complete_followup(client_id) -> dict:
     new_due = current_due + timedelta(days=row["interval_days"])
     conn.execute("UPDATE clients SET next_followup_date = ? WHERE id = ?", (new_due.isoformat(), client_id))
     conn.commit()
-    mark_dirty()
     updated = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
+    on_data_changed("follow-up completed")
     return client_to_dict(updated)
 
 
@@ -255,9 +296,9 @@ def add_note(client_id, text) -> dict:
         (client_id, text, created_at),
     )
     conn.commit()
-    mark_dirty()
     note = conn.execute("SELECT * FROM notes WHERE id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
+    on_data_changed("note added")
     return dict(note)
 
 
@@ -295,9 +336,9 @@ def create_event(client_id, title, date_str, time_str, notes) -> dict:
         (client_id or None, title, date_str, time_str or None, notes or "", datetime.now().isoformat(timespec="seconds")),
     )
     conn.commit()
-    mark_dirty()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
+    on_data_changed("event added")
     return _event_to_dict(row)
 
 
@@ -312,9 +353,9 @@ def update_event(event_id, client_id, title, date_str, time_str, notes) -> dict:
         (client_id or None, title, date_str, time_str or None, notes or "", event_id),
     )
     conn.commit()
-    mark_dirty()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (event_id,)).fetchone()
     conn.close()
+    on_data_changed("event updated")
     return _event_to_dict(row)
 
 
@@ -322,8 +363,8 @@ def delete_event(event_id):
     conn = get_conn()
     conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
     conn.commit()
-    mark_dirty()
     conn.close()
+    on_data_changed("event deleted")
 
 
 def list_events_for_month(year: int, month: int) -> list:
