@@ -479,6 +479,19 @@
   .dialer-client-info-head { font-weight: 700; margin-bottom: 8px; color: var(--gold); }
   .dialer-client-info-followup { font-size: .85rem; margin: 6px 0; }
   .dialer-client-info-notes-head { font-weight: 600; font-size: .85rem; margin-top: 10px; color: var(--text-secondary); }
+  .dictate-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .dictate-btn { background: linear-gradient(180deg, var(--gold-bright), var(--gold)); color: #2a2205; border-color: transparent; }
+  .dictate-btn.recording { background: var(--danger-fg); color: #fff; animation: dictatePulse 1.2s ease-in-out infinite; }
+  @keyframes dictatePulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,99,99,.5); } 50% { box-shadow: 0 0 0 8px rgba(255,99,99,0); } }
+  .dictate-hint { color: var(--text-secondary); font-size: .76rem; margin-top: 6px; }
+  .dictate-live {
+    margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+    background: rgba(8,13,24,.5); border: 1px solid var(--border);
+    font-size: .85rem; color: var(--text); min-height: 40px; font-style: italic;
+  }
+  .dictate-review { margin-top: 10px; }
+  .dictate-review label { display: block; margin-bottom: 5px; font-size: .82rem; }
+  .dictate-review textarea { width: 100%; }
   .dialer-hint { color: var(--text-secondary); font-size: .78rem; margin-top: 18px; }
   .dialer-controls { display: flex; justify-content: center; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
   .dialer-controls button.call-btn { background: var(--success-fg); padding: 12px 28px; font-size: 1rem; }
@@ -763,6 +776,21 @@
         <div id="dciFollowup" class="dialer-client-info-followup"></div>
         <div class="dialer-client-info-notes-head">Notes</div>
         <div id="dciNotes"></div>
+
+        <div class="dictate-box" id="dictateBox">
+          <button class="dictate-btn" id="dictateBtn">🎙 Dictate a call note</button>
+          <div class="dictate-hint" id="dictateHint">Click and speak your recap — it's typed out for you and saved to this client's notes. Free, no account.</div>
+          <div class="dictate-live" id="dictateLive" style="display:none"></div>
+          <div class="dictate-review" id="dictateReview" style="display:none">
+            <label>Note (edit if needed):</label>
+            <textarea id="dictateSummary" rows="5"></textarea>
+            <div class="row" style="margin-top:8px">
+              <button class="small" id="dictateSaveBtn">Save to Notes</button>
+              <button class="ghost small" id="dictateDiscardBtn">Discard</button>
+            </div>
+          </div>
+          <div class="dictate-error error-box" id="dictateError" style="margin-top:8px"></div>
+        </div>
       </div>
       <div class="dialer-controls">
         <button class="ghost" id="dialerPrevBtn">&larr; Previous</button>
@@ -1779,8 +1807,133 @@ async function updateDialerClientInfo(entry) {
     }
   }
 
+  resetDictation();
+  dialerDictateClientId = c.id;
   dialerClientInfoEl.style.display = 'block';
 }
+
+/* ===================== Dictated call notes (free, in-browser) ===================== */
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const dictateBtn = document.getElementById('dictateBtn');
+const dictateHint = document.getElementById('dictateHint');
+const dictateLive = document.getElementById('dictateLive');
+const dictateReview = document.getElementById('dictateReview');
+const dictateSummary = document.getElementById('dictateSummary');
+const dictateError = document.getElementById('dictateError');
+let dialerDictateClientId = null;
+let recognition = null;
+let recognizing = false;
+let manualStop = false;
+let dictateFinalText = '';
+
+if (!SpeechRec) {
+  // No browser speech support (e.g. Firefox): fall back to typing a note.
+  dictateBtn.textContent = '➕ Add a note';
+  dictateHint.textContent = 'Type a quick note for this client below.';
+}
+
+function resetDictation() {
+  if (recognizing) { manualStop = true; try { recognition && recognition.stop(); } catch (e) {} }
+  recognizing = false;
+  dictateFinalText = '';
+  dictateBtn.classList.remove('recording');
+  dictateBtn.textContent = SpeechRec ? '🎙 Dictate a call note' : '➕ Add a note';
+  dictateLive.style.display = 'none';
+  dictateLive.textContent = '';
+  dictateReview.style.display = 'none';
+  dictateSummary.value = '';
+  dictateError.style.display = 'none';
+}
+
+function showDictateError(msg) {
+  dictateError.textContent = msg;
+  dictateError.style.display = 'block';
+}
+
+function openReview(text) {
+  dictateSummary.value = text;
+  dictateReview.style.display = 'block';
+  dictateLive.style.display = 'none';
+  dictateSummary.focus();
+}
+
+dictateBtn.addEventListener('click', () => {
+  dictateError.style.display = 'none';
+
+  if (!SpeechRec) { openReview(dictateSummary.value || ''); return; }
+
+  if (recognizing) { manualStop = true; try { recognition.stop(); } catch (e) {} return; }
+
+  // Start a fresh recognition session.
+  dictateFinalText = '';
+  manualStop = false;
+  recognition = new SpeechRec();
+  recognition.lang = 'en-US';
+  recognition.continuous = true;
+  recognition.interimResults = true;
+
+  recognition.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const chunk = e.results[i][0].transcript;
+      if (e.results[i].isFinal) dictateFinalText += chunk + ' ';
+      else interim += chunk;
+    }
+    dictateLive.textContent = (dictateFinalText + interim).trim() || 'Listening…';
+  };
+
+  recognition.onerror = (e) => {
+    recognizing = false;
+    manualStop = true;
+    dictateBtn.classList.remove('recording');
+    dictateBtn.textContent = '🎙 Dictate a call note';
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      showDictateError('Microphone access was blocked. Allow the mic for this page and try again.');
+    } else if (e.error === 'no-speech') {
+      showDictateError("Didn't catch any speech — try again and speak after clicking.");
+    } else {
+      showDictateError('Voice capture error. You can type the note instead.');
+    }
+  };
+
+  recognition.onend = () => {
+    // Chrome ends the session on pauses; keep listening until the user stops.
+    if (recognizing && !manualStop) { try { recognition.start(); return; } catch (e) {} }
+    recognizing = false;
+    dictateBtn.classList.remove('recording');
+    dictateBtn.textContent = '🎙 Dictate a call note';
+    const text = dictateFinalText.trim();
+    if (text) openReview(text);
+    else if (!dictateError.textContent) showDictateError("Didn't catch anything — click and speak your recap.");
+  };
+
+  try {
+    recognition.start();
+    recognizing = true;
+    dictateBtn.classList.add('recording');
+    dictateBtn.textContent = '⏹ Stop & review';
+    dictateLive.style.display = 'block';
+    dictateLive.textContent = 'Listening…';
+    dictateReview.style.display = 'none';
+  } catch (e) {
+    showDictateError('Could not start voice capture. You can type the note instead.');
+  }
+});
+
+document.getElementById('dictateSaveBtn').addEventListener('click', async () => {
+  const text = dictateSummary.value.trim();
+  if (!text) { showDictateError('Note is empty.'); return; }
+  if (!dialerDictateClientId) return;
+  await fetch(`/api/crm/clients/${dialerDictateClientId}/notes`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
+  });
+  const savedFor = dialerDictateClientId;
+  // Refresh the panel so the new note shows immediately (only if still on this entry).
+  const entry = dialerList[dialerIndex];
+  if (entry && entry.clientId === savedFor) updateDialerClientInfo(entry);
+});
+
+document.getElementById('dictateDiscardBtn').addEventListener('click', resetDictation);
 
 function callCurrentDialerEntry() {
   if (dialerList.length === 0) return;
