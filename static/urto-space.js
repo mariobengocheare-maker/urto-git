@@ -255,30 +255,66 @@ function buildLogo() {
 const FLYBY_TEXT = 'Made by Mario Bengochea';
 let flyby = null;
 
-function makeSmokeTextTexture(text) {
-  const w = 2048, h = 256;
+// Soft round smoke puff used for the skywriting point-cloud: a hazy sunlit
+// vapor look — bright soft core, quick falloff to nothing at the rim.
+function makeSmokePointTexture() {
+  const s = 128;
   const c = document.createElement('canvas');
-  c.width = w; c.height = h;
+  c.width = c.height = s;
   const ctx = c.getContext('2d');
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = '800 116px "Segoe UI", -apple-system, Roboto, sans-serif';
-  // Soft grey-white "smoke": a diffuse blurred halo plus a restrained core.
-  // Kept dim on purpose — bright white + additive blend + bloom was blowing
-  // the fresh letters out so they weren't legible, so this uses muted greys
-  // and the material draws with normal (non-additive) blending.
-  ctx.shadowColor = 'rgba(150,165,190,0.55)';
-  ctx.fillStyle = 'rgba(150,165,190,0.30)';
-  for (const blur of [26, 14]) {
-    ctx.shadowBlur = blur;
-    ctx.fillText(text, w / 2, h / 2 + 6);
-  }
-  ctx.shadowBlur = 4;
-  ctx.fillStyle = 'rgba(214,224,240,0.72)';
-  ctx.fillText(text, w / 2, h / 2 + 6);
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0.0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.22, 'rgba(238,245,255,0.82)');
+  g.addColorStop(0.55, 'rgba(206,222,248,0.30)');
+  g.addColorStop(1.0, 'rgba(206,222,248,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(s / 2, s / 2, s / 2, 0, Math.PI * 2); ctx.fill();
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+// Sample the message into a cloud of points (one per lit pixel on a grid) so
+// the rocket can *write* it as drifting smoke rather than wiping a flat label
+// into view. Returns typed arrays in a centered coordinate space `worldW` wide,
+// with a per-point `reveal` (0..1 left→right) driving the write-on order.
+function sampleTextPoints(text, worldW) {
+  const cw = 1600, ch = 230;
+  const c = document.createElement('canvas');
+  c.width = cw; c.height = ch;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  // Italic semibold reads as "written in motion"; Mario's Windows PC renders
+  // the Segoe faces cleanly, with graceful fallbacks on other machines.
+  ctx.font = 'italic 700 132px "Segoe UI Semibold", "Segoe UI", "Helvetica Neue", Arial, sans-serif';
+  try { ctx.letterSpacing = '2px'; } catch (e) { /* older engines */ }
+  ctx.fillText(text, cw / 2, ch / 2);
+
+  const data = ctx.getImageData(0, 0, cw, ch).data;
+  const step = 6;
+  const worldH = worldW * (ch / cw);
+  const positions = [], reveals = [], seeds = [];
+  for (let py = 0; py < ch; py += step) {
+    for (let px = 0; px < cw; px += step) {
+      if (data[(py * cw + px) * 4 + 3] < 110) continue;
+      const jx = (Math.random() - 0.5) * step;   // jitter off the grid
+      const jy = (Math.random() - 0.5) * step;
+      const nx = (px + jx) / cw;
+      const ny = (py + jy) / ch;
+      positions.push((nx - 0.5) * worldW, (0.5 - ny) * worldH, 0);
+      reveals.push(nx);
+      seeds.push(Math.random());
+    }
+  }
+  return {
+    positions: new Float32Array(positions),
+    reveals: new Float32Array(reveals),
+    seeds: new Float32Array(seeds),
+    count: reveals.length,
+  };
 }
 
 function makePuffTexture() {
@@ -335,72 +371,86 @@ function buildRocketGroup() {
   rocket.add(hull);
 
   const bodyMat = new THREE.MeshPhysicalMaterial({
-    color: 0xe7edf7, metalness: 0.55, roughness: 0.28, clearcoat: 0.7, clearcoatRoughness: 0.2,
+    color: 0xf2f6ff, metalness: 0.62, roughness: 0.22, clearcoat: 0.85, clearcoatRoughness: 0.16,
+    emissive: 0x1a2740, emissiveIntensity: 0.25,
   });
   const accentMat = new THREE.MeshStandardMaterial({
-    color: 0xe23a55, metalness: 0.3, roughness: 0.42, emissive: 0x3a0008, emissiveIntensity: 0.5,
+    color: 0xe8354f, metalness: 0.35, roughness: 0.36, emissive: 0x4a0010, emissiveIntensity: 0.65,
   });
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x262a36, metalness: 0.85, roughness: 0.35 });
+  const goldMat = new THREE.MeshStandardMaterial({
+    color: 0xd4af37, metalness: 0.95, roughness: 0.28, emissive: 0x3a2a00, emissiveIntensity: 0.35,
+  });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x2a2f3d, metalness: 0.9, roughness: 0.3 });
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0d2038, metalness: 0.2, roughness: 0.06, clearcoat: 1, clearcoatRoughness: 0.05,
-    emissive: 0x5fd0ff, emissiveIntensity: 1.1,
+    color: 0x0d2038, metalness: 0.2, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.04,
+    emissive: 0x6fd8ff, emissiveIntensity: 1.35,
   });
 
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 2.5, 22), bodyMat);
-  body.position.y = 0.05;
+  // Sleeker, longer fuselage with a gentle taper to the tail.
+  const BODY = 3.1;
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.62, BODY, 32), bodyMat);
+  body.position.y = 0.1;
   hull.add(body);
 
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.05, 22), accentMat);
-  nose.position.y = body.position.y + 2.5 / 2 + 1.05 / 2 - 0.02;
+  // Long tapered nose cone for a sharper, faster silhouette.
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.5, 32), accentMat);
+  nose.position.y = body.position.y + BODY / 2 + 1.5 / 2 - 0.03;
   hull.add(nose);
+  // A small chromed tip cap on the very point of the nose.
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.09, 16, 16), goldMat);
+  tip.position.y = nose.position.y + 1.5 / 2 - 0.02;
+  hull.add(tip);
 
-  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.06, 10, 24), darkMat);
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.53, 0.055, 12, 28), goldMat);
   collar.rotation.x = Math.PI / 2;
-  collar.position.y = body.position.y + 2.5 / 2 - 0.05;
+  collar.position.y = body.position.y + BODY / 2 - 0.04;
   hull.add(collar);
 
-  const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.715, 0.715, 0.17, 22), accentMat);
-  stripe.position.y = -0.35;
-  hull.add(stripe);
+  // Two slim gold trim bands around the fuselage.
+  for (const yy of [0.55, -0.55]) {
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.585, 0.6, 0.09, 32), goldMat);
+    band.position.y = yy;
+    hull.add(band);
+  }
 
-  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.48, 0.5, 22), darkMat);
-  nozzle.position.y = body.position.y - 2.5 / 2 - 0.5 / 2 + 0.03;
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.42, 0.55, 28), darkMat);
+  nozzle.position.y = body.position.y - BODY / 2 - 0.55 / 2 + 0.03;
   hull.add(nozzle);
   const nozzleThroat = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.36, 0.36, 0.08, 16),
-    new THREE.MeshStandardMaterial({ color: 0x140905, emissive: 0xff6a20, emissiveIntensity: 0.6, roughness: 0.6 })
+    new THREE.CylinderGeometry(0.32, 0.32, 0.08, 20),
+    new THREE.MeshStandardMaterial({ color: 0x180a05, emissive: 0xff7a28, emissiveIntensity: 0.8, roughness: 0.6 })
   );
-  nozzleThroat.position.y = nozzle.position.y - 0.24;
+  nozzleThroat.position.y = nozzle.position.y - 0.26;
   hull.add(nozzleThroat);
 
-  const windowGlass = new THREE.Mesh(new THREE.SphereGeometry(0.25, 18, 18), glassMat);
-  windowGlass.position.set(0, 0.7, 0.56);
+  const windowGlass = new THREE.Mesh(new THREE.SphereGeometry(0.24, 20, 20), glassMat);
+  windowGlass.position.set(0, 0.82, 0.5);
   hull.add(windowGlass);
-  const windowRing = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.045, 8, 22), darkMat);
+  const windowRing = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.04, 10, 24), goldMat);
   windowRing.position.copy(windowGlass.position);
   hull.add(windowRing);
 
   // Three swept fins, extruded for real thickness so they pick up rim light
   // along their edges instead of reading as flat cutouts.
   const finShape = new THREE.Shape();
-  finShape.moveTo(0, 0.32);
-  finShape.lineTo(0, -0.55);
-  finShape.lineTo(0.92, -0.88);
-  finShape.lineTo(0.34, 0.12);
+  finShape.moveTo(0, 0.42);
+  finShape.lineTo(0, -0.62);
+  finShape.lineTo(1.02, -1.02);
+  finShape.lineTo(0.30, 0.16);
   finShape.closePath();
-  const finGeo = new THREE.ExtrudeGeometry(finShape, { depth: 0.09, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.015, bevelSegments: 2 });
-  finGeo.translate(0, 0, -0.045);
+  const finGeo = new THREE.ExtrudeGeometry(finShape, { depth: 0.08, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.015, bevelSegments: 2 });
+  finGeo.translate(0, 0, -0.04);
   for (let i = 0; i < 3; i++) {
     const pivot = new THREE.Group();
     pivot.rotation.y = (i / 3) * Math.PI * 2;
-    pivot.position.y = -0.85;
+    pivot.position.y = -0.95;
     hull.add(pivot);
     const fin = new THREE.Mesh(finGeo, accentMat);
-    fin.position.x = 0.64;
+    fin.position.x = 0.55;
     pivot.add(fin);
   }
 
-  rocket.scale.setScalar(0.92);
+  rocket.scale.setScalar(1.45);
 
   // The skywriting rocket flies through the same depth range as the URTO
   // logo/orbs/rings, which would otherwise clip through it. Like the flame
@@ -422,47 +472,109 @@ function buildRocketGroup() {
 function buildFlameGroup() {
   const group = new THREE.Group();
   const core = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: makeRadialTexture('rgba(255,248,220,1)', 'rgba(255,210,120,0)'),
+    map: makeRadialTexture('rgba(255,252,235,1)', 'rgba(255,220,140,0)'),
     transparent: true, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false,
   }));
-  core.scale.set(1.3, 0.9, 1);
+  core.scale.set(1.6, 1.05, 1);
   group.add(core);
 
   const outer = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: makeRadialTexture('rgba(255,190,110,0.9)', 'rgba(255,100,40,0)'),
+    map: makeRadialTexture('rgba(255,196,110,0.95)', 'rgba(255,96,36,0)'),
     transparent: true, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false,
   }));
-  outer.scale.set(3.0, 1.8, 1);
+  outer.scale.set(3.6, 2.1, 1);
   group.add(outer);
 
-  const light = new THREE.PointLight(0xffa64d, 55, 16, 2);
+  // A broad, dim halo so the engine casts a soft warm bloom onto the trail.
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: makeRadialTexture('rgba(255,150,70,0.55)', 'rgba(255,90,40,0)'),
+    transparent: true, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, opacity: 0.6,
+  }));
+  halo.scale.set(6.0, 4.2, 1);
+  group.add(halo);
+
+  const light = new THREE.PointLight(0xffa64d, 70, 20, 2);
   group.add(light);
 
   group.renderOrder = 7;
-  return { group, core, outer, light };
+  return { group, core, outer, halo, light };
+}
+
+/* The skywriting itself: a GPU point-cloud sampled from the message, revealed
+ * column-by-column as the rocket passes so the letters form out of drifting
+ * smoke. One draw call, animated entirely in the shader from three uniforms
+ * (write progress, time, global fade). */
+function buildSkywriting(worldW) {
+  const s = sampleTextPoints(FLYBY_TEXT, worldW);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(s.positions, 3));
+  geo.setAttribute('aReveal', new THREE.BufferAttribute(s.reveals, 1));
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(s.seeds, 1));
+  geo.computeBoundingSphere();
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uProgress: { value: 0 },
+      uTime: { value: 0 },
+      uFade: { value: 1 },
+      uSize: { value: 2.5 },
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+      uColor: { value: new THREE.Color(0x7286b6) },
+      uTex: { value: makeSmokePointTexture() },
+    },
+    vertexShader: `
+      attribute float aReveal;
+      attribute float aSeed;
+      uniform float uProgress, uTime, uSize, uPixelRatio;
+      varying float vAlpha;
+      void main() {
+        float age = uProgress - aReveal;          // time since this column was written
+        float appear = smoothstep(0.0, 0.025, age);
+        float grow = smoothstep(0.0, 0.10, age);  // puff outward just after written
+        // Let the oldest smoke thin out a little so the trail doesn't build to
+        // an overexposed slab on the left — keeps the whole message legible.
+        vAlpha = appear * (1.0 - 0.32 * smoothstep(0.25, 1.1, age));
+        float t = max(age, 0.0);
+        float sway  = sin(uTime * 0.9 + aSeed * 6.2831);
+        float sway2 = cos(uTime * 0.7 + aSeed * 12.566);
+        vec3 pos = position;
+        pos.x += (-0.55 * t) + sway * 0.20 * t;   // drift back along the trail
+        pos.y += 0.40 * t + sway2 * 0.18 * t;     // gentle rise + billow
+        pos.z += sway * 0.28 * t;
+        vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+        float size = uSize * (0.35 + 0.65 * grow) * (1.0 + t * 0.18);
+        gl_PointSize = size * uPixelRatio * (300.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: `
+      uniform sampler2D uTex;
+      uniform vec3 uColor;
+      uniform float uFade;
+      varying float vAlpha;
+      void main() {
+        float a = texture2D(uTex, gl_PointCoord).a * vAlpha * uFade;
+        if (a < 0.01) discard;
+        gl_FragColor = vec4(uColor, a);
+      }
+    `,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthTest: false,
+    depthWrite: false,
+  });
+
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;
+  points.renderOrder = 5;
+  points.visible = false;
+  return { points, mat };
 }
 
 function buildFlyby() {
-  renderer.localClippingEnabled = true;
-
-  // The written trail: a wide plane whose reveal is controlled by a clipping
-  // plane that rides along with the rocket, so the words are "drawn" left→right.
-  const clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 24);
-  const textW = 44, textH = textW * (256 / 2048);
-  const textMat = new THREE.MeshBasicMaterial({
-    map: makeSmokeTextTexture(FLYBY_TEXT),
-    transparent: true,
-    opacity: 0,
-    depthWrite: false,
-    depthTest: false,
-    blending: THREE.NormalBlending,   // not additive — keeps the letters legible under bloom
-    clippingPlanes: [clip],
-    side: THREE.DoubleSide,
-  });
-  const textMesh = new THREE.Mesh(new THREE.PlaneGeometry(textW, textH), textMat);
-  textMesh.renderOrder = 5;
-  textMesh.visible = false;
-  scene.add(textMesh);
+  const worldW = 52;
+  const sky = buildSkywriting(worldW);
+  scene.add(sky.points);
 
   const rocket = buildRocketGroup();
   rocket.visible = false;
@@ -472,11 +584,11 @@ function buildFlyby() {
   flame.group.visible = false;
   scene.add(flame.group);
 
-  // Puff particle pool: soft smoke that spurts from the exhaust and lingers,
-  // so the written words read as the rocket's own exhaust trail.
+  // Dense exhaust puffs right at the engine bell — a thick plume close to the
+  // rocket that the skywriting smoke then trails away from.
   const puffTex = makePuffTexture();
   const puffs = [];
-  for (let i = 0; i < 56; i++) {
+  for (let i = 0; i < 64; i++) {
     const m = new THREE.SpriteMaterial({ map: puffTex, transparent: true, opacity: 0, depthTest: false, depthWrite: false });
     const sp = new THREE.Sprite(m);
     sp.visible = false;
@@ -485,11 +597,10 @@ function buildFlyby() {
     puffs.push({ sp, life: 0, maxLife: 1, vx: 0, vy: 0, vz: 0, spin: 0, baseScale: 1, sx: 1, sy: 1 });
   }
 
-  // Spark pool: tiny bright motes kicked off the exhaust for extra sparkle
-  // and depth against the smoke.
+  // Spark pool: tiny bright motes kicked off the exhaust for extra sparkle.
   const sparkTex = makeSparkTexture();
   const sparks = [];
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 24; i++) {
     const m = new THREE.SpriteMaterial({ map: sparkTex, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false });
     const sp = new THREE.Sprite(m);
     sp.visible = false;
@@ -499,16 +610,15 @@ function buildFlyby() {
   }
 
   flyby = {
-    clip, textMesh, textMat, textW, rocket, flame,
+    sky, rocket, flame, worldW,
     puffs, puffCursor: 0, puffTimer: 0,
     sparks, sparkCursor: 0,
-    prevRy: 0,
     state: 'idle',
     nextAt: 6,             // first flyby a few seconds in
     t: 0,
-    xStart: -32, xEnd: 32,
+    lead: 2.6,             // rocket nose rides just ahead of the fresh smoke
     y: 9, z: -4,
-    duration: 7.5,
+    duration: 8,
   };
 }
 
@@ -516,18 +626,18 @@ function spawnPuff(f, x, y, z) {
   const p = f.puffs[f.puffCursor];
   f.puffCursor = (f.puffCursor + 1) % f.puffs.length;
   p.life = 0;
-  p.maxLife = 1.6 + Math.random() * 1.2;
-  p.vx = -1.6 - Math.random() * 1.2;              // drift back along the trail
+  p.maxLife = 1.4 + Math.random() * 1.1;
+  p.vx = -2.0 - Math.random() * 1.4;              // drift back along the trail
   p.vy = (Math.random() - 0.5) * 0.7;
   p.vz = (Math.random() - 0.5) * 0.9;             // spread in depth for volume
   p.spin = (Math.random() - 0.5) * 0.9;
-  p.baseScale = 1.4 + Math.random() * 1.6;
+  p.baseScale = 1.2 + Math.random() * 1.3;
   p.sx = 0.85 + Math.random() * 0.3;
   p.sy = 0.85 + Math.random() * 0.3;
   p.sp.position.set(x + (Math.random() - 0.5) * 0.6, y + (Math.random() - 0.5) * 0.6, z + (Math.random() - 0.5) * 1.4);
   p.sp.material.rotation = Math.random() * Math.PI * 2;
   p.sp.scale.set(p.baseScale * p.sx, p.baseScale * p.sy, 1);
-  p.sp.material.opacity = 0.5;
+  p.sp.material.opacity = 0.3;
   p.sp.visible = true;
 }
 
@@ -541,9 +651,9 @@ function updatePuffs(f, dt) {
     p.sp.position.y += p.vy * dt;
     p.sp.position.z += p.vz * dt;
     p.sp.material.rotation += p.spin * dt;
-    const bloom = p.baseScale * (1 + k * 1.8);
+    const bloom = p.baseScale * (1 + k * 1.9);
     p.sp.scale.set(bloom * p.sx, bloom * p.sy, 1);      // billow outward, non-uniformly
-    p.sp.material.opacity = 0.5 * (1 - k);
+    p.sp.material.opacity = 0.3 * (1 - k);
   }
 }
 
@@ -584,60 +694,61 @@ function updateFlyby(dt, now) {
   updatePuffs(f, dt);
   updateSparks(f, dt);
 
+  // Keep the smoke's own sway/billow animating in every active phase.
+  if (f.state !== 'idle') f.sky.mat.uniforms.uTime.value = now;
+
   if (f.state === 'idle') {
     if (now >= f.nextAt) {
       f.state = 'writing';
       f.t = 0;
       f.y = 6 + Math.random() * 5;           // low enough that the rocket stays on-screen
       f.z = -5 + Math.random() * 6;
-      f.duration = 7 + Math.random() * 2;
+      f.duration = 7.5 + Math.random() * 2;
       f.puffTimer = 0;
-      f.prevRy = f.y;
-      f.textMesh.position.set(0, f.y, f.z);
-      f.textMesh.scale.setScalar(1);
-      f.textMesh.material.opacity = 1;
-      f.textMesh.visible = true;
+      f.sky.points.position.set(0, f.y, f.z);
+      f.sky.mat.uniforms.uProgress.value = 0;
+      f.sky.mat.uniforms.uFade.value = 1;
+      f.sky.mat.uniforms.uTime.value = now;
+      f.sky.points.visible = true;
       f.rocket.visible = true;
       f.flame.group.visible = true;
     }
     return;
   }
 
+  const left = -f.worldW / 2, right = f.worldW / 2;
+
   if (f.state === 'writing') {
     f.t += dt / f.duration;
     const p = Math.min(f.t, 1);
-    const rocketX = f.xStart + (f.xEnd - f.xStart) * p;
-    f.clip.constant = rocketX; // normal is (-1,0,0): keeps x <= rocketX (text left of the rocket)
+    f.sky.mat.uniforms.uProgress.value = p;
 
-    const bob = Math.sin(now * 3.5) * 0.35;
-    // Rocket rides at the vertical center of the trail, just past the reveal
-    // edge, so the smoke words pour straight out of its exhaust.
-    const ry = f.y + bob;
-    const vy = dt > 0 ? (ry - f.prevRy) / dt : 0;
-    f.prevRy = ry;
+    // Straight, level flight — no vertical bob. The rocket's nose rides just
+    // ahead of the freshly written column so the smoke pours from its engine.
+    const writeX = left + p * f.worldW;
+    const rx = writeX + f.lead;
+    const ry = f.y;
+    f.rocket.position.set(rx, ry, f.z + 0.6);
+    // A slow barrel-roll around the flight axis (+X) gives life without ever
+    // moving the rocket off its level line.
+    f.rocket.rotation.set(Math.sin(now * 1.6) * 0.14, 0, 0);
 
-    f.rocket.position.set(rocketX + 3.0, ry, f.z + 0.6);
-    // Gentle continuous barrel-roll wobble plus a pitch that noses into the
-    // vertical bob, so the flight reads as flown rather than slid sideways.
-    f.rocket.rotation.x = Math.sin(now * 2.1) * 0.16;
-    f.rocket.rotation.y = Math.sin(now * 0.9) * 0.06;
-    f.rocket.rotation.z = THREE.MathUtils.clamp(-vy * 0.35, -0.28, 0.28);
-
-    const nozzleX = rocketX + 3.0 - 1.5, nozzleY = ry, nozzleZ = f.z + 0.6;
+    const nozzleX = rx - 2.6, nozzleY = ry, nozzleZ = f.z + 0.6;
     f.flame.group.position.set(nozzleX, nozzleY, nozzleZ);
     const flick = 0.85 + Math.random() * 0.3;
-    f.flame.core.scale.set((1.1 + Math.random() * 0.3) * flick, 0.85 + Math.random() * 0.25, 1);
-    f.flame.core.material.opacity = 0.85 + Math.random() * 0.15;
-    f.flame.outer.scale.set((2.6 + Math.random() * 0.9) * flick, 1.6 + Math.random() * 0.4, 1);
-    f.flame.outer.material.opacity = 0.55 + Math.random() * 0.35;
-    f.flame.light.intensity = 45 + Math.random() * 30;
+    f.flame.core.scale.set((1.35 + Math.random() * 0.35) * flick, 1.0 + Math.random() * 0.3, 1);
+    f.flame.core.material.opacity = 0.9 + Math.random() * 0.1;
+    f.flame.outer.scale.set((3.2 + Math.random() * 1.0) * flick, 1.9 + Math.random() * 0.5, 1);
+    f.flame.outer.material.opacity = 0.6 + Math.random() * 0.35;
+    f.flame.halo.material.opacity = 0.45 + Math.random() * 0.2;
+    f.flame.light.intensity = 60 + Math.random() * 35;
 
-    // Spurt puffs and the occasional spark from the exhaust while firing.
+    // Thick exhaust plume + occasional sparks straight out of the engine bell.
     f.puffTimer += dt;
-    while (f.puffTimer > 0.045) {
-      f.puffTimer -= 0.045;
-      spawnPuff(f, rocketX + 0.6, ry, f.z - 0.2);
-      if (Math.random() < 0.55) spawnSpark(f, nozzleX - 0.2, nozzleY, nozzleZ);
+    while (f.puffTimer > 0.03) {
+      f.puffTimer -= 0.03;
+      spawnPuff(f, nozzleX - 0.3, ry, f.z + 0.4);
+      if (Math.random() < 0.6) spawnSpark(f, nozzleX - 0.3, nozzleY, nozzleZ);
     }
 
     if (p >= 1) {
@@ -651,18 +762,17 @@ function updateFlyby(dt, now) {
 
   if (f.state === 'holding') {
     f.t += dt;
-    if (f.t > 2.6) { f.state = 'fading'; f.t = 0; }
+    if (f.t > 2.8) { f.state = 'fading'; f.t = 0; }
     return;
   }
 
   if (f.state === 'fading') {
-    f.t += dt / 3.2;
-    f.textMesh.material.opacity = 1 - Math.min(f.t, 1);
-    f.textMesh.position.y = f.y + f.t * 2.2;       // drift upward as it dissipates
-    f.textMesh.scale.setScalar(1 + f.t * 0.12);
+    f.t += dt / 3.4;
+    f.sky.mat.uniforms.uFade.value = 1 - Math.min(f.t, 1);
+    f.sky.points.position.y = f.y + f.t * 1.8;       // whole trail drifts up as it dissipates
     if (f.t >= 1) {
-      f.textMesh.visible = false;
-      f.textMesh.scale.setScalar(1);
+      f.sky.points.visible = false;
+      f.sky.points.position.y = f.y;
       f.state = 'idle';
       f.nextAt = now + 26 + Math.random() * 24;      // next flyby in ~26–50s
     }
