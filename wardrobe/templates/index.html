@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardrobe</title>
+<style>
+  :root{
+    --bg:#f4f1ea; --panel:#fffdf8; --ink:#211d18; --muted:#7c7368;
+    --line:#e2dccf; --accent:#8a6d3b; --accent-soft:#efe6d3;
+    --shadow:0 8px 30px rgba(40,32,20,.10); --radius:16px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,.serif{font-family:Georgia,"Times New Roman",serif;}
+  header.topbar{
+    display:flex; align-items:baseline; gap:18px; flex-wrap:wrap;
+    padding:22px 30px 0; max-width:1180px; margin:0 auto;
+  }
+  .brand{font-size:30px; font-weight:600; letter-spacing:.02em; margin:0;}
+  .brand .dot{color:var(--accent);}
+  .tagline{color:var(--muted); font-size:13px; letter-spacing:.14em; text-transform:uppercase;}
+  nav.tabs{
+    display:flex; gap:6px; padding:16px 30px 0; max-width:1180px; margin:0 auto;
+    border-bottom:1px solid var(--line);
+  }
+  nav.tabs button{
+    background:none; border:none; padding:12px 18px; font-size:15px; cursor:pointer;
+    color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-1px;
+    font-family:inherit; letter-spacing:.02em;
+  }
+  nav.tabs button.active{color:var(--ink); border-bottom-color:var(--accent); font-weight:600;}
+  main{max-width:1180px; margin:0 auto; padding:26px 30px 80px;}
+  .view{display:none;} .view.active{display:block;}
+
+  .section-head{display:flex; align-items:center; justify-content:space-between; margin:0 0 18px;}
+  .section-head h2{margin:0; font-size:24px; font-weight:600;}
+  .count-pill{color:var(--muted); font-size:13px; margin-left:10px; font-family:inherit;}
+
+  button.btn{
+    background:var(--accent); color:#fff; border:none; padding:10px 18px; border-radius:999px;
+    font-size:14px; cursor:pointer; font-family:inherit; letter-spacing:.02em;
+  }
+  button.btn:hover{filter:brightness(1.06);}
+  button.btn.ghost{background:transparent; color:var(--accent); border:1px solid var(--accent);}
+  button.btn.subtle{background:var(--accent-soft); color:var(--accent);}
+  button.link{background:none; border:none; color:var(--muted); cursor:pointer; font-size:13px; font-family:inherit;}
+  button.link:hover{color:var(--accent);}
+
+  /* --- item grid --- */
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:18px;}
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    overflow:hidden; box-shadow:var(--shadow); display:flex; flex-direction:column;
+  }
+  .swatch{height:96px; position:relative;}
+  .swatch .cat{
+    position:absolute; top:10px; left:12px; background:rgba(255,255,255,.85);
+    color:var(--ink); font-size:11px; padding:3px 9px; border-radius:999px;
+    letter-spacing:.08em; text-transform:uppercase;
+  }
+  .card-body{padding:14px 16px 16px; flex:1; display:flex; flex-direction:column;}
+  .card-body h3{margin:0 0 4px; font-size:17px; line-height:1.25;}
+  .meta{color:var(--muted); font-size:13px; margin:2px 0;}
+  .meta b{color:var(--ink); font-weight:600;}
+  .temp{
+    display:inline-flex; align-items:center; gap:6px; margin-top:8px;
+    font-size:13px; color:var(--accent); background:var(--accent-soft);
+    padding:4px 10px; border-radius:999px; align-self:flex-start;
+  }
+  .card-actions{display:flex; gap:14px; margin-top:12px;}
+
+  /* --- forms / modal --- */
+  .modal-back{
+    position:fixed; inset:0; background:rgba(30,24,16,.45); display:none;
+    align-items:flex-start; justify-content:center; padding:40px 16px; z-index:50; overflow:auto;
+  }
+  .modal-back.open{display:flex;}
+  .modal{
+    background:var(--panel); border-radius:var(--radius); box-shadow:var(--shadow);
+    width:100%; max-width:520px; padding:26px 28px;
+  }
+  .modal h3{margin:0 0 18px; font-size:22px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:5px;}
+  .field input, .field select, .field textarea{
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:10px;
+    font-size:15px; font-family:inherit; background:#fff; color:var(--ink);
+  }
+  .row2{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  .temp-row{display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:center;}
+  .temp-row .sep{color:var(--muted); padding-bottom:2px;}
+  .modal-actions{display:flex; justify-content:flex-end; gap:12px; margin-top:22px;}
+
+  .empty{color:var(--muted); text-align:center; padding:60px 0; font-size:15px;}
+
+  /* --- fit maker --- */
+  .fit-wrap{display:grid; grid-template-columns:1fr 340px; gap:26px;}
+  @media(max-width:860px){.fit-wrap{grid-template-columns:1fr;}}
+  .pick-card{cursor:pointer; transition:transform .12s, box-shadow .12s;}
+  .pick-card.sel{outline:3px solid var(--accent); outline-offset:2px;}
+  .pick-card .check{
+    position:absolute; top:10px; right:12px; width:24px; height:24px; border-radius:50%;
+    background:var(--accent); color:#fff; display:none; align-items:center; justify-content:center; font-size:14px;
+  }
+  .pick-card.sel .check{display:flex;}
+  .fit-panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    box-shadow:var(--shadow); padding:22px; position:sticky; top:20px; align-self:start;
+  }
+  .fit-panel h3{margin:0 0 4px; font-size:20px;}
+  .fit-strip{display:flex; flex-wrap:wrap; gap:10px; margin:16px 0;}
+  .chip{
+    display:flex; align-items:center; gap:8px; background:#fff; border:1px solid var(--line);
+    border-radius:999px; padding:5px 12px 5px 6px; font-size:13px;
+  }
+  .chip .dot{width:16px; height:16px; border-radius:50%; border:1px solid rgba(0,0,0,.15);}
+  .fit-temp-big{font-size:15px; margin:10px 0 4px;}
+  .fit-temp-big b{color:var(--accent);}
+
+  /* --- collections --- */
+  .coll{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    box-shadow:var(--shadow); padding:22px 24px; margin-bottom:22px;
+  }
+  .coll-head{display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;}
+  .coll-head h3{margin:0; font-size:22px;}
+  .outfit-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:14px; margin-top:18px;}
+  .outfit{border:1px solid var(--line); border-radius:12px; padding:14px; background:#fff;}
+  .outfit .oname{font-weight:600; margin-bottom:10px; font-size:15px;}
+  .outfit .piece{display:flex; align-items:center; gap:9px; font-size:13px; margin:5px 0; color:var(--ink);}
+  .outfit .piece .dot{width:15px; height:15px; border-radius:50%; border:1px solid rgba(0,0,0,.15);}
+  .outfit .piece small{color:var(--muted);}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1 class="brand">Wardrobe<span class="dot">.</span></h1>
+  <span class="tagline">Closet &amp; Fit Studio</span>
+</header>
+
+<nav class="tabs">
+  <button data-tab="wardrobe" class="active">Wardrobe</button>
+  <button data-tab="fit">Fit Maker</button>
+  <button data-tab="collections">Collections</button>
+</nav>
+
+<main>
+  <!-- WARDROBE -->
+  <section id="view-wardrobe" class="view active">
+    <div class="section-head">
+      <h2>My Wardrobe <span class="count-pill" id="itemCount"></span></h2>
+      <button class="btn" onclick="openItemModal()">+ Add Piece</button>
+    </div>
+    <div id="itemGrid" class="grid"></div>
+  </section>
+
+  <!-- FIT MAKER -->
+  <section id="view-fit" class="view">
+    <div class="section-head"><h2>Fit Maker</h2></div>
+    <div class="fit-wrap">
+      <div>
+        <p class="meta" style="margin-bottom:16px">Tap pieces to build a look. See how they come together and how warm the whole fit runs.</p>
+        <div id="fitGrid" class="grid"></div>
+      </div>
+      <aside class="fit-panel">
+        <h3>Your Fit</h3>
+        <p class="meta" id="fitEmpty">Nothing selected yet.</p>
+        <div class="fit-strip" id="fitStrip"></div>
+        <div id="fitTemp"></div>
+        <div style="display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;">
+          <button class="btn" id="saveFitBtn" onclick="openSaveFit()" style="display:none">Save as Outfit</button>
+          <button class="link" id="clearFitBtn" onclick="clearFit()" style="display:none">Clear</button>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- COLLECTIONS -->
+  <section id="view-collections" class="view">
+    <div class="section-head">
+      <h2>Collections <span class="count-pill" id="collCount"></span></h2>
+      <button class="btn" onclick="openCollModal()">+ New Collection</button>
+    </div>
+    <div id="collList"></div>
+  </section>
+</main>
+
+<!-- ITEM MODAL -->
+<div class="modal-back" id="itemModal">
+  <div class="modal">
+    <h3 id="itemModalTitle">Add Piece</h3>
+    <input type="hidden" id="f_id">
+    <div class="field">
+      <label>Name</label>
+      <input id="f_name" placeholder="e.g. Long Sleeve Polo — Cream">
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Category</label>
+        <input id="f_category" list="catlist" placeholder="e.g. Long Sleeve Polo">
+        <datalist id="catlist"></datalist>
+      </div>
+      <div class="field">
+        <label>Color</label>
+        <input id="f_color" placeholder="e.g. Cream">
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Swatch color</label>
+        <input id="f_color_hex" type="color" value="#8a8d91" style="height:44px; padding:4px;">
+      </div>
+      <div class="field">
+        <label>Brand</label>
+        <input id="f_brand" list="brandlist" placeholder="e.g. Ralph Lauren">
+        <datalist id="brandlist"></datalist>
+      </div>
+    </div>
+    <div class="field">
+      <label>Material</label>
+      <input id="f_material" placeholder="e.g. Pima cotton">
+    </div>
+    <div class="field">
+      <label>Ideal temperature range (°F)</label>
+      <div class="temp-row">
+        <input id="f_temp_min" type="number" placeholder="Low">
+        <span class="sep">to</span>
+        <input id="f_temp_max" type="number" placeholder="High">
+      </div>
+    </div>
+    <div class="field">
+      <label>Notes</label>
+      <textarea id="f_notes" rows="2" placeholder="Anything worth remembering"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="link" onclick="closeModal('itemModal')">Cancel</button>
+      <button class="btn" onclick="saveItem()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- COLLECTION MODAL -->
+<div class="modal-back" id="collModal">
+  <div class="modal">
+    <h3 id="collModalTitle">New Collection</h3>
+    <input type="hidden" id="c_id">
+    <div class="field">
+      <label>Name</label>
+      <input id="c_name" placeholder="e.g. Office">
+    </div>
+    <div class="field">
+      <label>Temperature rating (°F)</label>
+      <div class="temp-row">
+        <input id="c_temp_min" type="number" placeholder="Low">
+        <span class="sep">to</span>
+        <input id="c_temp_max" type="number" placeholder="High">
+      </div>
+    </div>
+    <div class="field">
+      <label>Notes</label>
+      <textarea id="c_notes" rows="2"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="link" onclick="closeModal('collModal')">Cancel</button>
+      <button class="btn" onclick="saveColl()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- SAVE FIT MODAL -->
+<div class="modal-back" id="fitModal">
+  <div class="modal">
+    <h3>Save Outfit</h3>
+    <div class="field">
+      <label>Outfit name</label>
+      <input id="fit_name" placeholder="e.g. Grey + Cream">
+    </div>
+    <div class="field">
+      <label>Add to collection</label>
+      <select id="fit_coll"></select>
+    </div>
+    <div class="modal-actions">
+      <button class="link" onclick="closeModal('fitModal')">Cancel</button>
+      <button class="btn" onclick="saveFit()">Save Outfit</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let ITEMS = [], COLLECTIONS = [];
+const selectedFit = new Set();
+
+// --- helpers ---
+const $ = id => document.getElementById(id);
+async function api(url, method='GET', body){
+  const opt = {method, headers:{'Content-Type':'application/json'}};
+  if(body) opt.body = JSON.stringify(body);
+  const r = await fetch(url, opt);
+  return r.json();
+}
+function tempLabel(lo, hi){
+  if(lo==null && hi==null) return null;
+  if(lo!=null && hi!=null) return `${lo}–${hi}°F`;
+  if(lo!=null) return `${lo}°F+`;
+  return `up to ${hi}°F`;
+}
+function esc(s){ return (s||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// --- tabs ---
+document.querySelectorAll('nav.tabs button').forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    $('view-'+b.dataset.tab).classList.add('active');
+  };
+});
+
+// --- load ---
+async function loadAll(){
+  ITEMS = await api('/api/items');
+  COLLECTIONS = await api('/api/collections');
+  renderItems();
+  renderFit();
+  renderCollections();
+  refreshDatalists();
+}
+function refreshDatalists(){
+  const cats = [...new Set(ITEMS.map(i=>i.category).filter(Boolean))];
+  const brands = [...new Set(ITEMS.map(i=>i.brand).filter(Boolean))];
+  $('catlist').innerHTML = cats.map(c=>`<option value="${esc(c)}">`).join('');
+  $('brandlist').innerHTML = brands.map(b=>`<option value="${esc(b)}">`).join('');
+}
+
+// --- wardrobe render ---
+function itemCardHTML(i, {pick=false}={}){
+  const t = tempLabel(i.temp_min, i.temp_max);
+  return `
+    <div class="swatch" style="background:${i.color_hex||'#ddd'}">
+      ${i.category?`<span class="cat">${esc(i.category)}</span>`:''}
+      ${pick?'<span class="check">✓</span>':''}
+    </div>
+    <div class="card-body">
+      <h3>${esc(i.name)}</h3>
+      ${i.brand?`<div class="meta"><b>${esc(i.brand)}</b></div>`:''}
+      ${i.color?`<div class="meta">${esc(i.color)}</div>`:''}
+      ${i.material?`<div class="meta">${esc(i.material)}</div>`:''}
+      ${t?`<span class="temp">🌡 ${t}</span>`:''}
+      ${!pick?`<div class="card-actions">
+        <button class="link" onclick="event.stopPropagation();openItemModal(${i.id})">Edit</button>
+        <button class="link" onclick="event.stopPropagation();delItem(${i.id})">Remove</button>
+      </div>`:''}
+    </div>`;
+}
+function renderItems(){
+  $('itemCount').textContent = ITEMS.length ? `${ITEMS.length} pieces` : '';
+  if(!ITEMS.length){ $('itemGrid').innerHTML = '<div class="empty">Your wardrobe is empty. Add your first piece.</div>'; return; }
+  $('itemGrid').innerHTML = ITEMS.map(i=>`<div class="card">${itemCardHTML(i)}</div>`).join('');
+}
+
+// --- item modal ---
+function openItemModal(id){
+  const editing = ITEMS.find(x=>x.id===id);
+  $('itemModalTitle').textContent = editing ? 'Edit Piece' : 'Add Piece';
+  $('f_id').value = editing ? id : '';
+  $('f_name').value = editing?editing.name:'';
+  $('f_category').value = editing?editing.category:'';
+  $('f_color').value = editing?editing.color:'';
+  $('f_color_hex').value = editing&&editing.color_hex?editing.color_hex:'#8a8d91';
+  $('f_brand').value = editing?editing.brand:'';
+  $('f_material').value = editing?editing.material:'';
+  $('f_temp_min').value = editing&&editing.temp_min!=null?editing.temp_min:'';
+  $('f_temp_max').value = editing&&editing.temp_max!=null?editing.temp_max:'';
+  $('f_notes').value = editing?editing.notes:'';
+  $('itemModal').classList.add('open');
+}
+async function saveItem(){
+  const payload = {
+    name:$('f_name').value, category:$('f_category').value, color:$('f_color').value,
+    color_hex:$('f_color_hex').value, brand:$('f_brand').value, material:$('f_material').value,
+    temp_min:$('f_temp_min').value, temp_max:$('f_temp_max').value, notes:$('f_notes').value,
+  };
+  if(!payload.name.trim()){ $('f_name').focus(); return; }
+  const id = $('f_id').value;
+  if(id) await api('/api/items/'+id,'PUT',payload);
+  else await api('/api/items','POST',payload);
+  closeModal('itemModal');
+  await loadAll();
+}
+async function delItem(id){
+  const i = ITEMS.find(x=>x.id===id);
+  if(!confirm(`Remove "${i.name}" from your wardrobe?`)) return;
+  await api('/api/items/'+id,'DELETE');
+  selectedFit.delete(id);
+  await loadAll();
+}
+
+// --- fit maker ---
+function renderFit(){
+  if(!ITEMS.length){ $('fitGrid').innerHTML='<div class="empty">Add pieces to your wardrobe first.</div>'; return; }
+  $('fitGrid').innerHTML = ITEMS.map(i=>{
+    const sel = selectedFit.has(i.id)?' sel':'';
+    return `<div class="card pick-card${sel}" onclick="toggleFit(${i.id})">${itemCardHTML(i,{pick:true})}</div>`;
+  }).join('');
+  renderFitPanel();
+}
+function toggleFit(id){
+  selectedFit.has(id)?selectedFit.delete(id):selectedFit.add(id);
+  renderFit();
+}
+function clearFit(){ selectedFit.clear(); renderFit(); }
+function renderFitPanel(){
+  const chosen = ITEMS.filter(i=>selectedFit.has(i.id));
+  $('fitEmpty').style.display = chosen.length?'none':'block';
+  $('saveFitBtn').style.display = chosen.length?'inline-block':'none';
+  $('clearFitBtn').style.display = chosen.length?'inline-block':'none';
+  $('fitStrip').innerHTML = chosen.map(i=>
+    `<span class="chip"><span class="dot" style="background:${i.color_hex||'#ddd'}"></span>${esc(i.name)}</span>`
+  ).join('');
+  // overlapping temperature = highest low, lowest high
+  const lows = chosen.map(i=>i.temp_min).filter(v=>v!=null);
+  const highs = chosen.map(i=>i.temp_max).filter(v=>v!=null);
+  let html='';
+  if(chosen.length && lows.length && highs.length){
+    const lo=Math.max(...lows), hi=Math.min(...highs);
+    if(lo<=hi) html=`<div class="fit-temp-big">This fit works around <b>${lo}–${hi}°F</b>.</div>`;
+    else html=`<div class="fit-temp-big">⚠ These pieces don't share a comfortable temperature range.</div>`;
+  } else if(chosen.length){
+    html=`<div class="meta">Add temperature ranges to your pieces to rate this fit.</div>`;
+  }
+  $('fitTemp').innerHTML = html;
+}
+function openSaveFit(){
+  if(!selectedFit.size) return;
+  const chosen = ITEMS.filter(i=>selectedFit.has(i.id));
+  $('fit_name').value = chosen.map(i=>i.color||i.name.split('—').pop().trim()).join(' + ');
+  $('fit_coll').innerHTML = '<option value="">— No collection —</option>' +
+    COLLECTIONS.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  $('fitModal').classList.add('open');
+}
+async function saveFit(){
+  await api('/api/outfits','POST',{
+    name:$('fit_name').value,
+    collection_id:$('fit_coll').value||null,
+    item_ids:[...selectedFit],
+  });
+  closeModal('fitModal');
+  clearFit();
+  COLLECTIONS = await api('/api/collections');
+  renderCollections();
+  alert('Outfit saved.');
+}
+
+// --- collections ---
+function renderCollections(){
+  $('collCount').textContent = COLLECTIONS.length ? `${COLLECTIONS.length}` : '';
+  if(!COLLECTIONS.length){ $('collList').innerHTML='<div class="empty">No collections yet. Create one to group your favorite outfits.</div>'; return; }
+  $('collList').innerHTML = COLLECTIONS.map(c=>{
+    const t = tempLabel(c.temp_min, c.temp_max);
+    const outfits = c.outfits.map(o=>`
+      <div class="outfit">
+        <div class="oname">${esc(o.name||'Outfit')}
+          <button class="link" style="float:right" onclick="delOutfit(${o.id})">✕</button></div>
+        ${o.items.map(it=>`<div class="piece"><span class="dot" style="background:${it.color_hex||'#ddd'}"></span>
+          ${esc(it.name)} ${it.brand?`<small>· ${esc(it.brand)}</small>`:''}</div>`).join('')}
+      </div>`).join('');
+    return `<div class="coll">
+      <div class="coll-head">
+        <div>
+          <h3>${esc(c.name)} <span class="count-pill">${c.outfits.length} outfits</span></h3>
+          ${t?`<span class="temp" style="margin-top:8px">🌡 ${t}</span>`:''}
+          ${c.notes?`<div class="meta" style="margin-top:6px">${esc(c.notes)}</div>`:''}
+        </div>
+        <div style="display:flex; gap:14px;">
+          <button class="link" onclick="openCollModal(${c.id})">Edit</button>
+          <button class="link" onclick="delColl(${c.id})">Delete</button>
+        </div>
+      </div>
+      <div class="outfit-grid">${outfits || '<div class="meta">No outfits yet — build one in Fit Maker.</div>'}</div>
+    </div>`;
+  }).join('');
+}
+function openCollModal(id){
+  const editing = COLLECTIONS.find(x=>x.id===id);
+  $('collModalTitle').textContent = editing?'Edit Collection':'New Collection';
+  $('c_id').value = editing?id:'';
+  $('c_name').value = editing?editing.name:'';
+  $('c_temp_min').value = editing&&editing.temp_min!=null?editing.temp_min:'';
+  $('c_temp_max').value = editing&&editing.temp_max!=null?editing.temp_max:'';
+  $('c_notes').value = editing?editing.notes:'';
+  $('collModal').classList.add('open');
+}
+async function saveColl(){
+  const payload = {name:$('c_name').value, temp_min:$('c_temp_min').value,
+                   temp_max:$('c_temp_max').value, notes:$('c_notes').value};
+  if(!payload.name.trim()){ $('c_name').focus(); return; }
+  const id = $('c_id').value;
+  if(id) await api('/api/collections/'+id,'PUT',payload);
+  else await api('/api/collections','POST',payload);
+  closeModal('collModal');
+  await loadAll();
+}
+async function delColl(id){
+  const c = COLLECTIONS.find(x=>x.id===id);
+  if(!confirm(`Delete collection "${c.name}"? Its outfits will be removed too.`)) return;
+  await api('/api/collections/'+id,'DELETE');
+  await loadAll();
+}
+async function delOutfit(id){
+  if(!confirm('Remove this outfit?')) return;
+  await api('/api/outfits/'+id,'DELETE');
+  COLLECTIONS = await api('/api/collections');
+  renderCollections();
+}
+
+function closeModal(id){ $(id).classList.remove('open'); }
+document.querySelectorAll('.modal-back').forEach(m=>{
+  m.addEventListener('click', e=>{ if(e.target===m) m.classList.remove('open'); });
+});
+
+loadAll();
+</script>
+</body>
+</html>
