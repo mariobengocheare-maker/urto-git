@@ -12,7 +12,7 @@ sLinkFile = oWS.SpecialFolders("Desktop") & "\URTO.lnk"
 Set oLink = oWS.CreateShortcut(sLinkFile)
 oLink.TargetPath = scriptDir & "\launch_desktop.pyw"
 oLink.WorkingDirectory = scriptDir
-oLink.IconLocation = scriptDir & "\launch_desktop.pyw, 0"
+oLink.IconLocation = scriptDir & "\static\urto_icon.ico, 0"
 oLink.Description = "URTO - Ultimate Realtor Tool"
 oLink.Save
 
