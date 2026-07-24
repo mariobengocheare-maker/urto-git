@@ -42,6 +42,15 @@ by hand rather than getting a wasted or wrong lookup.
 
 ## Run — web UI (drag & drop)
 
+**Windows desktop shortcut (recommended for everyday use):** double-click
+`Create URTO Desktop Icon.vbs` once — it adds a "URTO" icon to your Desktop.
+From then on, double-click that icon any time: it starts the server with no
+console window and opens the app in your browser automatically. If you ever
+move/re-extract the project to a new folder, just double-click the `.vbs`
+again to recreate the icon pointing at the new location.
+
+**Manual / any OS:**
+
 ```bash
 python app.py
 ```
