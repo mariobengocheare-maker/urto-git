@@ -9,6 +9,8 @@ import time
 
 from playwright.sync_api import TimeoutError as PWTimeoutError
 
+from llc_lookup import resolve_entity_owner
+
 FOREWARN_SEARCH_URL = "https://app.forewarn.com/search"
 
 # Words normalized to a common form so "Street" vs "St" style differences
@@ -118,6 +120,26 @@ def extract_first_phone(page) -> str:
 
 
 def process_row(page, row: dict, debug: bool = False) -> dict:
+    entity_note = ""
+    if row.get("is_entity"):
+        entity_name = row.get("entity_name", "")
+        resolved = resolve_entity_owner(page, entity_name, debug=debug)
+        if resolved["skip_reason"]:
+            return {"phone": "", "status": "SKIPPED", "notes": resolved["skip_reason"]}
+        # Mutate the row itself: build_output_row() reads first/last name
+        # back out of it afterward, so the resolved person becomes the
+        # "owner" that was actually searched — same as for an individual.
+        row["first_name"] = resolved["first_name"]
+        row["last_name"] = resolved["last_name"]
+        entity_note = (f"Resolved via Sunbiz ({resolved['resolved_via']}): "
+                        f"'{entity_name}' -> {resolved['first_name']} {resolved['last_name']}. ")
+
+    result = _run_forewarn_search(page, row, debug=debug)
+    result["notes"] = entity_note + result["notes"]
+    return result
+
+
+def _run_forewarn_search(page, row: dict, debug: bool = False) -> dict:
     first_name = row["first_name"].strip()
     last_name = row["last_name"].strip()
     address = row["address"].strip()

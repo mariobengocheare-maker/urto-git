@@ -20,11 +20,21 @@ recognized. Two logical name shapes are supported:
 The address itself can likewise come from one combined "Address" column or
 be assembled from separate house number / street name / etc. columns.
 
-Rows that clearly aren't an individual at a real street address (LLCs,
-trusts, estates, confidential/reference placeholders, PO boxes, blank
-fields) are flagged with a skip_reason instead of being guessed at — those
-are surfaced in the output for manual review rather than burning a
-FOREWARN search on garbage input.
+Rows that clearly aren't an individual at a real street address are
+flagged instead of being guessed at. Two different flavors of "not an
+individual":
+
+  - LLCs/corporations/other registered business entities (LLC, INC, CORP,
+    etc.) are tagged `is_entity` with the raw entity name preserved —
+    these get a shot at automatic resolution to a real person (the
+    registered agent or an officer/manager, via `llc_lookup.py`'s Sunbiz
+    search) before the lookup engine gives up on them. See lookup_engine.py.
+  - Everything else that isn't a resolvable entity or a parseable person
+    (trusts, estates, confidential/reference placeholders, blank/ambiguous
+    names, PO boxes) gets an immediate skip_reason instead — these are
+    surfaced in the output for manual review rather than burning a
+    FOREWARN search (or a Sunbiz search) on input that was never going to
+    resolve to a person.
 """
 
 import re
@@ -37,11 +47,21 @@ OUTPUT_FIELDS = [
 SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
 
 ENTITY_TOKENS = {
-    "LLC", "INC", "CORP", "CO", "LP", "LLP", "LTD",
+    "LLC", "L.L.C", "INC", "CORP", "CORPORATION", "CO", "LP", "LLP", "LTD",
     "TRUST", "TRS", "JTRS", "HOLDINGS", "PROPERTIES", "PROPERTY",
     "ASSOCIATES", "ASSOC", "PARTNERSHIP", "PARTNERS", "GROUP",
     "ENTERPRISES", "INVESTMENTS", "REALTY", "CONDOMINIUM",
     "CHURCH", "FOUNDATION", "BANK",
+}
+
+# Subset of ENTITY_TOKENS that are actual registered-business-entity suffixes
+# (as opposed to TRUST/CHURCH/BANK/etc., which aren't things Sunbiz's
+# business-entity search can resolve to a registered agent/officer at all).
+# Only rows matching one of these get a shot at automatic LLC resolution;
+# see llc_lookup.py.
+REGISTERED_ENTITY_TOKENS = {
+    "LLC", "L.L.C", "INC", "CORP", "CORPORATION", "CO", "LP", "LLP", "LTD",
+    "HOLDINGS", "ENTERPRISES", "GROUP", "PARTNERS", "PARTNERSHIP",
 }
 
 ENTITY_PHRASES = ["EST OF", "ESTATE OF", "ONLY REFERENCE", "CONFIDENTIAL"]
@@ -103,27 +123,50 @@ def _clean(text: str) -> str:
     return text
 
 
+def _no_entity(first_name="", last_name="", skip_reason=""):
+    """Shared return shape so every parse_owner_name path — person, entity,
+    or skip — carries the same keys."""
+    return {
+        "first_name": first_name, "last_name": last_name,
+        "is_entity": False, "entity_name": "",
+        "skip_reason": skip_reason,
+    }
+
+
 def parse_owner_name(owner_raw: str) -> dict:
     """Parses a single combined owner-name field under the county convention
     'LAST [SUFFIX] FIRST [MIDDLE] [& CO-OWNER...]'. Returns
-    {first_name, last_name, skip_reason} — skip_reason is set instead of
-    guessing when the field is blank, a business/trust/placeholder, or an
-    ambiguous multi-owner listing."""
+    {first_name, last_name, is_entity, entity_name, skip_reason}.
+
+    skip_reason is set instead of guessing when the field is blank, an
+    unresolvable placeholder/trust/estate, or an ambiguous multi-owner
+    listing. is_entity is set instead when the name looks like a registered
+    business entity (LLC, Inc, Corp, ...) — those get a shot at automatic
+    resolution to a real person in lookup_engine.py before anything gives
+    up on them; entity_name carries the cleaned name to search."""
     if not owner_raw:
-        return {"first_name": "", "last_name": "", "skip_reason": "Blank owner name"}
+        return _no_entity(skip_reason="Blank owner name")
 
     cleaned = _clean(owner_raw)
 
     for phrase in ENTITY_PHRASES:
         if phrase in cleaned:
-            return {"first_name": "", "last_name": "", "skip_reason": f"Placeholder/non-individual row ('{phrase.title()}')"}
+            return _no_entity(skip_reason=f"Placeholder/non-individual row ('{phrase.title()}')")
 
     tokens = cleaned.split()
+
+    if any(t in REGISTERED_ENTITY_TOKENS for t in tokens):
+        return {
+            "first_name": "", "last_name": "",
+            "is_entity": True, "entity_name": cleaned.title(),
+            "skip_reason": "",
+        }
+
     if any(t in ENTITY_TOKENS for t in tokens):
-        return {"first_name": "", "last_name": "", "skip_reason": "Looks like a business/trust/estate, not an individual — needs manual lookup"}
+        return _no_entity(skip_reason="Looks like a trust/church/other non-individual, not an individual or a registered business entity — needs manual lookup")
 
     if len(tokens) < 2:
-        return {"first_name": "", "last_name": "", "skip_reason": "Could not determine first/last name from owner field"}
+        return _no_entity(skip_reason="Could not determine first/last name from owner field")
 
     if tokens[0] == "LE" and len(tokens) >= 3:
         # Life-estate holder: "LE FIRST [MIDDLE] LAST [SUFFIX]"
@@ -136,11 +179,11 @@ def parse_owner_name(owner_raw: str) -> dict:
         if len(tokens) >= 3 and tokens[1] in SUFFIXES:
             last_name, first_name = tokens[0], tokens[2]
         elif tokens[1] == "&":
-            return {"first_name": "", "last_name": "", "skip_reason": "Ambiguous multi-owner name format — needs manual review"}
+            return _no_entity(skip_reason="Ambiguous multi-owner name format — needs manual review")
         else:
             last_name, first_name = tokens[0], tokens[1]
 
-    return {"first_name": first_name.title(), "last_name": last_name.title(), "skip_reason": ""}
+    return _no_entity(first_name=first_name.title(), last_name=last_name.title())
 
 
 def has_name_columns(headers: dict) -> bool:
@@ -156,6 +199,8 @@ def convert_row(raw_row: dict, headers: dict) -> dict:
         "owner_name_raw": "",
         "first_name": "",
         "last_name": "",
+        "is_entity": False,
+        "entity_name": "",
         "address": "",
         "city": _get(raw_row, headers.get("city")),
         "state": _get(raw_row, headers.get("state")),
@@ -177,6 +222,8 @@ def convert_row(raw_row: dict, headers: dict) -> dict:
         parsed = parse_owner_name(owner_raw)
         out["first_name"] = parsed["first_name"]
         out["last_name"] = parsed["last_name"]
+        out["is_entity"] = parsed["is_entity"]
+        out["entity_name"] = parsed["entity_name"]
         out["skip_reason"] = parsed["skip_reason"]
 
     if out["skip_reason"]:
