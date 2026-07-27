@@ -162,8 +162,49 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS lookup_stats (
+            week_start TEXT PRIMARY KEY,
+            count INTEGER NOT NULL DEFAULT 0
+        )
+    """)
     conn.commit()
     conn.close()
+
+
+def _monday_of(d: date) -> date:
+    return d - timedelta(days=d.weekday())  # date.weekday(): Monday == 0
+
+
+def get_weekly_lookup_count() -> dict:
+    """Current Monday-to-Sunday week's lookup count. Keyed by that Monday's
+    date, so the count "resets" naturally when the week rolls over — no
+    explicit reset needed, a new week just hasn't got a row yet."""
+    week_start = _monday_of(date.today())
+    week_end = week_start + timedelta(days=6)
+    conn = get_conn()
+    row = conn.execute("SELECT count FROM lookup_stats WHERE week_start = ?", (week_start.isoformat(),)).fetchone()
+    conn.close()
+    return {
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "count": row["count"] if row else 0,
+    }
+
+
+def increment_weekly_lookup_count(n: int = 1):
+    """Called once per actual FOREWARN search attempt (not for rows that
+    were skipped before ever reaching FOREWARN) — see lookup_engine.py."""
+    week_start = _monday_of(date.today()).isoformat()
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO lookup_stats (week_start, count) VALUES (?, ?)
+           ON CONFLICT(week_start) DO UPDATE SET count = count + excluded.count""",
+        (week_start, n),
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("lookup counted")
 
 
 def resolve_interval_days(frequency_key: str, custom_amount, custom_unit) -> tuple:

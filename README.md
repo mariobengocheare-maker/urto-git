@@ -40,11 +40,33 @@ entity's registered agent, or an officer/manager if the agent is itself a
 company) via a live Florida Sunbiz search, then searched on FOREWARN like
 any individual. See "LLC / business-entity owners" below.
 
+A trust name (`REVOCABLE TRUST`, `LIVING TRUST`, `FAMILY TRUST`, ...) is
+also handled specially: it's very often named after its own settlor/trustee
+(e.g. `MAHONEY MARY ANN REVOCABLE TRUST`), so the tool strips the trust
+words and any trailing creation date, then applies the same "LAST FIRST
+[MIDDLE]" convention used for plain owner names. If a real first name is
+left over, that person is searched directly — no Sunbiz search needed,
+trusts aren't registered there. If only a surname remains (e.g. `AVILES
+FAMILY TRUST`), it's skipped rather than guessing a first name.
+
 Everything else that clearly isn't an individual at a real street address —
-trusts, estates, `***CONFIDENTIAL OWNER***` / `ONLY REFERENCE` placeholders,
-PO boxes, blank rows, or ambiguous multi-owner names — is marked `SKIPPED`
+estates, `***CONFIDENTIAL OWNER***` / `ONLY REFERENCE` placeholders, PO
+boxes, blank rows, or ambiguous multi-owner names — is marked `SKIPPED`
 with a reason instead of being searched, so you can review it by hand
 rather than getting a wasted or wrong lookup.
+
+## Weekly lookup count
+
+The Owner Lookup tab always shows a running count of lookups performed
+this week — e.g. "12 lookups this week (Jul 27 – Aug 2)" — so you can keep
+an eye on FOREWARN usage. The week runs Monday–Sunday and resets itself
+automatically (no action needed) the moment a new week starts. Only rows
+that actually reach a FOREWARN search count — a row `SKIPPED` at input
+parsing, or an LLC that fails Sunbiz resolution, was never searched on
+FOREWARN and doesn't count against the total. The count is stored in
+`urto_crm.db` (`lookup_stats` table) alongside everything else the CRM
+already tracks, so it survives restarts and is included in the existing
+backup system.
 
 ## Run — web UI (drag & drop)
 

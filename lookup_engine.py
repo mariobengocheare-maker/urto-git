@@ -9,6 +9,7 @@ import time
 
 from playwright.sync_api import TimeoutError as PWTimeoutError
 
+import crm
 from llc_lookup import resolve_entity_owner
 
 FOREWARN_SEARCH_URL = "https://app.forewarn.com/search"
@@ -140,6 +141,15 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
 
 
 def _run_forewarn_search(page, row: dict, debug: bool = False) -> dict:
+    # Counts once per actual FOREWARN search attempt — this function is only
+    # ever reached for rows that weren't skipped (at input-parsing time or,
+    # for an entity row, by a failed Sunbiz resolution), so it's an accurate
+    # tally of FOREWARN usage rather than every input row.
+    try:
+        crm.increment_weekly_lookup_count()
+    except Exception:
+        pass  # never let counter bookkeeping break an actual lookup
+
     first_name = row["first_name"].strip()
     last_name = row["last_name"].strip()
     address = row["address"].strip()

@@ -417,6 +417,16 @@
   }
   .backup-bar .ok { color: #3fce7a; }
   .backup-bar .warn { color: #e0a52c; }
+
+  /* ---- Owner Lookup: weekly count badge ---- */
+  .weekly-count-bar {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
+    padding: 8px 14px; border: 1px solid rgba(201,162,39,.16); border-radius: 8px;
+    background: rgba(19,28,46,.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    font-size: .82rem; color: var(--text-secondary);
+  }
+  .weekly-count-bar .count { color: var(--gold-bright); font-weight: 700; font-size: .95rem; }
+  .weekly-count-bar .range { color: var(--text-secondary); }
   .crm-subtabs { display: flex; gap: 8px; margin-bottom: 18px; }
   .crm-subtabs button { background: rgba(19,28,46,.5); color: var(--text-secondary); border: 1px solid var(--border); }
   .crm-subtabs button.active { background: linear-gradient(180deg, var(--navy-light), var(--navy)); color: #fff; border-color: var(--gold); box-shadow: 0 0 16px rgba(201,162,39,.25); }
@@ -766,6 +776,11 @@
 <section id="lookupSection" style="display:none">
   <h1>Owner Lookup</h1>
   <p class="sub">Drag in a CSV of name + address entries, log into FOREWARN when prompted, and get a results CSV back.</p>
+
+  <div class="weekly-count-bar">
+    📊 <span class="count" id="weeklyLookupCount">—</span> <span id="weeklyLookupLabel">lookups this week</span>
+    <span class="range" id="weeklyLookupRange"></span>
+  </div>
 
   <div class="card">
     <div id="dropzone">
@@ -1120,6 +1135,33 @@ const resultsTable = document.getElementById('resultsTable');
 const resultsBody = resultsTable.querySelector('tbody');
 const catScene = document.getElementById('catScene');
 
+/* Weekly lookup counter — persistent, resets Monday. Counts every actual
+   FOREWARN search attempt (server-side, in lookup_engine.py), not raw CSV
+   rows — a row skipped before ever reaching FOREWARN doesn't count. */
+const weeklyLookupCountEl = document.getElementById('weeklyLookupCount');
+const weeklyLookupLabelEl = document.getElementById('weeklyLookupLabel');
+const weeklyLookupRangeEl = document.getElementById('weeklyLookupRange');
+
+function formatWeekRange(startIso, endIso) {
+  const opts = { month: 'short', day: 'numeric' };
+  const start = new Date(startIso + 'T00:00:00').toLocaleDateString('en-US', opts);
+  const end = new Date(endIso + 'T00:00:00').toLocaleDateString('en-US', opts);
+  return `(${start} – ${end})`;
+}
+
+async function refreshWeeklyLookupCount() {
+  try {
+    const res = await fetch('/api/lookup/weekly_count');
+    if (!res.ok) return;
+    const data = await res.json();
+    weeklyLookupCountEl.textContent = data.count;
+    weeklyLookupLabelEl.textContent = data.count === 1 ? 'lookup this week' : 'lookups this week';
+    weeklyLookupRangeEl.textContent = formatWeekRange(data.week_start, data.week_end);
+  } catch (e) { /* non-critical display — ignore transient fetch errors */ }
+}
+
+refreshWeeklyLookupCount();
+
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
@@ -1214,6 +1256,7 @@ async function poll() {
 
   downloadBox.style.display = data.rows.length > 0 ? 'block' : 'none';
   renderRows(data.rows);
+  refreshWeeklyLookupCount();
 }
 
 function renderRows(rows) {
@@ -1250,7 +1293,7 @@ const dialerSection = document.getElementById('dialerSection');
 
 const TOP_TABS = [
   { key: 'home', btn: tabHomeBtn, section: homeSection, onShow: null },
-  { key: 'lookup', btn: tabLookupBtn, section: lookupSection, onShow: null },
+  { key: 'lookup', btn: tabLookupBtn, section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
 ];

@@ -198,6 +198,11 @@ def download(job_id):
     return send_file(job["output_path"], as_attachment=True, download_name="forewarn_results.csv")
 
 
+@app.route("/api/lookup/weekly_count")
+def lookup_weekly_count():
+    return jsonify(crm.get_weekly_lookup_count())
+
+
 @app.route("/api/crm/clients", methods=["GET"])
 def crm_list_clients():
     return jsonify(crm.list_clients())

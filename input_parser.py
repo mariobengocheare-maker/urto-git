@@ -66,6 +66,19 @@ REGISTERED_ENTITY_TOKENS = {
 
 ENTITY_PHRASES = ["EST OF", "ESTATE OF", "ONLY REFERENCE", "CONFIDENTIAL"]
 
+# A revocable/living/family trust is very commonly named after its own
+# settlor/trustee — "MAHONEY MARY ANN REVOCABLE TRUST" already contains the
+# person's name under the exact same "LAST FIRST [MIDDLE]" county
+# convention used elsewhere, just with trailing trust words (and often a
+# creation date) tacked on. TRUST_TOKENS flags a row as worth attempting
+# this on; TRUST_STOPWORDS are the trailing words stripped off first.
+TRUST_TOKENS = {"TRUST", "TRS", "JTRS"}
+TRUST_STOPWORDS = {
+    "TRUST", "TRS", "JTRS", "REVOCABLE", "IRREVOCABLE", "LIVING", "FAMILY",
+    "DECLARATION", "AGREEMENT", "AMENDED", "RESTATED", "DTD",
+}
+DATE_TOKEN_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$|^\d{4}$")
+
 # canonical field -> every header spelling we've seen for it, normalized
 # (lowercase, underscores/extra whitespace collapsed to single spaces).
 HEADER_ALIASES = {
@@ -133,6 +146,26 @@ def _no_entity(first_name="", last_name="", skip_reason=""):
     }
 
 
+def _try_extract_trust_person(tokens: list) -> dict:
+    """Strips trailing trust-suffix words and a trailing creation date, then
+    applies the same known "LAST [SUFFIX] FIRST [MIDDLE]" county convention
+    already used for plain owner names. Returns None (never guesses) unless
+    a real first name is left over — 'AVILES FAMILY TRUST' has only a
+    surname and stays unresolved rather than inventing a first name."""
+    core = list(tokens)
+    while core and (DATE_TOKEN_RE.match(core[-1]) or core[-1] in TRUST_STOPWORDS):
+        core.pop()
+
+    if len(core) < 2 or any(t in ENTITY_TOKENS for t in core) or core[1] == "&":
+        return None
+
+    if len(core) >= 3 and core[1] in SUFFIXES:
+        last_name, first_name = core[0], core[2]
+    else:
+        last_name, first_name = core[0], core[1]
+    return {"first_name": first_name.title(), "last_name": last_name.title()}
+
+
 def parse_owner_name(owner_raw: str) -> dict:
     """Parses a single combined owner-name field under the county convention
     'LAST [SUFFIX] FIRST [MIDDLE] [& CO-OWNER...]'. Returns
@@ -162,8 +195,14 @@ def parse_owner_name(owner_raw: str) -> dict:
             "skip_reason": "",
         }
 
+    if TRUST_TOKENS & set(tokens):
+        extracted = _try_extract_trust_person(tokens)
+        if extracted:
+            return _no_entity(first_name=extracted["first_name"], last_name=extracted["last_name"])
+        return _no_entity(skip_reason="Trust name has a surname but no first name to search — needs manual lookup")
+
     if any(t in ENTITY_TOKENS for t in tokens):
-        return _no_entity(skip_reason="Looks like a trust/church/other non-individual, not an individual or a registered business entity — needs manual lookup")
+        return _no_entity(skip_reason="Looks like a business/church/bank/other non-individual, not an individual or a registered business entity — needs manual lookup")
 
     if len(tokens) < 2:
         return _no_entity(skip_reason="Could not determine first/last name from owner field")

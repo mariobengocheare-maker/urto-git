@@ -26,6 +26,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 
+import crm
 from input_parser import OUTPUT_FIELDS, build_output_row, load_rows
 from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
@@ -39,6 +40,8 @@ def main():
     parser.add_argument("--debug", action="store_true",
                          help="Pause with Playwright Inspector before each card click")
     args = parser.parse_args()
+
+    crm.init_db()  # ensure the DB (incl. the weekly lookup-count table) exists
 
     with open(args.input, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
