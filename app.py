@@ -388,6 +388,18 @@ def txn_delete_document_type(doc_type_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/txn/document_types/reorder", methods=["POST"])
+def txn_reorder_document_types():
+    data = request.get_json(force=True)
+    txn_type = data.get("transaction_type", "")
+    ordered_ids = data.get("ordered_ids") or []
+    if txn_type not in crm.TRANSACTION_TYPE_KEYS:
+        return jsonify({"error": "Unknown or missing transaction type"}), 400
+    if not isinstance(ordered_ids, list):
+        return jsonify({"error": "ordered_ids must be a list"}), 400
+    return jsonify(crm.reorder_document_types(txn_type, ordered_ids))
+
+
 @app.route("/api/txn/document_types/<int:doc_type_id>/template", methods=["POST"])
 def txn_upload_document_type_template(doc_type_id):
     file = request.files.get("file")
@@ -419,7 +431,8 @@ def txn_download_document_type_template(doc_type_id):
 
 @app.route("/api/txn/transactions")
 def txn_list_transactions():
-    return jsonify(crm.list_transactions())
+    archived = request.args.get("archived", "0") == "1"
+    return jsonify(crm.list_transactions(archived=archived))
 
 
 @app.route("/api/txn/transactions", methods=["POST"])
@@ -461,6 +474,16 @@ def txn_update_transaction(txn_id):
 def txn_delete_transaction(txn_id):
     crm.delete_transaction(txn_id)
     return jsonify({"ok": True})
+
+
+@app.route("/api/txn/transactions/<int:txn_id>/archive", methods=["POST"])
+def txn_archive_transaction(txn_id):
+    data = request.get_json(force=True)
+    archived = bool(data.get("archived", True))
+    updated = crm.archive_transaction(txn_id, archived)
+    if not updated:
+        abort(404)
+    return jsonify(updated)
 
 
 @app.route("/api/txn/transaction_documents/<int:doc_id>/signed", methods=["POST"])

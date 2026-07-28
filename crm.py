@@ -238,9 +238,16 @@ def init_db():
             transaction_type TEXT NOT NULL,
             title TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
+            archived INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )
     """)
+    # Migration for a urto_crm.db from before "archived" existed — ALTER TABLE
+    # ADD COLUMN would error on a DB that already has it, so only run it if
+    # the column is actually missing.
+    existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()}
+    if "archived" not in existing_cols:
+        conn.execute("ALTER TABLE transactions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transaction_documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -738,6 +745,27 @@ def add_document_type(transaction_type: str, name: str) -> dict:
     return dict(row)
 
 
+def reorder_document_types(transaction_type: str, ordered_ids: list) -> list:
+    """Persists a new sort_order for a type's checklist from a drag-reorder
+    in the UI. Only touches rows that actually belong to transaction_type,
+    so a stale/foreign id in the list can't reorder or affect anything
+    else. Existing transactions already snapshotted their own row order at
+    creation time and are unaffected either way."""
+    conn = get_conn()
+    valid_ids = {
+        r["id"] for r in conn.execute(
+            "SELECT id FROM document_types WHERE transaction_type = ?", (transaction_type,)
+        ).fetchall()
+    }
+    for i, doc_id in enumerate(ordered_ids):
+        if doc_id in valid_ids:
+            conn.execute("UPDATE document_types SET sort_order = ? WHERE id = ?", (i, doc_id))
+    conn.commit()
+    conn.close()
+    on_data_changed("document checklist reordered")
+    return list_document_types(transaction_type)
+
+
 def delete_document_type(document_type_id: int):
     """Removes a document from a type's checklist — only affects NEW
     transactions created after this point. Existing transactions keep their
@@ -798,9 +826,15 @@ def _transaction_to_dict(row, documents=None) -> dict:
     return d
 
 
-def list_transactions() -> list:
+def list_transactions(archived: bool = False) -> list:
+    """By default lists only active (non-archived) transactions — closed
+    deals you've explicitly moved to "Closings" via archive_transaction()
+    are excluded from the main list and only show up when archived=True."""
     conn = get_conn()
-    txns = conn.execute("SELECT * FROM transactions ORDER BY created_at DESC, id DESC").fetchall()
+    txns = conn.execute(
+        "SELECT * FROM transactions WHERE archived = ? ORDER BY created_at DESC, id DESC",
+        (1 if archived else 0,),
+    ).fetchall()
     result = []
     for t in txns:
         docs = conn.execute(
@@ -884,6 +918,26 @@ def update_transaction(transaction_id: int, title: str, status: str) -> dict:
     conn.commit()
     conn.close()
     on_data_changed("transaction updated")
+    return get_transaction(transaction_id)
+
+
+def archive_transaction(transaction_id: int, archived: bool) -> dict:
+    """Moves a transaction to the "Closings" folder (archived=True) or
+    back to the active list (archived=False) — a reversible way to put a
+    finished deal away without deleting it. Nothing else about the
+    transaction changes."""
+    conn = get_conn()
+    existing = conn.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return None
+    conn.execute(
+        "UPDATE transactions SET archived = ? WHERE id = ?",
+        (1 if archived else 0, transaction_id),
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("transaction archived" if archived else "transaction restored")
     return get_transaction(transaction_id)
 
 

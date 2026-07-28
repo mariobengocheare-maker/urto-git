@@ -402,7 +402,12 @@
   .status-pill.next_due, .status-pill.upcoming { background: var(--info-bg); color: var(--info-fg); }
   .status-pill.txn-active { background: var(--success-bg); color: var(--success-fg); }
   .status-pill.txn-under_contract { background: var(--warn-bg); color: var(--warn-fg); }
-  .status-pill.txn-closed { background: linear-gradient(180deg, var(--gold-bright), var(--gold)); color: #2a2205; }
+  .status-pill.txn-closed {
+    background: linear-gradient(145deg, #ffe9a8 0%, #d4af37 30%, #9c6f18 75%, #7a5410 100%);
+    color: #2b1c02;
+    box-shadow: 0 0 10px rgba(201,162,39,.55), inset 0 1px 0 rgba(255,255,255,.5), inset 0 -1px 1px rgba(0,0,0,.25);
+    text-shadow: 0 1px 0 rgba(255,255,255,.3);
+  }
 
   footer.site-footer {
     text-align: center;
@@ -494,8 +499,26 @@
   .txn-detail-card { margin-top: 14px; }
   .txn-detail-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .txn-title-input { flex: 1; min-width: 220px; font-size: 1.1rem; font-weight: 700; }
-  .txn-status-select { width: auto; }
   .txn-detail-meta { color: var(--text-secondary); font-size: .85rem; margin-top: 8px; }
+
+  /* Explicit, fully-controlled status control — a native <select>'s open
+     dropdown/highlight is rendered by the OS and can't be reliably
+     recolored, which is exactly what made "Closed" look wrong before. */
+  .txn-status-btns { display: flex; gap: 6px; }
+  .txn-status-btn {
+    padding: 7px 14px; font-size: .8rem; font-weight: 700; border-radius: 999px;
+    background: rgba(19,28,46,.5); color: var(--text-secondary); border: 1px solid var(--border);
+  }
+  .txn-status-btn:hover:not(:disabled) { color: var(--text); }
+  .txn-status-btn.active[data-status="active"] { background: var(--success-bg); color: var(--success-fg); border-color: transparent; box-shadow: none; }
+  .txn-status-btn.active[data-status="under_contract"] { background: var(--warn-bg); color: var(--warn-fg); border-color: transparent; box-shadow: none; }
+  .txn-status-btn.active[data-status="closed"] {
+    background: linear-gradient(145deg, #ffe9a8 0%, #d4af37 30%, #9c6f18 75%, #7a5410 100%);
+    color: #2b1c02;
+    border-color: transparent;
+    box-shadow: 0 0 10px rgba(201,162,39,.55), inset 0 1px 0 rgba(255,255,255,.5), inset 0 -1px 1px rgba(0,0,0,.25);
+    text-shadow: 0 1px 0 rgba(255,255,255,.3);
+  }
 
   .txn-doc-table { margin-top: 22px; display: grid; gap: 10px; }
   .txn-doc-row {
@@ -521,7 +544,11 @@
   .txn-doctype-row {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    transition: opacity .15s;
   }
+  .txn-doctype-row.dragging { opacity: .4; }
+  .txn-doctype-row .drag-handle { cursor: grab; color: var(--text-secondary); font-size: .95rem; }
+  .txn-doctype-row .drag-handle:active { cursor: grabbing; }
   .txn-doctype-row .name { font-weight: 600; flex: 1; min-width: 140px; }
   .txn-doctype-row .tmpl-info { font-size: .78rem; color: var(--text-secondary); }
 
@@ -1048,6 +1075,10 @@
       <button id="txnNewBtn">+ New Transaction</button>
       <button class="ghost" id="txnManageDocsBtn">⚙ Manage Document Checklists</button>
     </div>
+    <div class="crm-subtabs" id="txnListSubtabs">
+      <button class="active" data-view="active">Active</button>
+      <button data-view="archived">📁 Closings</button>
+    </div>
     <div id="txnList" class="txn-list"></div>
   </div>
 
@@ -1056,17 +1087,18 @@
     <div class="card txn-detail-card">
       <div class="txn-detail-head">
         <input type="text" id="txnDetailTitle" class="txn-title-input" placeholder="Transaction title">
-        <select id="txnDetailStatus" class="txn-status-select">
-          <option value="active">Active</option>
-          <option value="under_contract">Under Contract</option>
-          <option value="closed">Closed</option>
-        </select>
+        <div class="txn-status-btns" id="txnStatusBtns">
+          <button type="button" class="txn-status-btn" data-status="active">Active</button>
+          <button type="button" class="txn-status-btn" data-status="under_contract">Under Contract</button>
+          <button type="button" class="txn-status-btn" data-status="closed">Closed</button>
+        </div>
       </div>
       <div class="txn-detail-meta" id="txnDetailMeta"></div>
 
       <div class="txn-doc-table" id="txnDocTable"></div>
 
       <div class="row" style="margin-top:22px">
+        <button class="ghost small" id="txnArchiveBtn">📁 Move to Closings</button>
         <button class="danger small" id="txnDeleteBtn" style="background:var(--danger-fg)">Delete Transaction</button>
       </div>
     </div>
@@ -1251,6 +1283,7 @@
     <p class="sub" style="margin-top:-6px">Changes here only affect transactions you create from now on — existing transactions keep the documents they already have.</p>
     <div class="crm-subtabs" id="txnTypeSubtabs"></div>
     <div id="txnDocTypesList" class="txn-doctype-list"></div>
+    <div class="error-box" id="txnDocTypeError"></div>
     <div class="row" style="margin-top:14px">
       <input type="text" id="txnNewDocName" placeholder="e.g. HOA Disclosure">
       <button class="small" id="txnAddDocTypeBtn">+ Add Document</button>
@@ -2446,18 +2479,31 @@ document.addEventListener('keydown', (e) => {
 const TXN_STATUS_LABELS = { active: 'Active', under_contract: 'Under Contract', closed: 'Closed' };
 let txnTypes = [];          // [{key, label}, ...] loaded once from the server
 let currentTxnId = null;    // which transaction the detail view is showing
+let currentTxnArchived = false;
+let txnListViewMode = 'active'; // 'active' | 'archived' ("Closings" folder)
 
 const txnListView = document.getElementById('txnListView');
 const txnDetailView = document.getElementById('txnDetailView');
 const txnListEl = document.getElementById('txnList');
+const txnListSubtabs = document.getElementById('txnListSubtabs');
 const txnNewBtn = document.getElementById('txnNewBtn');
 const txnManageDocsBtn = document.getElementById('txnManageDocsBtn');
 const txnBackBtn = document.getElementById('txnBackBtn');
 const txnDetailTitle = document.getElementById('txnDetailTitle');
-const txnDetailStatus = document.getElementById('txnDetailStatus');
+const txnStatusBtns = document.getElementById('txnStatusBtns');
+let txnDetailStatusValue = 'active';
 const txnDetailMeta = document.getElementById('txnDetailMeta');
 const txnDocTable = document.getElementById('txnDocTable');
+const txnArchiveBtn = document.getElementById('txnArchiveBtn');
 const txnDeleteBtn = document.getElementById('txnDeleteBtn');
+
+txnListSubtabs.querySelectorAll('button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    txnListSubtabs.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+    txnListViewMode = btn.getAttribute('data-view');
+    loadTxnList();
+  });
+});
 
 async function ensureTxnTypesLoaded() {
   if (txnTypes.length) return;
@@ -2479,11 +2525,14 @@ function showTxnListView() {
 
 async function loadTxnList() {
   await ensureTxnTypesLoaded();
-  const res = await fetch('/api/txn/transactions');
+  const archivedParam = txnListViewMode === 'archived' ? '1' : '0';
+  const res = await fetch(`/api/txn/transactions?archived=${archivedParam}`);
   const txns = res.ok ? await res.json() : [];
   txnListEl.innerHTML = '';
   if (txns.length === 0) {
-    txnListEl.innerHTML = '<div class="empty-state">No transactions yet. Click "+ New Transaction" to start tracking one.</div>';
+    txnListEl.innerHTML = txnListViewMode === 'archived'
+      ? '<div class="empty-state">No closed transactions filed away yet. Move a transaction here from its detail view.</div>'
+      : '<div class="empty-state">No transactions yet. Click "+ New Transaction" to start tracking one.</div>';
     return;
   }
   for (const t of txns) {
@@ -2510,10 +2559,12 @@ async function openTxnDetail(txnId) {
   if (!res.ok) return;
   const t = await res.json();
   currentTxnId = t.id;
+  currentTxnArchived = !!t.archived;
 
   txnDetailTitle.value = t.title;
-  txnDetailStatus.value = t.status;
+  setTxnStatusButtons(t.status);
   txnDetailMeta.textContent = `${txnTypeLabel(t.transaction_type)} · created ${t.created_at.slice(0, 10)}`;
+  txnArchiveBtn.textContent = currentTxnArchived ? '↩ Restore to Active' : '📁 Move to Closings';
 
   txnDocTable.innerHTML = '';
   if (t.documents.length === 0) {
@@ -2573,6 +2624,13 @@ async function removeSignedDocument(docId) {
 
 txnBackBtn.addEventListener('click', showTxnListView);
 
+function setTxnStatusButtons(status) {
+  txnDetailStatusValue = status;
+  txnStatusBtns.querySelectorAll('.txn-status-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-status') === status);
+  });
+}
+
 // Autosave title/status edits — no explicit "Save" button, matches the
 // low-friction feel of the rest of the app.
 async function saveTxnDetailFields() {
@@ -2581,19 +2639,32 @@ async function saveTxnDetailFields() {
   if (!title) return;
   await fetch(`/api/txn/transactions/${currentTxnId}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, status: txnDetailStatus.value }),
+    body: JSON.stringify({ title, status: txnDetailStatusValue }),
   });
 }
 txnDetailTitle.addEventListener('blur', saveTxnDetailFields);
-txnDetailStatus.addEventListener('change', async () => {
-  await saveTxnDetailFields();
-  loadTxnList(); // keep the list's status pill in sync for whenever we go back
+txnStatusBtns.querySelectorAll('.txn-status-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    setTxnStatusButtons(btn.getAttribute('data-status'));
+    await saveTxnDetailFields();
+    loadTxnList(); // keep the list's status pill in sync for whenever we go back
+  });
 });
 
 txnDeleteBtn.addEventListener('click', async () => {
   if (!currentTxnId) return;
   if (!confirm('Delete this transaction and all its uploaded documents? This cannot be undone.')) return;
   await fetch(`/api/txn/transactions/${currentTxnId}`, { method: 'DELETE' });
+  showTxnListView();
+});
+
+txnArchiveBtn.addEventListener('click', async () => {
+  if (!currentTxnId) return;
+  const archiving = !currentTxnArchived;
+  await fetch(`/api/txn/transactions/${currentTxnId}/archive`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archived: archiving }),
+  });
   showTxnListView();
 });
 
@@ -2675,6 +2746,8 @@ async function loadDocTypesList() {
   for (const d of docs) {
     const row = document.createElement('div');
     row.className = 'txn-doctype-row';
+    row.draggable = true;
+    row.dataset.docId = d.id;
     const tmplInfo = d.template_filename
       ? `<span class="tmpl-info">📄 ${escapeHtml(d.template_original_name || 'template')}</span>
          <a href="/api/txn/document_types/${d.id}/template" target="_blank" class="ghost small" style="text-decoration:none; display:inline-flex; align-items:center; padding:6px 12px; border-radius:7px;">View</a>
@@ -2682,12 +2755,15 @@ async function loadDocTypesList() {
       : `<span class="tmpl-info">No template</span>
          <button class="ghost small" data-upload-template="${d.id}">Upload template</button>`;
     row.innerHTML = `
+      <span class="drag-handle" title="Drag to reorder">&#9776;</span>
       <span class="name">${escapeHtml(d.name)}</span>
       ${tmplInfo}
       <button class="danger small" data-delete-doctype="${d.id}" style="background:var(--danger-fg)">Remove</button>
     `;
     txnDocTypesList.appendChild(row);
   }
+
+  wireDocTypeDragReorder();
 
   txnDocTypesList.querySelectorAll('[data-upload-template]').forEach(btn => {
     btn.addEventListener('click', () => triggerTemplateUpload(btn.getAttribute('data-upload-template')));
@@ -2707,6 +2783,41 @@ async function loadDocTypesList() {
   });
 }
 
+// Classic HTML5 drag-reorder: as you drag over another row, the dragged row
+// is live-moved before/after it in the DOM; on drop, the final DOM order is
+// persisted as the type's new sort_order. Only reorders THIS type's shared
+// checklist — an already-created transaction's own row order was snapshotted
+// separately at creation time and is untouched either way.
+function wireDocTypeDragReorder() {
+  let draggingEl = null;
+
+  txnDocTypesList.querySelectorAll('.txn-doctype-row').forEach(row => {
+    row.addEventListener('dragstart', () => {
+      draggingEl = row;
+      row.classList.add('dragging');
+    });
+    row.addEventListener('dragend', async () => {
+      row.classList.remove('dragging');
+      draggingEl = null;
+      const orderedIds = [...txnDocTypesList.querySelectorAll('.txn-doctype-row')].map(r => Number(r.dataset.docId));
+      await fetch('/api/txn/document_types/reorder', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transaction_type: activeTxnTypeForDocs, ordered_ids: orderedIds }),
+      });
+    });
+  });
+
+  txnDocTypesList.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (!draggingEl) return;
+    const target = e.target.closest('.txn-doctype-row');
+    if (!target || target === draggingEl) return;
+    const rect = target.getBoundingClientRect();
+    const after = (e.clientY - rect.top) > rect.height / 2;
+    target.parentNode.insertBefore(draggingEl, after ? target.nextSibling : target);
+  });
+}
+
 function triggerTemplateUpload(docTypeId) {
   const input = document.createElement('input');
   input.type = 'file';
@@ -2721,9 +2832,18 @@ function triggerTemplateUpload(docTypeId) {
   input.click();
 }
 
-document.getElementById('txnAddDocTypeBtn').addEventListener('click', async () => {
+const txnDocTypeError = document.getElementById('txnDocTypeError');
+
+async function submitNewDocType() {
+  txnDocTypeError.style.display = 'none';
   const name = txnNewDocName.value.trim();
-  if (!name || !activeTxnTypeForDocs) return;
+  if (!name) {
+    txnDocTypeError.textContent = 'Type a document name first.';
+    txnDocTypeError.style.display = 'block';
+    txnNewDocName.focus();
+    return;
+  }
+  if (!activeTxnTypeForDocs) return;
   const res = await fetch('/api/txn/document_types', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ transaction_type: activeTxnTypeForDocs, name }),
@@ -2731,7 +2851,16 @@ document.getElementById('txnAddDocTypeBtn').addEventListener('click', async () =
   if (res.ok) {
     txnNewDocName.value = '';
     loadDocTypesList();
+  } else {
+    const data = await res.json().catch(() => ({}));
+    txnDocTypeError.textContent = data.error || 'Could not add that document.';
+    txnDocTypeError.style.display = 'block';
   }
+}
+
+document.getElementById('txnAddDocTypeBtn').addEventListener('click', submitNewDocType);
+txnNewDocName.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); submitNewDocType(); }
 });
 
 </script>
