@@ -1906,18 +1906,99 @@ async function matchEntriesToClients(entries) {
   return entries;
 }
 
+const PHONE_RE = /(\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/;
+
+// Minimal RFC4180-ish CSV split — handles a double-quoted field containing a
+// comma (or an escaped "" quote), which is exactly how Python's csv module
+// quotes URTO's own results CSV when a notes/address field has a comma in it.
+function splitCsvLine(line) {
+  const fields = [];
+  let cur = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false; }
+      else cur += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { fields.push(cur); cur = ''; }
+    else cur += c;
+  }
+  fields.push(cur);
+  return fields.map(f => f.trim());
+}
+
+// Same column order as OUTPUT_FIELDS in input_parser.py — keep in sync if
+// that ever changes. Lets a bare paste/upload of URTO's own results CSV
+// (with or without its header row) parse into clean name/phone/address
+// entries instead of one jumbled "name" blob.
+const RESULTS_CSV_FIELDS = ['owner', 'address', 'city', 'state', 'zip', 'phone', 'status', 'notes', 'input_owner_name'];
+
+const CSV_HEADER_ALIASES = {
+  name: ['owner', 'name', 'full name', 'client name'],
+  phone: ['phone', 'phone number', 'number'],
+  address: ['address', 'property address', 'street address'],
+};
+
+function matchCsvHeader(fields) {
+  const norm = fields.map(f => f.toLowerCase());
+  const colIndex = {};
+  for (const [canon, aliases] of Object.entries(CSV_HEADER_ALIASES)) {
+    for (const alias of aliases) {
+      const idx = norm.indexOf(alias);
+      if (idx !== -1) { colIndex[canon] = idx; break; }
+    }
+  }
+  // Require at least a name-ish and phone-ish column — otherwise this is
+  // probably just a coincidental first data line, not a real header.
+  return (colIndex.name !== undefined && colIndex.phone !== undefined) ? colIndex : null;
+}
+
+function entryFromFreeformLine(line) {
+  const m = line.match(PHONE_RE);
+  if (!m) return null;
+  const phone = m[1].trim();
+  const name = (line.slice(0, m.index) + line.slice(m.index + m[0].length))
+    .replace(/^[,:\-\s]+|[,:\-\s]+$/g, '').trim();
+  return { name: name || 'Unknown', phone };
+}
+
 function parseDialerText(text) {
-  const phoneRe = /(\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/;
+  const lines = (text || '').split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return [];
+
+  // A recognizable header row (e.g. pasting a results CSV WITH its header)
+  // means every remaining line is that same shape — map by column position.
+  const header = matchCsvHeader(splitCsvLine(lines[0]));
+  if (header) {
+    const entries = [];
+    for (const line of lines.slice(1)) {
+      const f = splitCsvLine(line);
+      const phone = (f[header.phone] || '').trim();
+      if (!phone) continue;  // nothing to call — same rule as "From Last Lookup Results"
+      const address = header.address !== undefined ? (f[header.address] || '') : '';
+      entries.push({ name: f[header.name] || 'Unknown', phone, address, meta: address });
+    }
+    return entries;
+  }
+
+  // No header: handle each line on its own so a mixed paste (some plain
+  // "Name, Phone" lines, some full result-CSV rows) still works. A line
+  // that splits into exactly the app's own 9-column results shape is
+  // parsed by fixed position; anything else falls back to the original
+  // "find one phone, the rest is the name" heuristic.
   const entries = [];
-  for (const rawLine of (text || '').split('\n')) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const m = line.match(phoneRe);
-    if (!m) continue;
-    const phone = m[1].trim();
-    let name = (line.slice(0, m.index) + line.slice(m.index + m[0].length))
-      .replace(/^[,:\-\s]+|[,:\-\s]+$/g, '').trim();
-    entries.push({ name: name || 'Unknown', phone });
+  for (const line of lines) {
+    const asCsvRow = splitCsvLine(line);
+    if (asCsvRow.length === RESULTS_CSV_FIELDS.length) {
+      const row = Object.fromEntries(RESULTS_CSV_FIELDS.map((k, i) => [k, asCsvRow[i]]));
+      if (row.phone) {
+        entries.push({ name: row.owner || 'Unknown', phone: row.phone, address: row.address, meta: row.address });
+        continue;
+      }
+      continue;  // a results row with no phone (SKIPPED/NOT_FOUND) has nothing to call
+    }
+    const freeform = entryFromFreeformLine(line);
+    if (freeform) entries.push(freeform);
   }
   return entries;
 }
