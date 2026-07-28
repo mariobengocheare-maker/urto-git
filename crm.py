@@ -9,10 +9,20 @@ import os
 import shutil
 import sqlite3
 import threading
+import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from werkzeug.utils import secure_filename
+
 DB_PATH = Path(__file__).parent / "urto_crm.db"
+
+# Transaction Manager's uploaded document files (blank templates + signed
+# copies) — gitignored, same reasoning as urto_crm.db: real files, never
+# committed. Mirrored into the backup dir alongside the DB (see below).
+DOCUMENTS_DIR = Path(__file__).parent / "documents"
+TEMPLATES_DIR = DOCUMENTS_DIR / "templates"
+SIGNED_DIR = DOCUMENTS_DIR / "signed"
 
 # ---- Automatic backup ----
 # urto_crm.db lives only on this PC and is gitignored on purpose (it holds
@@ -46,9 +56,48 @@ def mark_dirty():
     _dirty = True
 
 
+def _mirror_documents_folder(backup_dir: Path):
+    """Mirrors DOCUMENTS_DIR (Transaction Manager's uploaded templates +
+    signed files) into the backup dir — copies new/changed files AND
+    removes ones no longer present in the source, so a deleted document
+    actually disappears from the backup too, same principle as the CRM's
+    instant-mirror deletions. Skipped entirely if there are no documents
+    yet, so this feature adds nothing to the backup folder until used."""
+    if not DOCUMENTS_DIR.exists():
+        return
+    dest_root = backup_dir / "documents"
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    src_files = set()
+    for src_path in DOCUMENTS_DIR.rglob("*"):
+        if src_path.is_file():
+            rel = src_path.relative_to(DOCUMENTS_DIR)
+            src_files.add(rel)
+            dest_path = dest_root / rel
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if not dest_path.exists() or dest_path.stat().st_mtime < src_path.stat().st_mtime:
+                    shutil.copy2(src_path, dest_path)
+            except OSError:
+                pass
+
+    for dest_path in list(dest_root.rglob("*")):
+        if dest_path.is_file() and dest_path.relative_to(dest_root) not in src_files:
+            dest_path.unlink(missing_ok=True)
+    for dest_path in sorted([p for p in dest_root.rglob("*") if p.is_dir()], key=lambda p: -len(str(p))):
+        try:
+            dest_path.rmdir()  # only removes it if now empty
+        except OSError:
+            pass
+
+
 def _write_backup(reason, snapshot: bool, keep=30) -> dict:
     """Copy the live DB to the backup dir. Always refreshes the live mirror;
-    when snapshot=True also writes a timestamped copy and prunes old ones.
+    when snapshot=True also writes a timestamped copy, prunes old ones, and
+    mirrors the Transaction Manager documents folder (kept off the
+    high-frequency instant-mirror path since it can involve real file I/O,
+    not just a small DB overwrite — snapshot runs at most every ~60s, on
+    startup, or via "Backup Now", which is frequent enough for documents).
     Copying a plain (non-WAL) sqlite file with no open write transaction is a
     consistent, safe file copy."""
     global _dirty, _last_backup
@@ -68,6 +117,10 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
             snaps = sorted(backup_dir.glob("urto_crm_[0-9]*.db"))
             for old in snaps[:-keep]:
                 old.unlink(missing_ok=True)
+            try:
+                _mirror_documents_folder(backup_dir)
+            except Exception:
+                pass  # never let a documents-folder hiccup break the DB backup
 
         _dirty = False
         _last_backup = {"at": datetime.now().isoformat(timespec="seconds"), "path": str(dest), "reason": reason}
@@ -168,8 +221,76 @@ def init_db():
             count INTEGER NOT NULL DEFAULT 0
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS document_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            template_filename TEXT,
+            template_original_name TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS transaction_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+            document_type_id INTEGER REFERENCES document_types(id) ON DELETE SET NULL,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            signed_filename TEXT,
+            signed_original_name TEXT,
+            signed_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
     conn.commit()
+    _seed_document_types(conn)
     conn.close()
+
+
+# Only the documents Mario named explicitly (Listing Agreement, Compensation
+# Agreement, Escrow Letter) are seeded — everything else is left for him to
+# add himself via the checklist manager, rather than guessing at his actual
+# required paperwork for the other transaction types. Gated by a one-time
+# app_settings marker (not "is the table empty"), so deliberately deleting
+# every row down to zero doesn't cause them to reappear on the next restart.
+DEFAULT_DOCUMENT_TYPES = {
+    "listing": ["Listing Agreement", "Compensation Agreement", "Escrow Letter"],
+}
+_SEED_MARKER_KEY = "document_types_seeded"
+
+
+def _seed_document_types(conn):
+    already = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?", (_SEED_MARKER_KEY,)
+    ).fetchone()
+    if already:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    for txn_type, names in DEFAULT_DOCUMENT_TYPES.items():
+        for i, name in enumerate(names):
+            conn.execute(
+                "INSERT INTO document_types (transaction_type, name, sort_order, created_at) VALUES (?, ?, ?, ?)",
+                (txn_type, name, i, now),
+            )
+    conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?)", (_SEED_MARKER_KEY, "1"))
+    conn.commit()
 
 
 def _monday_of(d: date) -> date:
@@ -533,3 +654,293 @@ def get_calendar_events(year: int, month: int) -> list:
 
     events.sort(key=lambda e: (e["date"], e.get("time") or ""))
     return events
+
+
+# ===================== Transaction Manager =====================
+# Four fixed transaction types (not a user-editable list — only the
+# required-document checklist per type is editable). Kept as a plain tuple
+# of (key, label) rather than a DB table since Mario asked to customize the
+# document checklist, not add arbitrary new transaction types.
+TRANSACTION_TYPES = [
+    ("listing", "Listing"),
+    ("rental_listing", "Rental Listing"),
+    ("buyer_representation", "Buyer Representation"),
+    ("rental", "Rental"),
+]
+TRANSACTION_TYPE_KEYS = {k for k, _ in TRANSACTION_TYPES}
+TRANSACTION_STATUSES = {"active", "under_contract", "closed"}
+
+
+def _store_upload(file_storage, dest_dir: Path) -> tuple:
+    """Saves an uploaded file under a collision-safe generated name, keeping
+    the original filename separately for display/download. Returns
+    (stored_filename, original_name)."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    original_name = file_storage.filename or "document"
+    safe = secure_filename(original_name) or "document"
+    stored = f"{uuid.uuid4().hex[:12]}_{safe}"
+    file_storage.save(dest_dir / stored)
+    return stored, original_name
+
+
+def _delete_stored_file(dest_dir: Path, stored_filename):
+    if not stored_filename:
+        return
+    try:
+        (dest_dir / stored_filename).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+# ---- Document type checklists (shared per transaction type) ----
+
+def list_document_types(transaction_type: str) -> list:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM document_types WHERE transaction_type = ? ORDER BY sort_order, id",
+        (transaction_type,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_document_type(document_type_id: int) -> dict:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM document_types WHERE id = ?", (document_type_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_transaction_document(transaction_document_id: int) -> dict:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM transaction_documents WHERE id = ?", (transaction_document_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def add_document_type(transaction_type: str, name: str) -> dict:
+    conn = get_conn()
+    max_order = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) AS m FROM document_types WHERE transaction_type = ?",
+        (transaction_type,),
+    ).fetchone()["m"]
+    now = datetime.now().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO document_types (transaction_type, name, sort_order, created_at) VALUES (?, ?, ?, ?)",
+        (transaction_type, name, max_order + 1, now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM document_types WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    on_data_changed("document type added")
+    return dict(row)
+
+
+def delete_document_type(document_type_id: int):
+    """Removes a document from a type's checklist — only affects NEW
+    transactions created after this point. Existing transactions keep their
+    own snapshotted row (name + any signed upload) regardless, since
+    transaction_documents.document_type_id is ON DELETE SET NULL rather than
+    CASCADE — the row just loses its link to a (now-gone) shared template."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM document_types WHERE id = ?", (document_type_id,)).fetchone()
+    if row:
+        _delete_stored_file(TEMPLATES_DIR, row["template_filename"])
+    conn.execute("DELETE FROM document_types WHERE id = ?", (document_type_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("document type removed")
+
+
+def set_document_type_template(document_type_id: int, file_storage) -> dict:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM document_types WHERE id = ?", (document_type_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    _delete_stored_file(TEMPLATES_DIR, row["template_filename"])
+    stored, original = _store_upload(file_storage, TEMPLATES_DIR)
+    conn.execute(
+        "UPDATE document_types SET template_filename = ?, template_original_name = ? WHERE id = ?",
+        (stored, original, document_type_id),
+    )
+    conn.commit()
+    updated = conn.execute("SELECT * FROM document_types WHERE id = ?", (document_type_id,)).fetchone()
+    conn.close()
+    on_data_changed("document template uploaded")
+    return dict(updated)
+
+
+def remove_document_type_template(document_type_id: int):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM document_types WHERE id = ?", (document_type_id,)).fetchone()
+    if row:
+        _delete_stored_file(TEMPLATES_DIR, row["template_filename"])
+        conn.execute(
+            "UPDATE document_types SET template_filename = NULL, template_original_name = NULL WHERE id = ?",
+            (document_type_id,),
+        )
+        conn.commit()
+    conn.close()
+    on_data_changed("document template removed")
+
+
+# ---- Transactions ----
+
+def _transaction_to_dict(row, documents=None) -> dict:
+    d = dict(row)
+    if documents is not None:
+        d["documents"] = documents
+        d["total_docs"] = len(documents)
+        d["signed_docs"] = sum(1 for doc in documents if doc["signed_filename"])
+    return d
+
+
+def list_transactions() -> list:
+    conn = get_conn()
+    txns = conn.execute("SELECT * FROM transactions ORDER BY created_at DESC, id DESC").fetchall()
+    result = []
+    for t in txns:
+        docs = conn.execute(
+            "SELECT * FROM transaction_documents WHERE transaction_id = ? ORDER BY sort_order, id",
+            (t["id"],),
+        ).fetchall()
+        result.append(_transaction_to_dict(t, [dict(d) for d in docs]))
+    conn.close()
+    return result
+
+
+def create_transaction(transaction_type: str, title: str) -> dict:
+    """Creates a transaction and snapshots the type's CURRENT document
+    checklist into its own independent rows — later edits to the type's
+    checklist (add/remove/rename) never retroactively change an already-
+    created transaction, so an uploaded signed document is never orphaned
+    by someone editing the shared template afterward."""
+    conn = get_conn()
+    now = datetime.now().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO transactions (transaction_type, title, status, created_at) VALUES (?, ?, 'active', ?)",
+        (transaction_type, title, now),
+    )
+    txn_id = cur.lastrowid
+
+    doc_types = conn.execute(
+        "SELECT * FROM document_types WHERE transaction_type = ? ORDER BY sort_order, id",
+        (transaction_type,),
+    ).fetchall()
+    for i, dt in enumerate(doc_types):
+        conn.execute(
+            "INSERT INTO transaction_documents (transaction_id, document_type_id, name, sort_order) VALUES (?, ?, ?, ?)",
+            (txn_id, dt["id"], dt["name"], i),
+        )
+    conn.commit()
+    row = conn.execute("SELECT * FROM transactions WHERE id = ?", (txn_id,)).fetchone()
+    docs = conn.execute(
+        "SELECT * FROM transaction_documents WHERE transaction_id = ? ORDER BY sort_order, id", (txn_id,)
+    ).fetchall()
+    conn.close()
+    on_data_changed("transaction created")
+    return _transaction_to_dict(row, [dict(d) for d in docs])
+
+
+# Joins each transaction_document row with its (possibly still-linked)
+# document_type, so the transaction detail view can show the shared
+# template's filename without the transaction owning its own copy.
+TXN_DOC_JOIN_SELECT = """
+    SELECT transaction_documents.*,
+           document_types.template_filename AS template_filename,
+           document_types.template_original_name AS template_original_name
+    FROM transaction_documents
+    LEFT JOIN document_types ON document_types.id = transaction_documents.document_type_id
+"""
+
+
+def get_transaction(transaction_id: int) -> dict:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    docs = conn.execute(
+        TXN_DOC_JOIN_SELECT + " WHERE transaction_documents.transaction_id = ? ORDER BY transaction_documents.sort_order, transaction_documents.id",
+        (transaction_id,),
+    ).fetchall()
+    conn.close()
+    return _transaction_to_dict(row, [dict(d) for d in docs])
+
+
+def update_transaction(transaction_id: int, title: str, status: str) -> dict:
+    conn = get_conn()
+    existing = conn.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return None
+    conn.execute(
+        "UPDATE transactions SET title = ?, status = ? WHERE id = ?",
+        (title, status, transaction_id),
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("transaction updated")
+    return get_transaction(transaction_id)
+
+
+def delete_transaction(transaction_id: int):
+    conn = get_conn()
+    docs = conn.execute(
+        "SELECT * FROM transaction_documents WHERE transaction_id = ?", (transaction_id,)
+    ).fetchall()
+    for d in docs:
+        _delete_stored_file(SIGNED_DIR, d["signed_filename"])
+    conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))  # cascades transaction_documents
+    conn.commit()
+    conn.close()
+    on_data_changed("transaction deleted")
+
+
+def upload_signed_document(transaction_document_id: int, file_storage) -> dict:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM transaction_documents WHERE id = ?", (transaction_document_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    _delete_stored_file(SIGNED_DIR, row["signed_filename"])
+    stored, original = _store_upload(file_storage, SIGNED_DIR)
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        "UPDATE transaction_documents SET signed_filename = ?, signed_original_name = ?, signed_at = ? WHERE id = ?",
+        (stored, original, now, transaction_document_id),
+    )
+    conn.commit()
+    updated = conn.execute(
+        TXN_DOC_JOIN_SELECT + " WHERE transaction_documents.id = ?", (transaction_document_id,)
+    ).fetchone()
+    conn.close()
+    on_data_changed("signed document uploaded")
+    return dict(updated)
+
+
+def remove_signed_document(transaction_document_id: int) -> dict:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM transaction_documents WHERE id = ?", (transaction_document_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    _delete_stored_file(SIGNED_DIR, row["signed_filename"])
+    conn.execute(
+        "UPDATE transaction_documents SET signed_filename = NULL, signed_original_name = NULL, signed_at = NULL WHERE id = ?",
+        (transaction_document_id,),
+    )
+    conn.commit()
+    updated = conn.execute(
+        TXN_DOC_JOIN_SELECT + " WHERE transaction_documents.id = ?", (transaction_document_id,)
+    ).fetchone()
+    conn.close()
+    on_data_changed("signed document removed")
+    return dict(updated)

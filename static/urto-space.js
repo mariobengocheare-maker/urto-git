@@ -41,6 +41,7 @@ const ORB_DEFS = [
   { key: 'lookup', label: 'SKIP TRACE', caption: 'Enter URTO Skip Trace →', color: 0x38d9ff, radius: 17.5, speed: 0.12, phase: 0.0, tiltX: 0.42, tiltZ: 0.10, bobSpeed: 1.1 },
   { key: 'crm', label: 'CRM', caption: 'Enter URTO CRM →', color: 0xa78bfa, radius: 21.5, speed: -0.09, phase: 2.1, tiltX: -0.30, tiltZ: 0.24, bobSpeed: 0.8 },
   { key: 'dialer', label: 'DIALER', caption: 'Enter URTO Dialer →', color: 0xf472b6, radius: 25.5, speed: 0.075, phase: 4.2, tiltX: 0.16, tiltZ: -0.34, bobSpeed: 0.95 },
+  { key: 'txn', label: 'TRANSACTIONS', caption: 'Enter Transaction Manager →', color: 0xf5c451, radius: 29.5, speed: -0.06, phase: 5.6, tiltX: 0.08, tiltZ: 0.30, bobSpeed: 0.7 },
 ];
 
 function makeRadialTexture(inner, outer) {
@@ -64,8 +65,20 @@ function makeLabelTexture(text, accentCss) {
   const ctx = c.getContext('2d');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  try { ctx.letterSpacing = '18px'; } catch (e) { /* older engines */ }
-  ctx.font = '700 84px "Segoe UI", -apple-system, Roboto, sans-serif';
+  const letterSpacingPx = 18;
+  try { ctx.letterSpacing = letterSpacingPx + 'px'; } catch (e) { /* older engines */ }
+
+  // Auto-shrink so a longer label (e.g. "TRANSACTIONS") still fits the same
+  // canvas width as short ones ("CRM") instead of overflowing/clipping.
+  let fontSize = 84;
+  const maxWidth = 920;
+  ctx.font = `700 ${fontSize}px "Segoe UI", -apple-system, Roboto, sans-serif`;
+  const measuredWidth = () => ctx.measureText(text).width + letterSpacingPx * Math.max(text.length - 1, 0);
+  while (fontSize > 34 && measuredWidth() > maxWidth) {
+    fontSize -= 4;
+    ctx.font = `700 ${fontSize}px "Segoe UI", -apple-system, Roboto, sans-serif`;
+  }
+
   ctx.shadowColor = accentCss;
   ctx.shadowBlur = 42;
   ctx.fillStyle = 'rgba(255,255,255,0.96)';

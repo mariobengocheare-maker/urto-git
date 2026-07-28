@@ -400,6 +400,9 @@
   .status-pill.ERROR, .status-pill.overdue { background: var(--danger-bg); color: var(--danger-fg); }
   .status-pill.SKIPPED { background: var(--muted-bg); color: var(--muted-fg); font-style: italic; }
   .status-pill.next_due, .status-pill.upcoming { background: var(--info-bg); color: var(--info-fg); }
+  .status-pill.txn-active { background: var(--success-bg); color: var(--success-fg); }
+  .status-pill.txn-under_contract { background: var(--warn-bg); color: var(--warn-fg); }
+  .status-pill.txn-closed { background: linear-gradient(180deg, var(--gold-bright), var(--gold)); color: #2a2205; }
 
   footer.site-footer {
     text-align: center;
@@ -458,6 +461,69 @@
   .client-card .meta { color: var(--text-secondary); font-size: .82rem; margin-top: 2px; }
   .client-card .followup-tag { font-size: .72rem; white-space: nowrap; }
   .empty-state { color: var(--text-secondary); font-size: .9rem; padding: 20px 4px; text-align: center; }
+
+  /* ---- Transaction Manager ---- */
+  .txn-list { display: grid; gap: 12px; margin-top: 18px; }
+  .txn-card {
+    position: relative;
+    background: linear-gradient(180deg, rgba(28,40,66,.5), rgba(15,23,40,.55));
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(201,162,39,.13);
+    border-left: 3px solid rgba(201,162,39,.35);
+    border-radius: 12px;
+    padding: 14px 16px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    transition: border-color .18s, box-shadow .18s, transform .18s;
+  }
+  .txn-card:hover {
+    border-color: var(--gold);
+    border-left-color: var(--gold);
+    box-shadow: 0 8px 26px rgba(0,0,0,.35), 0 0 22px rgba(201,162,39,.18);
+    transform: translateY(-2px);
+  }
+  .txn-card .title { font-weight: 700; }
+  .txn-card .meta { color: var(--text-secondary); font-size: .82rem; margin-top: 2px; }
+  .txn-card .right { display: flex; align-items: center; gap: 12px; }
+  .txn-card .progress { font-size: .8rem; color: var(--text-secondary); white-space: nowrap; }
+
+  .txn-detail-card { margin-top: 14px; }
+  .txn-detail-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .txn-title-input { flex: 1; min-width: 220px; font-size: 1.1rem; font-weight: 700; }
+  .txn-status-select { width: auto; }
+  .txn-detail-meta { color: var(--text-secondary); font-size: .85rem; margin-top: 8px; }
+
+  .txn-doc-table { margin-top: 22px; display: grid; gap: 10px; }
+  .txn-doc-row {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr;
+    gap: 12px;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .txn-doc-row.signed { border-left: 3px solid var(--success-fg); }
+  .txn-doc-name { font-weight: 600; }
+  .txn-doc-box { display: flex; flex-direction: column; gap: 6px; }
+  .txn-doc-box-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); }
+  .txn-doc-file { display: flex; align-items: center; gap: 8px; font-size: .82rem; flex-wrap: wrap; }
+  .txn-doc-file a { color: var(--gold-bright); text-decoration: none; }
+  .txn-doc-file a:hover { text-decoration: underline; }
+  .txn-doc-empty { color: var(--text-secondary); font-size: .8rem; font-style: italic; }
+
+  .txn-doctype-list { display: grid; gap: 10px; margin-top: 14px; max-height: 340px; overflow-y: auto; }
+  .txn-doctype-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  }
+  .txn-doctype-row .name { font-weight: 600; flex: 1; min-width: 140px; }
+  .txn-doctype-row .tmpl-info { font-size: .78rem; color: var(--text-secondary); }
 
   .modal-overlay {
     display: none;
@@ -759,6 +825,7 @@
   <button class="tab-btn" id="tabLookupBtn">Owner Lookup</button>
   <button class="tab-btn" id="tabCrmBtn">URTO CRM</button>
   <button class="tab-btn" id="tabDialerBtn">URTO Dialer</button>
+  <button class="tab-btn" id="tabTxnBtn">Transactions</button>
 </div>
 
 <main>
@@ -972,6 +1039,40 @@
   </div>
 </section>
 
+<section id="txnSection" style="display:none">
+  <h1>Transaction Manager</h1>
+  <p class="sub">Track required documents through closing for each of your deals.</p>
+
+  <div id="txnListView">
+    <div class="row" style="margin-top:0">
+      <button id="txnNewBtn">+ New Transaction</button>
+      <button class="ghost" id="txnManageDocsBtn">⚙ Manage Document Checklists</button>
+    </div>
+    <div id="txnList" class="txn-list"></div>
+  </div>
+
+  <div id="txnDetailView" style="display:none">
+    <button class="ghost small" id="txnBackBtn">&larr; Back to Transactions</button>
+    <div class="card txn-detail-card">
+      <div class="txn-detail-head">
+        <input type="text" id="txnDetailTitle" class="txn-title-input" placeholder="Transaction title">
+        <select id="txnDetailStatus" class="txn-status-select">
+          <option value="active">Active</option>
+          <option value="under_contract">Under Contract</option>
+          <option value="closed">Closed</option>
+        </select>
+      </div>
+      <div class="txn-detail-meta" id="txnDetailMeta"></div>
+
+      <div class="txn-doc-table" id="txnDocTable"></div>
+
+      <div class="row" style="margin-top:22px">
+        <button class="danger small" id="txnDeleteBtn" style="background:var(--danger-fg)">Delete Transaction</button>
+      </div>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer class="site-footer">
@@ -1112,6 +1213,48 @@
         <button type="submit">Save Event</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- New Transaction modal -->
+<div class="modal-overlay" id="txnNewOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>New Transaction</h2>
+      <button class="modal-close" id="txnNewCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="txnNewError"></div>
+    <form id="txnNewForm">
+      <div class="form-group">
+        <label for="txnNewTitle">Title *</label>
+        <input type="text" id="txnNewTitle" required placeholder="e.g. 123 Main St - Smith Listing">
+      </div>
+      <div class="form-group">
+        <label for="txnNewType">Transaction Type *</label>
+        <select id="txnNewType"></select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="txnNewCancelBtn">Cancel</button>
+        <button type="submit">Create Transaction</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Manage Document Checklists modal -->
+<div class="modal-overlay" id="txnDocTypesOverlay">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-head">
+      <h2>Manage Document Checklists</h2>
+      <button class="modal-close" id="txnDocTypesCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-6px">Changes here only affect transactions you create from now on — existing transactions keep the documents they already have.</p>
+    <div class="crm-subtabs" id="txnTypeSubtabs"></div>
+    <div id="txnDocTypesList" class="txn-doctype-list"></div>
+    <div class="row" style="margin-top:14px">
+      <input type="text" id="txnNewDocName" placeholder="e.g. HOA Disclosure">
+      <button class="small" id="txnAddDocTypeBtn">+ Add Document</button>
+    </div>
   </div>
 </div>
 
@@ -1286,16 +1429,19 @@ const tabHomeBtn = document.getElementById('tabHomeBtn');
 const tabLookupBtn = document.getElementById('tabLookupBtn');
 const tabCrmBtn = document.getElementById('tabCrmBtn');
 const tabDialerBtn = document.getElementById('tabDialerBtn');
+const tabTxnBtn = document.getElementById('tabTxnBtn');
 const homeSection = document.getElementById('homeSection');
 const lookupSection = document.getElementById('lookupSection');
 const crmSection = document.getElementById('crmSection');
 const dialerSection = document.getElementById('dialerSection');
+const txnSection = document.getElementById('txnSection');
 
 const TOP_TABS = [
   { key: 'home', btn: tabHomeBtn, section: homeSection, onShow: null },
   { key: 'lookup', btn: tabLookupBtn, section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
+  { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
 ];
 
 function showTopTab(target) {
@@ -1328,6 +1474,7 @@ tabHomeBtn.addEventListener('click', () => showTopTab(TOP_TABS[0]));
 tabLookupBtn.addEventListener('click', () => showTopTab(TOP_TABS[1]));
 tabCrmBtn.addEventListener('click', () => showTopTab(TOP_TABS[2]));
 tabDialerBtn.addEventListener('click', () => showTopTab(TOP_TABS[3]));
+tabTxnBtn.addEventListener('click', () => showTopTab(TOP_TABS[4]));
 
 /* Bridges for the WebGL scene (module script) */
 window.__urtoEnterSection = (key) => showTopTabByKey(key);
@@ -2292,6 +2439,298 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
     e.preventDefault();
     dialerPrev();
+  }
+});
+
+/* ===================== Transaction Manager ===================== */
+const TXN_STATUS_LABELS = { active: 'Active', under_contract: 'Under Contract', closed: 'Closed' };
+let txnTypes = [];          // [{key, label}, ...] loaded once from the server
+let currentTxnId = null;    // which transaction the detail view is showing
+
+const txnListView = document.getElementById('txnListView');
+const txnDetailView = document.getElementById('txnDetailView');
+const txnListEl = document.getElementById('txnList');
+const txnNewBtn = document.getElementById('txnNewBtn');
+const txnManageDocsBtn = document.getElementById('txnManageDocsBtn');
+const txnBackBtn = document.getElementById('txnBackBtn');
+const txnDetailTitle = document.getElementById('txnDetailTitle');
+const txnDetailStatus = document.getElementById('txnDetailStatus');
+const txnDetailMeta = document.getElementById('txnDetailMeta');
+const txnDocTable = document.getElementById('txnDocTable');
+const txnDeleteBtn = document.getElementById('txnDeleteBtn');
+
+async function ensureTxnTypesLoaded() {
+  if (txnTypes.length) return;
+  const res = await fetch('/api/txn/types');
+  txnTypes = res.ok ? await res.json() : [];
+}
+
+function txnTypeLabel(key) {
+  const t = txnTypes.find(t => t.key === key);
+  return t ? t.label : key;
+}
+
+function showTxnListView() {
+  currentTxnId = null;
+  txnDetailView.style.display = 'none';
+  txnListView.style.display = 'block';
+  loadTxnList();
+}
+
+async function loadTxnList() {
+  await ensureTxnTypesLoaded();
+  const res = await fetch('/api/txn/transactions');
+  const txns = res.ok ? await res.json() : [];
+  txnListEl.innerHTML = '';
+  if (txns.length === 0) {
+    txnListEl.innerHTML = '<div class="empty-state">No transactions yet. Click "+ New Transaction" to start tracking one.</div>';
+    return;
+  }
+  for (const t of txns) {
+    const card = document.createElement('div');
+    card.className = 'txn-card';
+    card.innerHTML = `
+      <div>
+        <div class="title">${escapeHtml(t.title)}</div>
+        <div class="meta">${escapeHtml(txnTypeLabel(t.transaction_type))}</div>
+      </div>
+      <div class="right">
+        <span class="progress">${t.signed_docs}/${t.total_docs} signed</span>
+        <span class="status-pill txn-${t.status}">${TXN_STATUS_LABELS[t.status] || t.status}</span>
+      </div>
+    `;
+    card.addEventListener('click', () => openTxnDetail(t.id));
+    txnListEl.appendChild(card);
+  }
+}
+
+async function openTxnDetail(txnId) {
+  await ensureTxnTypesLoaded();
+  const res = await fetch(`/api/txn/transactions/${txnId}`);
+  if (!res.ok) return;
+  const t = await res.json();
+  currentTxnId = t.id;
+
+  txnDetailTitle.value = t.title;
+  txnDetailStatus.value = t.status;
+  txnDetailMeta.textContent = `${txnTypeLabel(t.transaction_type)} · created ${t.created_at.slice(0, 10)}`;
+
+  txnDocTable.innerHTML = '';
+  if (t.documents.length === 0) {
+    txnDocTable.innerHTML = '<div class="empty-state">This transaction type has no required documents defined yet. Add some in "Manage Document Checklists".</div>';
+  }
+  for (const doc of t.documents) {
+    const row = document.createElement('div');
+    row.className = 'txn-doc-row' + (doc.signed_filename ? ' signed' : '');
+
+    const templateBox = doc.template_filename
+      ? `<div class="txn-doc-file">📄 <a href="/api/txn/document_types/${doc.document_type_id}/template" target="_blank">${escapeHtml(doc.template_original_name || 'template')}</a></div>`
+      : `<div class="txn-doc-empty">No template uploaded (see Manage Document Checklists)</div>`;
+
+    const signedBox = doc.signed_filename
+      ? `<div class="txn-doc-file">✅ <a href="/api/txn/transaction_documents/${doc.id}/signed" target="_blank">${escapeHtml(doc.signed_original_name || 'signed')}</a>
+           <button class="ghost small" data-remove-signed="${doc.id}">Remove</button></div>`
+      : `<div class="txn-doc-file"><button class="small" data-upload-signed="${doc.id}">Upload signed copy</button></div>`;
+
+    row.innerHTML = `
+      <div class="txn-doc-name">${escapeHtml(doc.name)}</div>
+      <div class="txn-doc-box"><div class="txn-doc-box-label">Template</div>${templateBox}</div>
+      <div class="txn-doc-box"><div class="txn-doc-box-label">Signed</div>${signedBox}</div>
+    `;
+    txnDocTable.appendChild(row);
+  }
+
+  // Wire up per-row upload/remove buttons (delegated per render, since rows are rebuilt each time).
+  txnDocTable.querySelectorAll('[data-upload-signed]').forEach(btn => {
+    btn.addEventListener('click', () => triggerSignedUpload(btn.getAttribute('data-upload-signed')));
+  });
+  txnDocTable.querySelectorAll('[data-remove-signed]').forEach(btn => {
+    btn.addEventListener('click', () => removeSignedDocument(btn.getAttribute('data-remove-signed')));
+  });
+
+  txnListView.style.display = 'none';
+  txnDetailView.style.display = 'block';
+}
+
+function triggerSignedUpload(docId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.addEventListener('change', async () => {
+    if (!input.files.length) return;
+    const form = new FormData();
+    form.append('file', input.files[0]);
+    const res = await fetch(`/api/txn/transaction_documents/${docId}/signed`, { method: 'POST', body: form });
+    if (res.ok) openTxnDetail(currentTxnId);
+    else alert('Upload failed.');
+  });
+  input.click();
+}
+
+async function removeSignedDocument(docId) {
+  await fetch(`/api/txn/transaction_documents/${docId}/signed`, { method: 'DELETE' });
+  openTxnDetail(currentTxnId);
+}
+
+txnBackBtn.addEventListener('click', showTxnListView);
+
+// Autosave title/status edits — no explicit "Save" button, matches the
+// low-friction feel of the rest of the app.
+async function saveTxnDetailFields() {
+  if (!currentTxnId) return;
+  const title = txnDetailTitle.value.trim();
+  if (!title) return;
+  await fetch(`/api/txn/transactions/${currentTxnId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, status: txnDetailStatus.value }),
+  });
+}
+txnDetailTitle.addEventListener('blur', saveTxnDetailFields);
+txnDetailStatus.addEventListener('change', async () => {
+  await saveTxnDetailFields();
+  loadTxnList(); // keep the list's status pill in sync for whenever we go back
+});
+
+txnDeleteBtn.addEventListener('click', async () => {
+  if (!currentTxnId) return;
+  if (!confirm('Delete this transaction and all its uploaded documents? This cannot be undone.')) return;
+  await fetch(`/api/txn/transactions/${currentTxnId}`, { method: 'DELETE' });
+  showTxnListView();
+});
+
+/* ---- New Transaction modal ---- */
+const txnNewOverlay = document.getElementById('txnNewOverlay');
+const txnNewForm = document.getElementById('txnNewForm');
+const txnNewTitle = document.getElementById('txnNewTitle');
+const txnNewType = document.getElementById('txnNewType');
+const txnNewError = document.getElementById('txnNewError');
+
+txnNewBtn.addEventListener('click', async () => {
+  await ensureTxnTypesLoaded();
+  txnNewType.innerHTML = txnTypes.map(t => `<option value="${t.key}">${escapeHtml(t.label)}</option>`).join('');
+  txnNewTitle.value = '';
+  txnNewError.style.display = 'none';
+  txnNewOverlay.classList.add('show');
+});
+document.getElementById('txnNewCloseBtn').addEventListener('click', () => txnNewOverlay.classList.remove('show'));
+document.getElementById('txnNewCancelBtn').addEventListener('click', () => txnNewOverlay.classList.remove('show'));
+
+txnNewForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const res = await fetch('/api/txn/transactions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transaction_type: txnNewType.value, title: txnNewTitle.value.trim() }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    txnNewError.textContent = data.error || 'Could not create transaction.';
+    txnNewError.style.display = 'block';
+    return;
+  }
+  txnNewOverlay.classList.remove('show');
+  openTxnDetail(data.id);
+});
+
+/* ---- Manage Document Checklists modal ---- */
+const txnDocTypesOverlay = document.getElementById('txnDocTypesOverlay');
+const txnTypeSubtabs = document.getElementById('txnTypeSubtabs');
+const txnDocTypesList = document.getElementById('txnDocTypesList');
+const txnNewDocName = document.getElementById('txnNewDocName');
+let activeTxnTypeForDocs = null;
+
+txnManageDocsBtn.addEventListener('click', async () => {
+  await ensureTxnTypesLoaded();
+  activeTxnTypeForDocs = txnTypes[0]?.key || null;
+  renderTxnTypeSubtabs();
+  await loadDocTypesList();
+  txnDocTypesOverlay.classList.add('show');
+});
+document.getElementById('txnDocTypesCloseBtn').addEventListener('click', () => {
+  txnDocTypesOverlay.classList.remove('show');
+  loadTxnList(); // template changes don't affect the list, but stay in sync regardless
+});
+
+function renderTxnTypeSubtabs() {
+  txnTypeSubtabs.innerHTML = '';
+  for (const t of txnTypes) {
+    const btn = document.createElement('button');
+    btn.textContent = t.label;
+    btn.className = t.key === activeTxnTypeForDocs ? 'active' : '';
+    btn.addEventListener('click', async () => {
+      activeTxnTypeForDocs = t.key;
+      renderTxnTypeSubtabs();
+      await loadDocTypesList();
+    });
+    txnTypeSubtabs.appendChild(btn);
+  }
+}
+
+async function loadDocTypesList() {
+  if (!activeTxnTypeForDocs) return;
+  const res = await fetch(`/api/txn/document_types?type=${encodeURIComponent(activeTxnTypeForDocs)}`);
+  const docs = res.ok ? await res.json() : [];
+  txnDocTypesList.innerHTML = '';
+  if (docs.length === 0) {
+    txnDocTypesList.innerHTML = '<div class="empty-state">No documents yet for this type — add the first one below.</div>';
+  }
+  for (const d of docs) {
+    const row = document.createElement('div');
+    row.className = 'txn-doctype-row';
+    const tmplInfo = d.template_filename
+      ? `<span class="tmpl-info">📄 ${escapeHtml(d.template_original_name || 'template')}</span>
+         <a href="/api/txn/document_types/${d.id}/template" target="_blank" class="ghost small" style="text-decoration:none; display:inline-flex; align-items:center; padding:6px 12px; border-radius:7px;">View</a>
+         <button class="ghost small" data-remove-template="${d.id}">Remove template</button>`
+      : `<span class="tmpl-info">No template</span>
+         <button class="ghost small" data-upload-template="${d.id}">Upload template</button>`;
+    row.innerHTML = `
+      <span class="name">${escapeHtml(d.name)}</span>
+      ${tmplInfo}
+      <button class="danger small" data-delete-doctype="${d.id}" style="background:var(--danger-fg)">Remove</button>
+    `;
+    txnDocTypesList.appendChild(row);
+  }
+
+  txnDocTypesList.querySelectorAll('[data-upload-template]').forEach(btn => {
+    btn.addEventListener('click', () => triggerTemplateUpload(btn.getAttribute('data-upload-template')));
+  });
+  txnDocTypesList.querySelectorAll('[data-remove-template]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/txn/document_types/${btn.getAttribute('data-remove-template')}/template`, { method: 'DELETE' });
+      loadDocTypesList();
+    });
+  });
+  txnDocTypesList.querySelectorAll('[data-delete-doctype]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Remove this document from the checklist? Existing transactions keep it; only future ones will leave it out.')) return;
+      await fetch(`/api/txn/document_types/${btn.getAttribute('data-delete-doctype')}`, { method: 'DELETE' });
+      loadDocTypesList();
+    });
+  });
+}
+
+function triggerTemplateUpload(docTypeId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.addEventListener('change', async () => {
+    if (!input.files.length) return;
+    const form = new FormData();
+    form.append('file', input.files[0]);
+    const res = await fetch(`/api/txn/document_types/${docTypeId}/template`, { method: 'POST', body: form });
+    if (res.ok) loadDocTypesList();
+    else alert('Upload failed.');
+  });
+  input.click();
+}
+
+document.getElementById('txnAddDocTypeBtn').addEventListener('click', async () => {
+  const name = txnNewDocName.value.trim();
+  if (!name || !activeTxnTypeForDocs) return;
+  const res = await fetch('/api/txn/document_types', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transaction_type: activeTxnTypeForDocs, name }),
+  });
+  if (res.ok) {
+    txnNewDocName.value = '';
+    loadDocTypesList();
   }
 });
 

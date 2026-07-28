@@ -355,5 +355,144 @@ def crm_calendar():
     return jsonify(crm.get_calendar_events(year, month))
 
 
+# ===================== Transaction Manager =====================
+
+@app.route("/api/txn/types")
+def txn_types():
+    return jsonify([{"key": k, "label": label} for k, label in crm.TRANSACTION_TYPES])
+
+
+@app.route("/api/txn/document_types")
+def txn_document_types():
+    txn_type = request.args.get("type", "")
+    if txn_type not in crm.TRANSACTION_TYPE_KEYS:
+        return jsonify({"error": "Unknown or missing transaction type"}), 400
+    return jsonify(crm.list_document_types(txn_type))
+
+
+@app.route("/api/txn/document_types", methods=["POST"])
+def txn_add_document_type():
+    data = request.get_json(force=True)
+    txn_type = data.get("transaction_type", "")
+    name = (data.get("name") or "").strip()
+    if txn_type not in crm.TRANSACTION_TYPE_KEYS:
+        return jsonify({"error": "Unknown or missing transaction type"}), 400
+    if not name:
+        return jsonify({"error": "Document name is required"}), 400
+    return jsonify(crm.add_document_type(txn_type, name))
+
+
+@app.route("/api/txn/document_types/<int:doc_type_id>", methods=["DELETE"])
+def txn_delete_document_type(doc_type_id):
+    crm.delete_document_type(doc_type_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/txn/document_types/<int:doc_type_id>/template", methods=["POST"])
+def txn_upload_document_type_template(doc_type_id):
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "No file uploaded"}), 400
+    updated = crm.set_document_type_template(doc_type_id, file)
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
+@app.route("/api/txn/document_types/<int:doc_type_id>/template", methods=["DELETE"])
+def txn_remove_document_type_template(doc_type_id):
+    crm.remove_document_type_template(doc_type_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/txn/document_types/<int:doc_type_id>/template")
+def txn_download_document_type_template(doc_type_id):
+    doc_type = crm.get_document_type(doc_type_id)
+    if not doc_type or not doc_type["template_filename"]:
+        abort(404)
+    return send_file(
+        crm.TEMPLATES_DIR / doc_type["template_filename"],
+        as_attachment=True,
+        download_name=doc_type["template_original_name"] or "template",
+    )
+
+
+@app.route("/api/txn/transactions")
+def txn_list_transactions():
+    return jsonify(crm.list_transactions())
+
+
+@app.route("/api/txn/transactions", methods=["POST"])
+def txn_create_transaction():
+    data = request.get_json(force=True)
+    txn_type = data.get("transaction_type", "")
+    title = (data.get("title") or "").strip()
+    if txn_type not in crm.TRANSACTION_TYPE_KEYS:
+        return jsonify({"error": "Unknown or missing transaction type"}), 400
+    if not title:
+        return jsonify({"error": "Title is required"}), 400
+    return jsonify(crm.create_transaction(txn_type, title))
+
+
+@app.route("/api/txn/transactions/<int:txn_id>")
+def txn_get_transaction(txn_id):
+    txn = crm.get_transaction(txn_id)
+    if not txn:
+        abort(404)
+    return jsonify(txn)
+
+
+@app.route("/api/txn/transactions/<int:txn_id>", methods=["PUT"])
+def txn_update_transaction(txn_id):
+    data = request.get_json(force=True)
+    title = (data.get("title") or "").strip()
+    status = data.get("status", "")
+    if not title:
+        return jsonify({"error": "Title is required"}), 400
+    if status not in crm.TRANSACTION_STATUSES:
+        return jsonify({"error": "Invalid status"}), 400
+    updated = crm.update_transaction(txn_id, title, status)
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
+@app.route("/api/txn/transactions/<int:txn_id>", methods=["DELETE"])
+def txn_delete_transaction(txn_id):
+    crm.delete_transaction(txn_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/txn/transaction_documents/<int:doc_id>/signed", methods=["POST"])
+def txn_upload_signed(doc_id):
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "No file uploaded"}), 400
+    updated = crm.upload_signed_document(doc_id, file)
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
+@app.route("/api/txn/transaction_documents/<int:doc_id>/signed", methods=["DELETE"])
+def txn_remove_signed(doc_id):
+    updated = crm.remove_signed_document(doc_id)
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
+@app.route("/api/txn/transaction_documents/<int:doc_id>/signed")
+def txn_download_signed(doc_id):
+    row = crm.get_transaction_document(doc_id)
+    if not row or not row["signed_filename"]:
+        abort(404)
+    return send_file(
+        crm.SIGNED_DIR / row["signed_filename"],
+        as_attachment=True,
+        download_name=row["signed_original_name"] or "signed_document",
+    )
+
+
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, threaded=True)

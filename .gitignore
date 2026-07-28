@@ -4,3 +4,4 @@ __pycache__/
 urto_crm.db
 flasklog.txt
 backups/
+documents/
