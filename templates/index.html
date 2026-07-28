@@ -828,7 +828,7 @@
   }
   #spaceCredit {
     position: fixed;
-    top: 64%;
+    top: calc(50% + 138px);
     left: 50%;
     transform: translateX(-50%);
     z-index: 2;
@@ -1091,7 +1091,8 @@
     </div>
     <div class="crm-subtabs" id="txnListSubtabs">
       <button class="active" data-view="active">Active</button>
-      <button data-view="archived">📁 Closings</button>
+      <button data-view="closings">💰 Closings</button>
+      <button data-view="archive">📁 Archive</button>
     </div>
     <div id="txnList" class="txn-list"></div>
   </div>
@@ -1111,8 +1112,10 @@
 
       <div class="txn-doc-table" id="txnDocTable"></div>
 
-      <div class="row" style="margin-top:22px">
-        <button class="ghost small" id="txnArchiveBtn">📁 Move to Closings</button>
+      <div class="row" style="margin-top:22px" id="txnFolderBtns">
+        <button class="ghost small" id="txnMoveClosingsBtn">💰 Move to Closings</button>
+        <button class="ghost small" id="txnMoveArchiveBtn">📁 Move to Archive</button>
+        <button class="ghost small" id="txnRestoreBtn" style="display:none">↩ Restore to Active</button>
         <button class="danger small" id="txnDeleteBtn" style="background:var(--danger-fg)">Delete Transaction</button>
       </div>
     </div>
@@ -2493,8 +2496,8 @@ document.addEventListener('keydown', (e) => {
 const TXN_STATUS_LABELS = { active: 'Active', under_contract: 'Under Contract', closed: 'Closed' };
 let txnTypes = [];          // [{key, label}, ...] loaded once from the server
 let currentTxnId = null;    // which transaction the detail view is showing
-let currentTxnArchived = false;
-let txnListViewMode = 'active'; // 'active' | 'archived' ("Closings" folder)
+let currentTxnFolder = 'active';
+let txnListViewMode = 'active'; // 'active' | 'closings' | 'archive'
 
 const txnListView = document.getElementById('txnListView');
 const txnDetailView = document.getElementById('txnDetailView');
@@ -2508,7 +2511,9 @@ const txnStatusBtns = document.getElementById('txnStatusBtns');
 let txnDetailStatusValue = 'active';
 const txnDetailMeta = document.getElementById('txnDetailMeta');
 const txnDocTable = document.getElementById('txnDocTable');
-const txnArchiveBtn = document.getElementById('txnArchiveBtn');
+const txnMoveClosingsBtn = document.getElementById('txnMoveClosingsBtn');
+const txnMoveArchiveBtn = document.getElementById('txnMoveArchiveBtn');
+const txnRestoreBtn = document.getElementById('txnRestoreBtn');
 const txnDeleteBtn = document.getElementById('txnDeleteBtn');
 
 txnListSubtabs.querySelectorAll('button').forEach(btn => {
@@ -2537,16 +2542,19 @@ function showTxnListView() {
   loadTxnList();
 }
 
+const TXN_EMPTY_STATE = {
+  active: '<div class="empty-state">No transactions yet. Click "+ New Transaction" to start tracking one.</div>',
+  closings: '<div class="empty-state">No transactions filed under Closings yet. Move one here from its detail view.</div>',
+  archive: '<div class="empty-state">No transactions filed away in Archive yet. Move one here from its detail view.</div>',
+};
+
 async function loadTxnList() {
   await ensureTxnTypesLoaded();
-  const archivedParam = txnListViewMode === 'archived' ? '1' : '0';
-  const res = await fetch(`/api/txn/transactions?archived=${archivedParam}`);
+  const res = await fetch(`/api/txn/transactions?folder=${txnListViewMode}`);
   const txns = res.ok ? await res.json() : [];
   txnListEl.innerHTML = '';
   if (txns.length === 0) {
-    txnListEl.innerHTML = txnListViewMode === 'archived'
-      ? '<div class="empty-state">No closed transactions filed away yet. Move a transaction here from its detail view.</div>'
-      : '<div class="empty-state">No transactions yet. Click "+ New Transaction" to start tracking one.</div>';
+    txnListEl.innerHTML = TXN_EMPTY_STATE[txnListViewMode] || TXN_EMPTY_STATE.active;
     return;
   }
   for (const t of txns) {
@@ -2560,11 +2568,22 @@ async function loadTxnList() {
       <div class="right">
         <span class="progress">${t.signed_docs}/${t.total_docs} signed</span>
         <span class="status-pill txn-${t.status}">${TXN_STATUS_LABELS[t.status] || t.status}</span>
+        <button class="ghost small" data-delete-txn="${t.id}" title="Delete transaction">🗑</button>
       </div>
     `;
+    card.querySelector('[data-delete-txn]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteTransaction(t.id);
+    });
     card.addEventListener('click', () => openTxnDetail(t.id));
     txnListEl.appendChild(card);
   }
+}
+
+async function deleteTransaction(txnId) {
+  if (!confirm('Are you sure you want to delete this transaction? This cannot be undone.')) return;
+  await fetch(`/api/txn/transactions/${txnId}`, { method: 'DELETE' });
+  loadTxnList();
 }
 
 async function openTxnDetail(txnId) {
@@ -2573,12 +2592,16 @@ async function openTxnDetail(txnId) {
   if (!res.ok) return;
   const t = await res.json();
   currentTxnId = t.id;
-  currentTxnArchived = !!t.archived;
+  currentTxnFolder = t.folder || 'active';
 
   txnDetailTitle.value = t.title;
   setTxnStatusButtons(t.status);
   txnDetailMeta.textContent = `${txnTypeLabel(t.transaction_type)} · created ${t.created_at.slice(0, 10)}`;
-  txnArchiveBtn.textContent = currentTxnArchived ? '↩ Restore to Active' : '📁 Move to Closings';
+
+  const inActive = currentTxnFolder === 'active';
+  txnMoveClosingsBtn.style.display = inActive ? '' : 'none';
+  txnMoveArchiveBtn.style.display = inActive ? '' : 'none';
+  txnRestoreBtn.style.display = inActive ? 'none' : '';
 
   txnDocTable.innerHTML = '';
   if (t.documents.length === 0) {
@@ -2667,20 +2690,22 @@ txnStatusBtns.querySelectorAll('.txn-status-btn').forEach(btn => {
 
 txnDeleteBtn.addEventListener('click', async () => {
   if (!currentTxnId) return;
-  if (!confirm('Delete this transaction and all its uploaded documents? This cannot be undone.')) return;
+  if (!confirm('Are you sure you want to delete this transaction? This cannot be undone.')) return;
   await fetch(`/api/txn/transactions/${currentTxnId}`, { method: 'DELETE' });
   showTxnListView();
 });
 
-txnArchiveBtn.addEventListener('click', async () => {
+async function setCurrentTxnFolder(folder) {
   if (!currentTxnId) return;
-  const archiving = !currentTxnArchived;
-  await fetch(`/api/txn/transactions/${currentTxnId}/archive`, {
+  await fetch(`/api/txn/transactions/${currentTxnId}/folder`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ archived: archiving }),
+    body: JSON.stringify({ folder }),
   });
   showTxnListView();
-});
+}
+txnMoveClosingsBtn.addEventListener('click', () => setCurrentTxnFolder('closings'));
+txnMoveArchiveBtn.addEventListener('click', () => setCurrentTxnFolder('archive'));
+txnRestoreBtn.addEventListener('click', () => setCurrentTxnFolder('active'));
 
 /* ---- New Transaction modal ---- */
 const txnNewOverlay = document.getElementById('txnNewOverlay');

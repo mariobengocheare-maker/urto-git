@@ -431,8 +431,8 @@ def txn_download_document_type_template(doc_type_id):
 
 @app.route("/api/txn/transactions")
 def txn_list_transactions():
-    archived = request.args.get("archived", "0") == "1"
-    return jsonify(crm.list_transactions(archived=archived))
+    folder = request.args.get("folder", "active")
+    return jsonify(crm.list_transactions(folder=folder))
 
 
 @app.route("/api/txn/transactions", methods=["POST"])
@@ -476,11 +476,13 @@ def txn_delete_transaction(txn_id):
     return jsonify({"ok": True})
 
 
-@app.route("/api/txn/transactions/<int:txn_id>/archive", methods=["POST"])
-def txn_archive_transaction(txn_id):
+@app.route("/api/txn/transactions/<int:txn_id>/folder", methods=["POST"])
+def txn_set_transaction_folder(txn_id):
     data = request.get_json(force=True)
-    archived = bool(data.get("archived", True))
-    updated = crm.archive_transaction(txn_id, archived)
+    folder = data.get("folder", "")
+    if folder not in crm.TRANSACTION_FOLDERS:
+        return jsonify({"error": "Invalid folder"}), 400
+    updated = crm.set_transaction_folder(txn_id, folder)
     if not updated:
         abort(404)
     return jsonify(updated)

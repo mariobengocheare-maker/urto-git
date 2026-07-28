@@ -239,15 +239,21 @@ def init_db():
             title TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             archived INTEGER NOT NULL DEFAULT 0,
+            folder TEXT NOT NULL DEFAULT 'active',
             created_at TEXT NOT NULL
         )
     """)
-    # Migration for a urto_crm.db from before "archived" existed — ALTER TABLE
-    # ADD COLUMN would error on a DB that already has it, so only run it if
-    # the column is actually missing.
+    # Migrations for a urto_crm.db from before these columns existed — ALTER
+    # TABLE ADD COLUMN would error on a DB that already has them, so only run
+    # it if the column is actually missing.
     existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()}
     if "archived" not in existing_cols:
         conn.execute("ALTER TABLE transactions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+    if "folder" not in existing_cols:
+        conn.execute("ALTER TABLE transactions ADD COLUMN folder TEXT NOT NULL DEFAULT 'active'")
+        # Preserve anything already moved to the old single "Closings" folder
+        # (the `archived` flag) under the new three-way `folder` column.
+        conn.execute("UPDATE transactions SET folder = 'closings' WHERE archived = 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transaction_documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -826,14 +832,19 @@ def _transaction_to_dict(row, documents=None) -> dict:
     return d
 
 
-def list_transactions(archived: bool = False) -> list:
-    """By default lists only active (non-archived) transactions — closed
-    deals you've explicitly moved to "Closings" via archive_transaction()
-    are excluded from the main list and only show up when archived=True."""
+TRANSACTION_FOLDERS = {"active", "closings", "archive"}
+
+
+def list_transactions(folder: str = "active") -> list:
+    """Lists transactions filed in the given folder. 'active' is the default
+    working list; 'closings' and 'archive' are two separate, explicit places
+    to file a transaction away (see set_transaction_folder())."""
+    if folder not in TRANSACTION_FOLDERS:
+        folder = "active"
     conn = get_conn()
     txns = conn.execute(
-        "SELECT * FROM transactions WHERE archived = ? ORDER BY created_at DESC, id DESC",
-        (1 if archived else 0,),
+        "SELECT * FROM transactions WHERE folder = ? ORDER BY created_at DESC, id DESC",
+        (folder,),
     ).fetchall()
     result = []
     for t in txns:
@@ -921,23 +932,24 @@ def update_transaction(transaction_id: int, title: str, status: str) -> dict:
     return get_transaction(transaction_id)
 
 
-def archive_transaction(transaction_id: int, archived: bool) -> dict:
-    """Moves a transaction to the "Closings" folder (archived=True) or
-    back to the active list (archived=False) — a reversible way to put a
-    finished deal away without deleting it. Nothing else about the
-    transaction changes."""
+def set_transaction_folder(transaction_id: int, folder: str) -> dict:
+    """Files a transaction into 'active', 'closings', or 'archive' — a
+    reversible way to put a transaction away (or bring it back) without
+    deleting it. Nothing else about the transaction changes."""
+    if folder not in TRANSACTION_FOLDERS:
+        return None
     conn = get_conn()
     existing = conn.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
     if not existing:
         conn.close()
         return None
     conn.execute(
-        "UPDATE transactions SET archived = ? WHERE id = ?",
-        (1 if archived else 0, transaction_id),
+        "UPDATE transactions SET folder = ? WHERE id = ?",
+        (folder, transaction_id),
     )
     conn.commit()
     conn.close()
-    on_data_changed("transaction archived" if archived else "transaction restored")
+    on_data_changed(f"transaction moved to {folder}")
     return get_transaction(transaction_id)
 
 
