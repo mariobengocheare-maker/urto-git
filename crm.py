@@ -5,7 +5,9 @@ follow-up data and schedule math.
 """
 
 import calendar
+import csv
 import os
+import re
 import shutil
 import sqlite3
 import threading
@@ -642,6 +644,108 @@ def complete_list_round(list_id) -> dict:
     conn.close()
     on_data_changed("contact list round completed")
     return get_contact_list(list_id)
+
+
+def parse_vcard_contacts(vcf_text: str) -> list:
+    """Parses (name, phone) pairs out of a phone's exported vCard (.vcf)
+    text — the standard format iPhone/Android "Share/Export Contact"
+    produces. Skips any card missing a name or a phone number rather than
+    guessing."""
+    contacts = []
+    for card in vcf_text.split("BEGIN:VCARD")[1:]:
+        fn_match = re.search(r"^FN:(.+)$", card, re.M)
+        tel_match = re.search(r"^TEL[^:]*:(.+)$", card, re.M)
+        if fn_match and tel_match:
+            contacts.append((fn_match.group(1).strip(), tel_match.group(1).strip()))
+    return contacts
+
+
+CONTACT_NAME_ALIASES = {"name", "full name", "contact name", "client name", "contact"}
+CONTACT_PHONE_ALIASES = {"phone", "phone number", "mobile", "cell", "telephone", "tel", "number"}
+CONTACT_ADDRESS_ALIASES = {"address", "street address", "home address", "property address"}
+_PHONE_RE = re.compile(r"(\+?\d[\d\-.() ]{7,}\d)")
+
+
+def parse_contact_import(raw_text: str) -> list:
+    """Best-effort contact parser accepting whatever format a phone/contacts
+    app happens to export — a vCard (.vcf), a CSV (with a recognized header
+    row, or a headerless "Name, Phone[, Address]" shape), or plain pasted
+    text. Same by-meaning-not-exact-name matching philosophy as
+    input_parser.py / the Dialer's paste box: never guesses column order on
+    an unrecognized shape, just falls through to the next, simpler format.
+    Returns (name, phone, address) tuples; address is "" when not present
+    in the source."""
+    text = raw_text.strip()
+    if "BEGIN:VCARD" in text:
+        return [(name, phone, "") for name, phone in parse_vcard_contacts(text)]
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return []
+
+    try:
+        rows = list(csv.reader(lines))
+    except csv.Error:
+        rows = [[ln] for ln in lines]
+
+    # A recognized header row remaps which column is which for every row
+    # below it; otherwise each row is judged on its own shape as we go, so
+    # one malformed or differently-shaped line never drops the rest of a
+    # mixed file — same per-line-fallback principle as the Dialer's paste box.
+    name_idx = phone_idx = address_idx = None
+    body_rows = rows
+    if rows and len(rows[0]) > 1:
+        header = [h.strip().lower() for h in rows[0]]
+        name_idx = next((i for i, h in enumerate(header) if h in CONTACT_NAME_ALIASES), None)
+        phone_idx = next((i for i, h in enumerate(header) if h in CONTACT_PHONE_ALIASES), None)
+        address_idx = next((i for i, h in enumerate(header) if h in CONTACT_ADDRESS_ALIASES), None)
+        if name_idx is not None and phone_idx is not None:
+            body_rows = rows[1:]
+        else:
+            name_idx = phone_idx = address_idx = None
+
+    contacts = []
+    for row, line in zip(body_rows, lines[len(rows) - len(body_rows):]):
+        if name_idx is not None and phone_idx is not None and len(row) > max(name_idx, phone_idx):
+            name, phone = row[name_idx].strip(), row[phone_idx].strip()
+            address = row[address_idx].strip() if address_idx is not None and len(row) > address_idx else ""
+            if name and phone:
+                contacts.append((name, phone, address))
+                continue
+        # Headerless shape: Name, Phone[, Address, ...].
+        if len(row) >= 2 and row[0].strip() and _PHONE_RE.search(row[1]):
+            contacts.append((row[0].strip(), row[1].strip(), row[2].strip() if len(row) > 2 else ""))
+            continue
+        # Last resort: a bare phone number found anywhere in the raw line
+        # (name falls back to the phone number itself).
+        m = _PHONE_RE.search(line)
+        if m:
+            phone = m.group(1).strip()
+            name = (line[:m.start()] + line[m.end():]).strip(" ,-\t")
+            contacts.append((name or phone, phone, ""))
+    return contacts
+
+
+def import_contact_list_file(name, address, frequency_key, custom_amount, custom_unit, raw_text) -> dict:
+    """One drag-and-drop: parses whatever contacts-export format was
+    dropped in, creates a CRM client for each named contact with a phone
+    number, and files them all under a brand-new Contact List on the given
+    recurring schedule. A per-contact address from the source (e.g. a CSV
+    with its own address column) wins over the shared address typed in the
+    import form. Returns None if the file had no usable contacts, so
+    callers can bail out before creating an empty list."""
+    contacts = parse_contact_import(raw_text)
+    if not contacts:
+        return None
+    client_ids = []
+    for contact_name, phone, contact_address in contacts:
+        client = create_client(
+            name=contact_name, phone=phone, contact_info="", address=contact_address or address or "",
+            frequency_key="none", custom_amount=None, custom_unit=None,
+        )
+        client_ids.append(client["id"])
+    contact_list = create_contact_list(name, frequency_key, custom_amount, custom_unit)
+    return set_list_members(contact_list["id"], client_ids)
 
 
 def add_note(client_id, text) -> dict:

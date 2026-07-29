@@ -246,7 +246,7 @@
   }
   .card > * { position: relative; }
 
-  #dropzone {
+  .dropzone {
     border: 2px dashed rgba(201,162,39,.28);
     border-radius: 12px;
     padding: 44px 20px;
@@ -257,10 +257,10 @@
       rgba(6, 11, 22, .38);
     transition: border-color .18s, background .18s, box-shadow .18s, transform .18s;
   }
-  #dropzone:hover { border-color: rgba(201,162,39,.6); box-shadow: 0 0 26px rgba(201,162,39,.14) inset; transform: translateY(-1px); }
-  #dropzone.drag { border-color: var(--gold); background: var(--warn-bg); box-shadow: 0 0 30px rgba(201,162,39,.3); }
-  #dropzone p { margin: 4px 0; color: var(--text-secondary); }
-  #dropzone p strong { color: var(--text); }
+  .dropzone:hover { border-color: rgba(201,162,39,.6); box-shadow: 0 0 26px rgba(201,162,39,.14) inset; transform: translateY(-1px); }
+  .dropzone.drag { border-color: var(--gold); background: var(--warn-bg); box-shadow: 0 0 30px rgba(201,162,39,.3); }
+  .dropzone p { margin: 4px 0; color: var(--text-secondary); }
+  .dropzone p strong { color: var(--text); }
   #fileInput { display: none; }
 
   .row { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
@@ -905,7 +905,7 @@
   </div>
 
   <div class="card">
-    <div id="dropzone">
+    <div id="dropzone" class="dropzone">
       <p><strong>Drag & drop your CSV here</strong></p>
       <p>or click to browse — accepts a clean first_name/last_name/address/zip CSV, or a raw county property-tax-roll export</p>
       <input type="file" id="fileInput" accept=".csv">
@@ -1025,6 +1025,15 @@
     <div class="row" style="margin-top:0">
       <button id="addContactListBtn">+ New Contact List</button>
     </div>
+
+    <div class="card">
+      <div id="vcardDropzone" class="dropzone">
+        <p><strong>Drag &amp; drop a contacts export here to create a new Contact List</strong></p>
+        <p>or click to browse — accepts a phone vCard export (.vcf), a contacts CSV, or plain pasted-text lines; every named contact with a phone number becomes a client on the new list, automatically</p>
+        <input type="file" id="vcardFileInput" accept=".vcf,.csv,.txt" style="display:none">
+      </div>
+    </div>
+
     <div id="contactListsEl"></div>
   </div>
 </section>
@@ -1387,6 +1396,52 @@
     <div class="modal-actions">
       <button type="button" id="clMembersSaveBtn">Save Members</button>
     </div>
+  </div>
+</div>
+
+<!-- Import vCard as a new Contact List -->
+<div class="modal-overlay" id="clImportOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Import Contacts as a New List</h2>
+      <button class="modal-close" id="clImportCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="clImportError"></div>
+    <div id="clImportFileLabel" class="meta" style="margin-bottom:14px; color:var(--text-secondary)"></div>
+    <form id="clImportForm">
+      <div class="form-group">
+        <label for="clImportName">List name *</label>
+        <input type="text" id="clImportName" required placeholder="e.g. 9350 Bay Harbor Dr">
+      </div>
+      <div class="form-group">
+        <label for="clImportAddress">Shared address (optional)</label>
+        <input type="text" id="clImportAddress" placeholder="e.g. 9350 W Bay Harbor Drive, Bay Harbor Islands, FL">
+      </div>
+      <div class="form-group">
+        <label for="clImportFrequency">Call this whole list every</label>
+        <select id="clImportFrequency">
+          <option value="none">No recurring schedule</option>
+          <option value="2_weeks" selected>2 Weeks</option>
+          <option value="3_weeks">3 Weeks</option>
+          <option value="4_weeks">4 Weeks</option>
+          <option value="2_months">2 Months</option>
+          <option value="6_months">6 Months</option>
+          <option value="custom">Custom...</option>
+        </select>
+      </div>
+      <div class="form-group row" id="clImportCustomRow" style="display:none; margin-top:0">
+        <input type="number" id="clImportCustomAmount" min="1" value="30" style="width:80px">
+        <select id="clImportCustomUnit">
+          <option value="days">Days</option>
+          <option value="weeks">Weeks</option>
+          <option value="months">Months</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="clImportCancelBtn">Cancel</button>
+        <button type="submit">Import</button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -2101,6 +2156,75 @@ document.getElementById('clMembersSaveBtn').addEventListener('click', async () =
   });
   clMembersOverlay.classList.remove('show');
   loadContactLists();
+});
+
+/* ---- Import a vCard (.vcf) drag-and-drop as a new Contact List ---- */
+const vcardDropzone = document.getElementById('vcardDropzone');
+const vcardFileInput = document.getElementById('vcardFileInput');
+const clImportOverlay = document.getElementById('clImportOverlay');
+const clImportForm = document.getElementById('clImportForm');
+const clImportError = document.getElementById('clImportError');
+const clImportFileLabel = document.getElementById('clImportFileLabel');
+const clImportName = document.getElementById('clImportName');
+const clImportAddress = document.getElementById('clImportAddress');
+const clImportFrequency = document.getElementById('clImportFrequency');
+const clImportCustomRow = document.getElementById('clImportCustomRow');
+const clImportCustomAmount = document.getElementById('clImportCustomAmount');
+const clImportCustomUnit = document.getElementById('clImportCustomUnit');
+let clImportFile = null;
+
+function openImportModal(file) {
+  clImportFile = file;
+  clImportForm.reset();
+  clImportError.style.display = 'none';
+  clImportFrequency.value = '2_weeks';
+  clImportCustomRow.style.display = 'none';
+  clImportFileLabel.textContent = `📇 ${file.name}`;
+  // A friendly default list name from the filename (e.g. "9350_Bay_Harbor.vcf" -> "9350 Bay Harbor").
+  clImportName.value = file.name.replace(/\.(vcf|csv|txt)$/i, '').replace(/[_-]+/g, ' ').trim();
+  clImportOverlay.classList.add('show');
+}
+
+vcardDropzone.addEventListener('click', () => vcardFileInput.click());
+vcardDropzone.addEventListener('dragover', e => { e.preventDefault(); vcardDropzone.classList.add('drag'); });
+vcardDropzone.addEventListener('dragleave', () => vcardDropzone.classList.remove('drag'));
+vcardDropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  vcardDropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) openImportModal(e.dataTransfer.files[0]);
+});
+vcardFileInput.addEventListener('change', () => {
+  if (vcardFileInput.files.length) openImportModal(vcardFileInput.files[0]);
+});
+
+document.getElementById('clImportCloseBtn').addEventListener('click', () => clImportOverlay.classList.remove('show'));
+document.getElementById('clImportCancelBtn').addEventListener('click', () => clImportOverlay.classList.remove('show'));
+clImportFrequency.addEventListener('change', () => {
+  clImportCustomRow.style.display = clImportFrequency.value === 'custom' ? 'flex' : 'none';
+});
+
+clImportForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  clImportError.style.display = 'none';
+  if (!clImportFile) return;
+  const form = new FormData();
+  form.append('file', clImportFile);
+  form.append('name', clImportName.value);
+  form.append('address', clImportAddress.value);
+  form.append('frequency_key', clImportFrequency.value);
+  form.append('custom_amount', clImportCustomAmount.value);
+  form.append('custom_unit', clImportCustomUnit.value);
+  const res = await fetch('/api/crm/contact_lists/import_vcard', { method: 'POST', body: form });
+  const data = await res.json();
+  if (!res.ok) {
+    clImportError.textContent = data.error || 'Could not import that file.';
+    clImportError.style.display = 'block';
+    return;
+  }
+  clImportOverlay.classList.remove('show');
+  vcardFileInput.value = '';
+  loadContactLists();
+  alert(`Imported ${data.member_count} contact${data.member_count === 1 ? '' : 's'} into "${data.name}".`);
 });
 
 /* ===================== Calendar ===================== */

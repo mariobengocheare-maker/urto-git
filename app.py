@@ -367,6 +367,31 @@ def crm_complete_list_round(list_id):
     return jsonify(contact_list)
 
 
+@app.route("/api/crm/contact_lists/import_vcard", methods=["POST"])
+def crm_import_vcard():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    name = (request.form.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "List name is required"}), 400
+    address = (request.form.get("address") or "").strip()
+    try:
+        raw_text = request.files["file"].read().decode("utf-8", errors="replace")
+        contact_list = crm.import_contact_list_file(
+            name=name,
+            address=address,
+            frequency_key=request.form.get("frequency_key"),
+            custom_amount=request.form.get("custom_amount"),
+            custom_unit=request.form.get("custom_unit"),
+            raw_text=raw_text,
+        )
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid custom call schedule amount"}), 400
+    if not contact_list:
+        return jsonify({"error": "No contacts with both a name and phone number were found in that file."}), 400
+    return jsonify(contact_list)
+
+
 @app.route("/api/crm/events", methods=["POST"])
 def crm_create_event():
     data = request.get_json(force=True)
