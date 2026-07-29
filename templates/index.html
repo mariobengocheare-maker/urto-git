@@ -1773,12 +1773,19 @@ const cfListsBox = document.getElementById('cfListsBox');
 let clientFormOrigin = null;
 
 function followupLabel(client) {
-  if (!client.frequency_label) return 'No automatic follow-up';
-  const statusText = {
-    overdue: 'overdue', due_today: 'due today',
-    upcoming: `due ${client.next_followup_date}`,
-  }[client.followup_status] || `due ${client.next_followup_date}`;
-  return `${client.frequency_label} · next follow-up ${statusText}`;
+  if (client.frequency_label) {
+    const statusText = {
+      overdue: 'overdue', due_today: 'due today',
+      upcoming: `due ${client.next_followup_date}`,
+    }[client.followup_status] || `due ${client.next_followup_date}`;
+    return `${client.frequency_label} · next follow-up ${statusText}`;
+  }
+  // No individual schedule of their own — but they may be on a Contact List
+  // whose shared call schedule stands in for it (see Contact Lists tab).
+  if (client.list_followups && client.list_followups.length) {
+    return client.list_followups.map(l => `next ${l.name} Follow Up on ${l.next_call_date}`).join(' · ');
+  }
+  return 'No automatic follow-up';
 }
 
 async function loadClients() {
@@ -1916,6 +1923,11 @@ async function openClientDetail(id) {
     followupInfo.innerHTML = `<strong>${escapeHtml(c.frequency_label)}</strong><br>` +
       `<span class="status-pill ${c.followup_status || ''}">next: ${escapeHtml(c.next_followup_date)}</span>`;
     completeBtn.style.display = 'inline-block';
+  } else if (c.list_followups && c.list_followups.length) {
+    followupInfo.innerHTML = c.list_followups
+      .map(l => `<strong>next ${escapeHtml(l.name)} Follow Up</strong> on ${escapeHtml(l.next_call_date)}`)
+      .join('<br>');
+    completeBtn.style.display = 'none';
   } else {
     followupInfo.textContent = 'No automatic follow-up scheduled.';
     completeBtn.style.display = 'none';
@@ -2291,13 +2303,16 @@ async function renderCalendar() {
     cell.appendChild(dayNum);
     for (const e of (eventsByDay[dateStr] || [])) {
       const chip = document.createElement('div');
-      const label = e.kind === 'manual' ? (e.client_name ? `${e.time ? e.time + ' ' : ''}${e.title}` : e.title) : e.client_name;
+      const label = e.kind === 'manual' ? (e.client_name ? `${e.time ? e.time + ' ' : ''}${e.title}` : e.title)
+        : e.kind === 'list' ? `💰 ${e.list_name}`
+        : e.client_name;
       chip.className = `cal-chip ${e.kind === 'manual' ? 'manual' : e.status}`;
       chip.textContent = label;
-      chip.title = e.kind === 'manual' ? e.title : `Follow up with ${e.client_name}`;
+      chip.title = e.kind === 'manual' ? e.title : e.kind === 'list' ? `${e.list_name} — Contact List call round` : `Follow up with ${e.client_name}`;
       chip.addEventListener('click', (ev) => {
         ev.stopPropagation();
         if (e.kind === 'manual') openEventForm(dateStr, e);
+        else if (e.kind === 'list') { showCrmTab(crmTabListsBtn, crmListsView); loadContactLists(); }
         else openClientDetail(e.client_id);
       });
       cell.appendChild(chip);
@@ -2748,7 +2763,7 @@ async function updateDialerClientInfo(entry) {
   document.getElementById('dciAddress').textContent = c.address || '—';
 
   const followupEl = document.getElementById('dciFollowup');
-  followupEl.innerHTML = c.frequency_label
+  followupEl.innerHTML = (c.frequency_label || (c.list_followups && c.list_followups.length))
     ? `<span class="status-pill ${c.followup_status || ''}">${escapeHtml(followupLabel(c))}</span>`
     : '';
 

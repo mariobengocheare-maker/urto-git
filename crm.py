@@ -415,18 +415,47 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
     return client_to_dict(row)
 
 
+def _attach_list_followups(conn, clients: list):
+    """A client on a Contact List with a recurring schedule has no
+    individual `frequency_label` of their own — their call schedule lives
+    on the shared list instead (see complete_list_round()). Attaches
+    `list_followups` (name + next_call_date per list) to each client dict
+    so the UI can show "next <list> Follow Up on <date>" instead of "No
+    automatic follow-up" for a list member."""
+    if not clients:
+        return
+    rows = conn.execute("""
+        SELECT contact_list_members.client_id, contact_lists.name, contact_lists.next_call_date
+        FROM contact_list_members
+        JOIN contact_lists ON contact_lists.id = contact_list_members.list_id
+        WHERE contact_lists.interval_days IS NOT NULL AND contact_lists.next_call_date IS NOT NULL
+    """).fetchall()
+    by_client = {}
+    for r in rows:
+        by_client.setdefault(r["client_id"], []).append({"name": r["name"], "next_call_date": r["next_call_date"]})
+    for c in clients:
+        c["list_followups"] = by_client.get(c["id"], [])
+
+
 def list_clients() -> list:
     conn = get_conn()
     rows = conn.execute("SELECT * FROM clients ORDER BY name COLLATE NOCASE").fetchall()
+    clients = [client_to_dict(r) for r in rows]
+    _attach_list_followups(conn, clients)
     conn.close()
-    return [client_to_dict(r) for r in rows]
+    return clients
 
 
 def get_client(client_id) -> dict:
     conn = get_conn()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    client = client_to_dict(row)
+    _attach_list_followups(conn, [client])
     conn.close()
-    return client_to_dict(row) if row else None
+    return client
 
 
 def update_client(client_id, name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None) -> dict:
@@ -903,6 +932,9 @@ def get_calendar_events(year: int, month: int) -> list:
     clients = conn.execute(
         "SELECT * FROM clients WHERE interval_days IS NOT NULL AND next_followup_date IS NOT NULL"
     ).fetchall()
+    contact_lists = conn.execute(
+        "SELECT * FROM contact_lists WHERE interval_days IS NOT NULL AND next_call_date IS NOT NULL"
+    ).fetchall()
     conn.close()
 
     events = []
@@ -934,6 +966,37 @@ def get_calendar_events(year: int, month: int) -> list:
         while d <= month_end:
             events.append({
                 "kind": "auto", "client_id": c["id"], "client_name": c["name"],
+                "date": d.isoformat(), "status": "upcoming",
+                "event_id": None, "title": None, "time": None, "notes": None,
+            })
+            d += timedelta(days=interval)
+
+    # Contact List call rounds — same walk-backward/forward math as an
+    # individual client's follow-up, but anchored on the list's own shared
+    # next_call_date/interval_days rather than any one client's schedule.
+    for l in contact_lists:
+        interval = l["interval_days"]
+        anchor = date.fromisoformat(l["next_call_date"])
+        created = date.fromisoformat(l["created_at"])
+
+        d = anchor
+        while d >= created:
+            if (d == anchor or d > created) and month_start <= d <= month_end:
+                if d == anchor:
+                    status = "overdue" if anchor < today else ("due_today" if anchor == today else "next_due")
+                else:
+                    status = "completed"
+                events.append({
+                    "kind": "list", "list_id": l["id"], "list_name": l["name"],
+                    "date": d.isoformat(), "status": status,
+                    "event_id": None, "title": None, "time": None, "notes": None,
+                })
+            d -= timedelta(days=interval)
+
+        d = anchor + timedelta(days=interval)
+        while d <= month_end:
+            events.append({
+                "kind": "list", "list_id": l["id"], "list_name": l["name"],
                 "date": d.isoformat(), "status": "upcoming",
                 "event_id": None, "title": None, "time": None, "notes": None,
             })
