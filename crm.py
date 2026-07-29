@@ -216,6 +216,23 @@ def init_db():
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS contact_lists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            frequency_label TEXT,
+            interval_days INTEGER,
+            next_call_date TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS contact_list_members (
+            list_id INTEGER NOT NULL REFERENCES contact_lists(id) ON DELETE CASCADE,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            PRIMARY KEY (list_id, client_id)
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS lookup_stats (
             week_start TEXT PRIMARY KEY,
             count INTEGER NOT NULL DEFAULT 0
@@ -368,7 +385,7 @@ def client_to_dict(row) -> dict:
     return d
 
 
-def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit) -> dict:
+def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None) -> dict:
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
     created_at = date.today().isoformat()
     next_followup_date = None
@@ -382,8 +399,14 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (name, phone, contact_info, address, created_at, label, interval_days, next_followup_date),
     )
-    conn.commit()
     client_id = cur.lastrowid
+    if list_ids is not None:
+        for list_id in list_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)",
+                (list_id, client_id),
+            )
+    conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
     on_data_changed("client added")
@@ -404,7 +427,7 @@ def get_client(client_id) -> dict:
     return client_to_dict(row) if row else None
 
 
-def update_client(client_id, name, phone, contact_info, address, frequency_key, custom_amount, custom_unit) -> dict:
+def update_client(client_id, name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None) -> dict:
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
 
     conn = get_conn()
@@ -426,6 +449,13 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
            frequency_label=?, interval_days=?, next_followup_date=? WHERE id=?""",
         (name, phone, contact_info, address, label, interval_days, next_followup_date, client_id),
     )
+    if list_ids is not None:
+        conn.execute("DELETE FROM contact_list_members WHERE client_id = ?", (client_id,))
+        for list_id in list_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)",
+                (list_id, client_id),
+            )
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
@@ -461,6 +491,157 @@ def complete_followup(client_id) -> dict:
     conn.close()
     on_data_changed("follow-up completed")
     return client_to_dict(updated)
+
+
+def _list_call_status(next_call_date) -> str:
+    if not next_call_date:
+        return None
+    due = date.fromisoformat(next_call_date)
+    today = date.today()
+    return "overdue" if due < today else ("due_today" if due == today else "upcoming")
+
+
+def list_contact_lists() -> list:
+    """A Contact List is a saved group of CRM clients (e.g. every unit in a
+    building) with ONE shared recurring call schedule for the whole group —
+    distinct from each client's own individual follow-up schedule."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM contact_lists ORDER BY name COLLATE NOCASE").fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["call_status"] = _list_call_status(d["next_call_date"])
+        d["member_count"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM contact_list_members WHERE list_id = ?", (row["id"],)
+        ).fetchone()["n"]
+        result.append(d)
+    conn.close()
+    return result
+
+
+def create_contact_list(name, frequency_key, custom_amount, custom_unit) -> dict:
+    label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
+    next_call_date = (date.today() + timedelta(days=interval_days)).isoformat() if interval_days else None
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO contact_lists (name, frequency_label, interval_days, next_call_date, created_at) VALUES (?, ?, ?, ?, ?)",
+        (name, label, interval_days, next_call_date, date.today().isoformat()),
+    )
+    conn.commit()
+    list_id = cur.lastrowid
+    conn.close()
+    on_data_changed("contact list created")
+    return get_contact_list(list_id)
+
+
+def get_contact_list(list_id) -> dict:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM contact_lists WHERE id = ?", (list_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    d = dict(row)
+    d["call_status"] = _list_call_status(d["next_call_date"])
+    members = conn.execute(
+        """SELECT clients.* FROM clients
+           JOIN contact_list_members ON contact_list_members.client_id = clients.id
+           WHERE contact_list_members.list_id = ?
+           ORDER BY clients.name COLLATE NOCASE""",
+        (list_id,),
+    ).fetchall()
+    conn.close()
+    d["members"] = [client_to_dict(m) for m in members]
+    d["member_count"] = len(d["members"])
+    return d
+
+
+def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit) -> dict:
+    label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
+    conn = get_conn()
+    existing = conn.execute("SELECT * FROM contact_lists WHERE id = ?", (list_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return None
+    if existing["interval_days"] == interval_days and existing["frequency_label"] == label:
+        next_call_date = existing["next_call_date"]
+    elif interval_days:
+        next_call_date = (date.today() + timedelta(days=interval_days)).isoformat()
+    else:
+        next_call_date = None
+    conn.execute(
+        "UPDATE contact_lists SET name=?, frequency_label=?, interval_days=?, next_call_date=? WHERE id=?",
+        (name, label, interval_days, next_call_date, list_id),
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("contact list updated")
+    return get_contact_list(list_id)
+
+
+def delete_contact_list(list_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM contact_lists WHERE id = ?", (list_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("contact list deleted")
+
+
+def set_list_members(list_id, client_ids) -> dict:
+    """Replaces a list's entire membership with the given client ids —
+    simpler for a checkbox-style membership editor than incremental
+    add/remove calls."""
+    conn = get_conn()
+    conn.execute("DELETE FROM contact_list_members WHERE list_id = ?", (list_id,))
+    for client_id in client_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)",
+            (list_id, client_id),
+        )
+    conn.commit()
+    conn.close()
+    on_data_changed("contact list membership updated")
+    return get_contact_list(list_id)
+
+
+def get_client_list_ids(client_id) -> list:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT list_id FROM contact_list_members WHERE client_id = ?", (client_id,)
+    ).fetchall()
+    conn.close()
+    return [r["list_id"] for r in rows]
+
+
+def set_client_lists(client_id, list_ids):
+    """Replaces which lists a single client belongs to — used from the
+    client add/edit form so list membership can be set from either side."""
+    conn = get_conn()
+    conn.execute("DELETE FROM contact_list_members WHERE client_id = ?", (client_id,))
+    for list_id in list_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)",
+            (list_id, client_id),
+        )
+    conn.commit()
+    conn.close()
+    on_data_changed("contact list membership updated")
+
+
+def complete_list_round(list_id) -> dict:
+    """Advances the WHOLE list's shared call schedule forward by one
+    interval, once you've finished dialing through it this round."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM contact_lists WHERE id = ?", (list_id,)).fetchone()
+    if not row or not row["interval_days"] or not row["next_call_date"]:
+        conn.close()
+        return None
+    current_due = date.fromisoformat(row["next_call_date"])
+    new_due = current_due + timedelta(days=row["interval_days"])
+    conn.execute("UPDATE contact_lists SET next_call_date = ? WHERE id = ?", (new_due.isoformat(), list_id))
+    conn.commit()
+    conn.close()
+    on_data_changed("contact list round completed")
+    return get_contact_list(list_id)
 
 
 def add_note(client_id, text) -> dict:

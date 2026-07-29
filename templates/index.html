@@ -599,6 +599,20 @@
   .form-group input, .form-group select, .form-group textarea { width: 100%; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
+  .cf-lists-box { max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; background: rgba(6,11,22,.35); }
+  .cf-lists-box label { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-weight: 400; }
+  .cf-lists-box label:last-child { margin-bottom: 0; }
+  .cf-lists-box input[type="checkbox"] { width: auto; }
+
+  .contact-list-card { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; margin-bottom: 10px; }
+  .contact-list-card .title { font-weight: 700; }
+  .contact-list-card .meta { color: var(--text-secondary); font-size: .82rem; margin-top: 2px; }
+  .contact-list-card .right { display: flex; align-items: center; gap: 12px; }
+  .cl-member-box { max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; background: rgba(6,11,22,.35); margin-top: 10px; }
+  .cl-member-box label { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-weight: 400; }
+  .cl-member-box label:last-child { margin-bottom: 0; }
+  .cl-member-box input[type="checkbox"] { width: auto; }
+
   .detail-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
   .detail-section h3 { font-size: .82rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); margin: 0 0 10px; }
   .contact-line { font-size: .92rem; margin-bottom: 4px; }
@@ -828,7 +842,7 @@
   }
   #spaceCredit {
     position: fixed;
-    top: calc(50% + 138px);
+    top: calc(50% + 122px);
     left: 50%;
     transform: translateX(-50%);
     z-index: 2;
@@ -982,6 +996,7 @@
   <div class="crm-subtabs">
     <button class="active" id="crmTabClientsBtn">Clients</button>
     <button id="crmTabCalendarBtn">Calendar</button>
+    <button id="crmTabListsBtn">Contact Lists</button>
   </div>
 
   <div id="crmClientsView">
@@ -1005,6 +1020,13 @@
       <div class="calendar-grid" id="calendarGrid"></div>
     </div>
   </div>
+
+  <div id="crmListsView" style="display:none">
+    <div class="row" style="margin-top:0">
+      <button id="addContactListBtn">+ New Contact List</button>
+    </div>
+    <div id="contactListsEl"></div>
+  </div>
 </section>
 
 <section id="dialerSection" style="display:none">
@@ -1016,6 +1038,19 @@
     <button id="dialerSourceCrmBtn">From CRM Clients</button>
     <button id="dialerSourceLookupBtn">From Last Lookup Results</button>
     <button id="dialerSourceTodayBtn">Today's Follow-ups</button>
+    <button id="dialerSourceListBtn">From Contact List</button>
+  </div>
+
+  <div class="card" id="dialerListBox" style="display:none">
+    <div class="form-group" style="margin-bottom:0">
+      <label for="dialerListSelect">Choose a saved contact list</label>
+      <select id="dialerListSelect"></select>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="dialerLoadListBtn">Load List</button>
+      <button class="ghost" id="dialerCompleteRoundBtn" style="display:none">✅ Mark this round as called</button>
+    </div>
+    <div class="dialer-hint" id="dialerListDueHint"></div>
   </div>
 
   <div class="card" id="dialerPasteBox">
@@ -1178,6 +1213,12 @@
         <label for="cfNotes">Notes (optional)</label>
         <textarea id="cfNotes" rows="3" placeholder="e.g. Interested in selling by fall, prefers calls after 5pm"></textarea>
       </div>
+      <div class="form-group">
+        <label>Contact Lists (optional)</label>
+        <div id="cfListsBox" class="cf-lists-box">
+          <div class="empty-state" style="padding:8px 0">No contact lists yet — create one from the "Contact Lists" tab in CRM.</div>
+        </div>
+      </div>
       <div class="modal-actions">
         <button type="button" class="ghost" id="clientFormCancelBtn">Cancel</button>
         <button type="submit">Save Client</button>
@@ -1287,6 +1328,65 @@
         <button type="submit">Create Transaction</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Add / Edit Contact List modal -->
+<div class="modal-overlay" id="clFormOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="clFormTitle">New Contact List</h2>
+      <button class="modal-close" id="clFormCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="clFormError"></div>
+    <form id="clForm">
+      <input type="hidden" id="clFormId">
+      <div class="form-group">
+        <label for="clName">List name *</label>
+        <input type="text" id="clName" required placeholder="e.g. 9350 Bay Harbor Dr">
+      </div>
+      <div class="form-group">
+        <label for="clFrequency">Call this whole list every</label>
+        <select id="clFrequency">
+          <option value="none">No recurring schedule</option>
+          <option value="2_weeks" selected>2 Weeks</option>
+          <option value="3_weeks">3 Weeks</option>
+          <option value="4_weeks">4 Weeks</option>
+          <option value="2_months">2 Months</option>
+          <option value="6_months">6 Months</option>
+          <option value="custom">Custom...</option>
+        </select>
+      </div>
+      <div class="form-group row" id="clCustomRow" style="display:none; margin-top:0">
+        <input type="number" id="clCustomAmount" min="1" value="30" style="width:80px">
+        <select id="clCustomUnit">
+          <option value="days">Days</option>
+          <option value="weeks">Weeks</option>
+          <option value="months">Months</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="clFormCancelBtn">Cancel</button>
+        <button type="submit">Save List</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Manage Contact List Members modal -->
+<div class="modal-overlay" id="clMembersOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="clMembersTitle">Manage Members</h2>
+      <button class="modal-close" id="clMembersCloseBtn">&times;</button>
+    </div>
+    <div class="form-group">
+      <input type="text" id="clMembersSearch" placeholder="Search clients by name…">
+    </div>
+    <div class="cl-member-box" id="clMembersBox"></div>
+    <div class="modal-actions">
+      <button type="button" id="clMembersSaveBtn">Save Members</button>
+    </div>
   </div>
 </div>
 
@@ -1577,23 +1677,20 @@ backupNowBtn.addEventListener('click', async () => {
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
 const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
+const crmTabListsBtn = document.getElementById('crmTabListsBtn');
 const crmClientsView = document.getElementById('crmClientsView');
 const crmCalendarView = document.getElementById('crmCalendarView');
+const crmListsView = document.getElementById('crmListsView');
 
-crmTabClientsBtn.addEventListener('click', () => {
-  crmTabClientsBtn.classList.add('active');
-  crmTabCalendarBtn.classList.remove('active');
-  crmClientsView.style.display = 'block';
-  crmCalendarView.style.display = 'none';
-  loadClients();
-});
-crmTabCalendarBtn.addEventListener('click', () => {
-  crmTabCalendarBtn.classList.add('active');
-  crmTabClientsBtn.classList.remove('active');
-  crmCalendarView.style.display = 'block';
-  crmClientsView.style.display = 'none';
-  renderCalendar();
-});
+function showCrmTab(btn, view) {
+  for (const [b, v] of [[crmTabClientsBtn, crmClientsView], [crmTabCalendarBtn, crmCalendarView], [crmTabListsBtn, crmListsView]]) {
+    b.classList.toggle('active', b === btn);
+    v.style.display = v === view ? 'block' : 'none';
+  }
+}
+crmTabClientsBtn.addEventListener('click', () => { showCrmTab(crmTabClientsBtn, crmClientsView); loadClients(); });
+crmTabCalendarBtn.addEventListener('click', () => { showCrmTab(crmTabCalendarBtn, crmCalendarView); renderCalendar(); });
+crmTabListsBtn.addEventListener('click', () => { showCrmTab(crmTabListsBtn, crmListsView); loadContactLists(); });
 
 /* ===================== Clients ===================== */
 const clientList = document.getElementById('clientList');
@@ -1614,6 +1711,7 @@ const cfCustomAmount = document.getElementById('cfCustomAmount');
 const cfCustomUnit = document.getElementById('cfCustomUnit');
 const cfNotes = document.getElementById('cfNotes');
 const cfNotesRow = document.getElementById('cfNotesRow');
+const cfListsBox = document.getElementById('cfListsBox');
 // Where the client form was launched from, so a successful create can hand
 // control back appropriately (e.g. tag the current dialer entry as now-in-CRM
 // instead of jumping to the client-detail modal).
@@ -1652,6 +1750,19 @@ async function loadClients() {
   }
 }
 
+async function renderCfListsBox(selectedIds) {
+  const selected = new Set(selectedIds || []);
+  const res = await fetch('/api/crm/contact_lists');
+  const lists = res.ok ? await res.json() : [];
+  if (lists.length === 0) {
+    cfListsBox.innerHTML = '<div class="empty-state" style="padding:8px 0">No contact lists yet — create one from the "Contact Lists" tab in CRM.</div>';
+    return;
+  }
+  cfListsBox.innerHTML = lists.map(l => `
+    <label><input type="checkbox" value="${l.id}" ${selected.has(l.id) ? 'checked' : ''}> ${escapeHtml(l.name)}</label>
+  `).join('');
+}
+
 function resetClientForm() {
   clientForm.reset();
   clientFormId.value = '';
@@ -1662,6 +1773,7 @@ function resetClientForm() {
   // Notes are captured on this form only when adding a brand-new client; when
   // editing, notes are managed in the client-detail view instead.
   cfNotesRow.style.display = 'block';
+  renderCfListsBox([]);
 }
 
 addClientBtn.addEventListener('click', () => {
@@ -1680,6 +1792,7 @@ cfFrequency.addEventListener('change', () => {
 clientForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   clientFormError.style.display = 'none';
+  const listIds = [...cfListsBox.querySelectorAll('input[type=checkbox]:checked')].map(cb => Number(cb.value));
   const payload = {
     name: cfName.value,
     phone: cfPhone.value,
@@ -1688,6 +1801,7 @@ clientForm.addEventListener('submit', async (e) => {
     frequency_key: cfFrequency.value,
     custom_amount: cfCustomAmount.value,
     custom_unit: cfCustomUnit.value,
+    list_ids: listIds,
   };
   const id = clientFormId.value;
   const url = id ? `/api/crm/clients/${id}` : '/api/crm/clients';
@@ -1798,6 +1912,7 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
   cfContact.value = c.contact_info || '';
   cfAddress.value = c.address || '';
   cfNotesRow.style.display = 'none'; // editing: notes are managed in the detail view
+  renderCfListsBox(c.list_ids || []);
   clientDetailOverlay.classList.remove('show');
   clientFormOverlay.classList.add('show');
 });
@@ -1807,6 +1922,185 @@ document.getElementById('cdDeleteBtn').addEventListener('click', async () => {
   await fetch(`/api/crm/clients/${currentClientId}`, { method: 'DELETE' });
   clientDetailOverlay.classList.remove('show');
   loadClients();
+});
+
+/* ===================== Contact Lists ===================== */
+const contactListsEl = document.getElementById('contactListsEl');
+const addContactListBtn = document.getElementById('addContactListBtn');
+
+const clFormOverlay = document.getElementById('clFormOverlay');
+const clForm = document.getElementById('clForm');
+const clFormTitle = document.getElementById('clFormTitle');
+const clFormError = document.getElementById('clFormError');
+const clFormId = document.getElementById('clFormId');
+const clName = document.getElementById('clName');
+const clFrequency = document.getElementById('clFrequency');
+const clCustomRow = document.getElementById('clCustomRow');
+const clCustomAmount = document.getElementById('clCustomAmount');
+const clCustomUnit = document.getElementById('clCustomUnit');
+
+const clMembersOverlay = document.getElementById('clMembersOverlay');
+const clMembersTitle = document.getElementById('clMembersTitle');
+const clMembersBox = document.getElementById('clMembersBox');
+const clMembersSearch = document.getElementById('clMembersSearch');
+let clMembersListId = null;
+let clMembersAllClients = [];
+
+function listCallLabel(l) {
+  if (!l.frequency_label) return 'No recurring schedule';
+  const statusText = {
+    overdue: 'overdue', due_today: 'due today',
+    upcoming: `due ${l.next_call_date}`,
+  }[l.call_status] || `due ${l.next_call_date}`;
+  return `${l.frequency_label} · next round ${statusText}`;
+}
+
+async function loadContactLists() {
+  const res = await fetch('/api/crm/contact_lists');
+  const lists = res.ok ? await res.json() : [];
+  contactListsEl.innerHTML = '';
+  if (lists.length === 0) {
+    contactListsEl.innerHTML = '<div class="empty-state">No contact lists yet. Click "+ New Contact List" to group clients (e.g. everyone in one building) under one recurring call schedule.</div>';
+    return;
+  }
+  for (const l of lists) {
+    const div = document.createElement('div');
+    div.className = 'card contact-list-card';
+    const pillClass = l.call_status || '';
+    div.innerHTML = `
+      <div>
+        <div class="title">${escapeHtml(l.name)}</div>
+        <div class="meta">${l.member_count} contact${l.member_count === 1 ? '' : 's'} · ${escapeHtml(listCallLabel(l))}</div>
+      </div>
+      <div class="right">
+        ${l.call_status ? `<span class="status-pill followup-tag ${pillClass}">${pillClass.replace('_', ' ')}</span>` : ''}
+        <button class="ghost small" data-manage-members="${l.id}">Manage Members</button>
+        <button class="ghost small" data-edit-list="${l.id}">Edit</button>
+        <button class="ghost small" data-delete-list="${l.id}">Delete</button>
+      </div>
+    `;
+    contactListsEl.appendChild(div);
+  }
+  contactListsEl.querySelectorAll('[data-manage-members]').forEach(btn => {
+    btn.addEventListener('click', () => openManageMembers(Number(btn.getAttribute('data-manage-members'))));
+  });
+  contactListsEl.querySelectorAll('[data-edit-list]').forEach(btn => {
+    btn.addEventListener('click', () => openEditContactList(Number(btn.getAttribute('data-edit-list'))));
+  });
+  contactListsEl.querySelectorAll('[data-delete-list]').forEach(btn => {
+    btn.addEventListener('click', () => deleteContactList(Number(btn.getAttribute('data-delete-list'))));
+  });
+}
+
+async function deleteContactList(listId) {
+  if (!confirm('Delete this contact list? Clients on it are not deleted, only the list itself.')) return;
+  await fetch(`/api/crm/contact_lists/${listId}`, { method: 'DELETE' });
+  loadContactLists();
+}
+
+function resetClForm() {
+  clForm.reset();
+  clFormId.value = '';
+  clFrequency.value = '2_weeks';
+  clCustomRow.style.display = 'none';
+  clFormError.style.display = 'none';
+}
+
+addContactListBtn.addEventListener('click', () => {
+  resetClForm();
+  clFormTitle.textContent = 'New Contact List';
+  clFormOverlay.classList.add('show');
+});
+
+document.getElementById('clFormCloseBtn').addEventListener('click', () => clFormOverlay.classList.remove('show'));
+document.getElementById('clFormCancelBtn').addEventListener('click', () => clFormOverlay.classList.remove('show'));
+
+clFrequency.addEventListener('change', () => {
+  clCustomRow.style.display = clFrequency.value === 'custom' ? 'flex' : 'none';
+});
+
+async function openEditContactList(listId) {
+  const res = await fetch(`/api/crm/contact_lists/${listId}`);
+  if (!res.ok) return;
+  const l = await res.json();
+  resetClForm();
+  clFormTitle.textContent = 'Edit Contact List';
+  clFormId.value = l.id;
+  clName.value = l.name;
+  clFormOverlay.classList.add('show');
+}
+
+clForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  clFormError.style.display = 'none';
+  const payload = {
+    name: clName.value,
+    frequency_key: clFrequency.value,
+    custom_amount: clCustomAmount.value,
+    custom_unit: clCustomUnit.value,
+  };
+  const id = clFormId.value;
+  const url = id ? `/api/crm/contact_lists/${id}` : '/api/crm/contact_lists';
+  const method = id ? 'PUT' : 'POST';
+  const res = await fetch(url, {
+    method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    clFormError.textContent = data.error || 'Could not save contact list.';
+    clFormError.style.display = 'block';
+    return;
+  }
+  clFormOverlay.classList.remove('show');
+  loadContactLists();
+  if (!id) openManageMembers(data.id); // brand-new list: go straight to adding members
+});
+
+function renderClMembersBox(filterText) {
+  const memberIds = new Set(clMembersAllClients.filter(c => c.checked).map(c => c.id));
+  const q = (filterText || '').trim().toLowerCase();
+  const visible = clMembersAllClients.filter(c => !q || c.name.toLowerCase().includes(q));
+  if (visible.length === 0) {
+    clMembersBox.innerHTML = '<div class="empty-state" style="padding:8px 0">No clients match.</div>';
+    return;
+  }
+  clMembersBox.innerHTML = visible.map(c => `
+    <label><input type="checkbox" value="${c.id}" ${memberIds.has(c.id) ? 'checked' : ''}> ${escapeHtml(c.name)}${c.phone ? ' · ' + escapeHtml(c.phone) : ''}</label>
+  `).join('');
+  clMembersBox.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const entry = clMembersAllClients.find(c => c.id === Number(cb.value));
+      if (entry) entry.checked = cb.checked;
+    });
+  });
+}
+
+async function openManageMembers(listId) {
+  clMembersListId = listId;
+  const [listRes, clientsRes] = await Promise.all([
+    fetch(`/api/crm/contact_lists/${listId}`),
+    fetch('/api/crm/clients'),
+  ]);
+  const list = await listRes.json();
+  const allClients = clientsRes.ok ? await clientsRes.json() : [];
+  const memberIds = new Set(list.members.map(m => m.id));
+  clMembersAllClients = allClients.map(c => ({ id: c.id, name: c.name, phone: c.phone, checked: memberIds.has(c.id) }));
+  clMembersTitle.textContent = `Manage Members — ${list.name}`;
+  clMembersSearch.value = '';
+  renderClMembersBox('');
+  clMembersOverlay.classList.add('show');
+}
+
+clMembersSearch.addEventListener('input', () => renderClMembersBox(clMembersSearch.value));
+document.getElementById('clMembersCloseBtn').addEventListener('click', () => clMembersOverlay.classList.remove('show'));
+
+document.getElementById('clMembersSaveBtn').addEventListener('click', async () => {
+  const clientIds = clMembersAllClients.filter(c => c.checked).map(c => c.id);
+  await fetch(`/api/crm/contact_lists/${clMembersListId}/members`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_ids: clientIds }),
+  });
+  clMembersOverlay.classList.remove('show');
+  loadContactLists();
 });
 
 /* ===================== Calendar ===================== */
@@ -1989,11 +2283,19 @@ const dialerListEl = document.getElementById('dialerListEl');
 const dialerAddCrmBtn = document.getElementById('dialerAddCrmBtn');
 
 const dialerSourceTodayBtn = document.getElementById('dialerSourceTodayBtn');
+const dialerSourceListBtn = document.getElementById('dialerSourceListBtn');
+const dialerListBox = document.getElementById('dialerListBox');
+const dialerListSelect = document.getElementById('dialerListSelect');
+const dialerCompleteRoundBtn = document.getElementById('dialerCompleteRoundBtn');
+const dialerListDueHint = document.getElementById('dialerListDueHint');
+let dialerContactLists = [];
+let dialerCurrentListId = null;
 
-const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn, dialerSourceTodayBtn];
+const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn, dialerSourceTodayBtn, dialerSourceListBtn];
 function setDialerSourceActive(btn) {
   for (const b of DIALER_SOURCE_BTNS) b.classList.toggle('active', b === btn);
   dialerPasteBox.style.display = btn === dialerSourcePasteBtn ? 'block' : 'none';
+  dialerListBox.style.display = btn === dialerSourceListBtn ? 'block' : 'none';
 }
 
 dialerSourcePasteBtn.addEventListener('click', () => setDialerSourceActive(dialerSourcePasteBtn));
@@ -2049,6 +2351,53 @@ dialerSourceTodayBtn.addEventListener('click', async () => {
     name: i.client_name || i.title, phone: i.phone, clientId: i.client_id,
     meta: [i.time, i.title, i.status === 'overdue' ? 'OVERDUE' : ''].filter(Boolean).join(' · '),
   })));
+});
+
+dialerSourceListBtn.addEventListener('click', async () => {
+  setDialerSourceActive(dialerSourceListBtn);
+  dialerCompleteRoundBtn.style.display = 'none';
+  dialerListDueHint.textContent = '';
+  const res = await fetch('/api/crm/contact_lists');
+  dialerContactLists = res.ok ? await res.json() : [];
+  if (dialerContactLists.length === 0) {
+    dialerListSelect.innerHTML = '<option value="">No contact lists yet — create one in URTO CRM → Contact Lists</option>';
+    return;
+  }
+  dialerListSelect.innerHTML = dialerContactLists.map(l =>
+    `<option value="${l.id}">${escapeHtml(l.name)} (${l.member_count})</option>`
+  ).join('');
+});
+
+document.getElementById('dialerLoadListBtn').addEventListener('click', async () => {
+  const listId = Number(dialerListSelect.value);
+  if (!listId) return;
+  const res = await fetch(`/api/crm/contact_lists/${listId}`);
+  if (!res.ok) return;
+  const list = await res.json();
+  const withPhones = list.members.filter(m => m.phone && m.phone.trim());
+  if (withPhones.length === 0) {
+    alert('No members with a phone number on file in this list yet.');
+    return;
+  }
+  dialerCurrentListId = listId;
+  dialerCompleteRoundBtn.style.display = list.interval_days ? 'inline-block' : 'none';
+  dialerListDueHint.textContent = list.frequency_label
+    ? `Shared schedule: ${listCallLabel(list)}`
+    : '';
+  await loadDialerList(withPhones.map(c => ({
+    name: c.name, phone: c.phone, clientId: c.id,
+    meta: [c.address, followupLabel(c)].filter(Boolean).join(' · '),
+  })));
+});
+
+dialerCompleteRoundBtn.addEventListener('click', async () => {
+  if (!dialerCurrentListId) return;
+  if (!confirm('Mark this whole list as called for this round? This advances the shared schedule to the next date.')) return;
+  const res = await fetch(`/api/crm/contact_lists/${dialerCurrentListId}/complete_round`, { method: 'POST' });
+  if (res.ok) {
+    const list = await res.json();
+    dialerListDueHint.textContent = `Shared schedule: ${listCallLabel(list)}`;
+  }
 });
 
 document.getElementById('dialerLoadPasteBtn').addEventListener('click', () => {

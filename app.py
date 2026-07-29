@@ -223,6 +223,7 @@ def crm_create_client():
             frequency_key=data.get("frequency_key"),
             custom_amount=data.get("custom_amount"),
             custom_unit=data.get("custom_unit"),
+            list_ids=data.get("list_ids"),
         )
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid custom follow-up amount"}), 400
@@ -235,6 +236,7 @@ def crm_get_client(client_id):
     if not client:
         abort(404)
     client["notes"] = crm.list_notes(client_id)
+    client["list_ids"] = crm.get_client_list_ids(client_id)
     return jsonify(client)
 
 
@@ -254,6 +256,7 @@ def crm_update_client(client_id):
             frequency_key=data.get("frequency_key"),
             custom_amount=data.get("custom_amount"),
             custom_unit=data.get("custom_unit"),
+            list_ids=data.get("list_ids"),
         )
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid custom follow-up amount"}), 400
@@ -286,6 +289,82 @@ def crm_complete_followup(client_id):
     if not client:
         abort(404)
     return jsonify(client)
+
+
+@app.route("/api/crm/contact_lists", methods=["GET"])
+def crm_list_contact_lists():
+    return jsonify(crm.list_contact_lists())
+
+
+@app.route("/api/crm/contact_lists", methods=["POST"])
+def crm_create_contact_list():
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    try:
+        contact_list = crm.create_contact_list(
+            name=name,
+            frequency_key=data.get("frequency_key"),
+            custom_amount=data.get("custom_amount"),
+            custom_unit=data.get("custom_unit"),
+        )
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid custom call schedule amount"}), 400
+    return jsonify(contact_list)
+
+
+@app.route("/api/crm/contact_lists/<int:list_id>", methods=["GET"])
+def crm_get_contact_list(list_id):
+    contact_list = crm.get_contact_list(list_id)
+    if not contact_list:
+        abort(404)
+    return jsonify(contact_list)
+
+
+@app.route("/api/crm/contact_lists/<int:list_id>", methods=["PUT"])
+def crm_update_contact_list(list_id):
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    try:
+        contact_list = crm.update_contact_list(
+            list_id,
+            name=name,
+            frequency_key=data.get("frequency_key"),
+            custom_amount=data.get("custom_amount"),
+            custom_unit=data.get("custom_unit"),
+        )
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid custom call schedule amount"}), 400
+    if not contact_list:
+        abort(404)
+    return jsonify(contact_list)
+
+
+@app.route("/api/crm/contact_lists/<int:list_id>", methods=["DELETE"])
+def crm_delete_contact_list(list_id):
+    crm.delete_contact_list(list_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/crm/contact_lists/<int:list_id>/members", methods=["POST"])
+def crm_set_list_members(list_id):
+    data = request.get_json(force=True)
+    client_ids = data.get("client_ids") or []
+    contact_list = crm.set_list_members(list_id, client_ids)
+    if not contact_list:
+        abort(404)
+    return jsonify(contact_list)
+
+
+@app.route("/api/crm/contact_lists/<int:list_id>/complete_round", methods=["POST"])
+def crm_complete_list_round(list_id):
+    contact_list = crm.complete_list_round(list_id)
+    if not contact_list:
+        abort(404)
+    return jsonify(contact_list)
 
 
 @app.route("/api/crm/events", methods=["POST"])
