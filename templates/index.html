@@ -840,6 +840,15 @@
     pointer-events: none;
     transition: opacity .45s ease;
   }
+  #spaceVersion {
+    position: fixed;
+    bottom: 10px;
+    right: 14px;
+    z-index: 2;
+    font-size: .68rem;
+    color: rgba(150, 170, 215, .35);
+    white-space: nowrap;
+  }
   #spaceCredit {
     position: fixed;
     top: calc(50% + 122px);
@@ -891,6 +900,7 @@
     <div id="spaceCredit">Made by Mario Bengochea</div>
     <div id="spaceCaption"></div>
     <div id="spaceHint">Click an orb to enter</div>
+    <div id="spaceVersion">v{{ app_version }} · updated {{ app_version_date }}</div>
   </div>
   <div id="spaceFade"></div>
 </section>
@@ -1169,7 +1179,7 @@
 </main>
 
 <footer class="site-footer">
-  URTO — Ultimate Realtor Tool · Created by Mario Bengochea
+  URTO — Ultimate Realtor Tool · Created by Mario Bengochea · v{{ app_version }} (updated {{ app_version_date }})
 </footer>
 
 <!-- Add / Edit client modal -->

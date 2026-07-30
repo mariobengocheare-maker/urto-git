@@ -27,6 +27,11 @@ from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
 app = Flask(__name__)
 
+# Bump these two together whenever a change is shipped, so Mario can tell at
+# a glance (bottom of every page) which build he's actually running.
+APP_VERSION = "1.2.1"
+APP_VERSION_DATE = "Jul 30, 2026 1:18 PM EST"
+
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -105,7 +110,7 @@ def run_job_safe(job_id, rows):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", app_version=APP_VERSION, app_version_date=APP_VERSION_DATE)
 
 
 @app.route("/api/upload", methods=["POST"])
