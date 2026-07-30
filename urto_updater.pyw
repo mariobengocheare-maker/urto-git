@@ -41,13 +41,18 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def kill_running_app(log):
-    """Stops any already-running `app.py` from this folder so its files
-    aren't locked when we overwrite them — no manual Task Manager step."""
+    """Stops any already-running `app.py` from THIS folder so its files
+    aren't locked when we overwrite them — no manual Task Manager step.
+    Matched on the full path to this folder's app.py, not just the bare
+    filename — Mario also runs Wardrobe (mariobengocheare-maker/wardrobe),
+    which has its own unrelated app.py, and a name-only match would risk
+    killing that instead if both happen to be running at once."""
     log("Stopping URTO if it's currently running...")
+    target = str(INSTALL_DIR / "app.py").replace("'", "''")
     ps_cmd = (
-        "Get-CimInstance Win32_Process | "
-        "Where-Object { $_.CommandLine -like '*app.py*' } | "
-        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+        f"Get-CimInstance Win32_Process | "
+        f"Where-Object {{ $_.CommandLine -like '*{target}*' }} | "
+        f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
     )
     try:
         subprocess.run(
