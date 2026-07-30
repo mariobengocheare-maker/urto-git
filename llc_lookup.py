@@ -57,8 +57,39 @@ def _looks_like_company(name: str) -> bool:
     upper = name.upper()
     if any(kw in upper for kw in AGENT_SERVICE_KEYWORDS):
         return True
-    tokens = re.sub(r"[().,*]", " ", upper).split()
+    # Strip periods WITHOUT inserting a space first, so a dotted abbreviation
+    # like "P.A." or "L.L.C." collapses to "PA"/"LLC" instead of splitting
+    # into single letters ("P", "A") that never match ENTITY_TOKENS. Other
+    # punctuation (commas/parens/asterisks) still becomes a space to keep
+    # separating real name components.
+    tokens = re.sub(r"[().,*]", " ", upper.replace(".", "")).split()
     return any(t in ENTITY_TOKENS for t in tokens)
+
+
+# Professional-entity suffixes Florida requires an individual licensed
+# professional (attorney, doctor, CPA, ...) to form their own practice under
+# — the entity name itself IS that person's own legal name, not some
+# unrelated company. "EUGENIO DUARTE, P.A." is Eugenio Duarte's own firm.
+PA_STYLE_SUFFIXES = {"PA", "PLLC", "PC", "PL", "CHTD", "CHARTERED"}
+
+
+def _try_extract_pa_person(name: str) -> dict:
+    """Strips a trailing PA_STYLE_SUFFIXES token and reads the remaining
+    tokens as the professional's own plain 'First [Middle] Last' name (this
+    is a naming CONVENTION, not a per-name guess — same class of evidence-
+    based extraction as input_parser.py's trust-name handling). Only fires
+    when a recognized suffix is actually the last token; never guesses word
+    order on a bare, un-suffixed name."""
+    upper = name.upper().replace(".", "")
+    tokens = re.sub(r"[(),*]", " ", upper).split()
+    if not tokens or tokens[-1] not in PA_STYLE_SUFFIXES:
+        return {"first_name": "", "last_name": "", "ok": False}
+    core = tokens[:-1]
+    # A multi-partner firm ("NEIMAN & INTERIAN, PLLC") names more than one
+    # person — there's no single individual to extract, so don't guess.
+    if len(core) < 2 or "&" in core:
+        return {"first_name": "", "last_name": "", "ok": False}
+    return {"first_name": core[0].title(), "last_name": core[-1].title(), "ok": True}
 
 
 _NAME_SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
@@ -241,27 +272,59 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False) -> dict:
         if agent_name and not _looks_like_company(agent_name):
             parsed = _split_person_name(agent_name)
             if parsed["ok"]:
-                return {"first_name": parsed["first_name"], "last_name": parsed["last_name"],
-                        "resolved_via": "registered agent", "skip_reason": ""}
+                candidate = {"first_name": parsed["first_name"], "last_name": parsed["last_name"],
+                             "resolved_via": "registered agent"}
+                return {"first_name": candidate["first_name"], "last_name": candidate["last_name"],
+                        "resolved_via": candidate["resolved_via"], "skip_reason": "",
+                        "candidates": [candidate]}
 
-        # Registered agent is a company (or unparseable) — fall back to the
-        # officers/managers list and take the first name that's clearly a
-        # person and cleanly parses.
+        # Registered agent is a company (or unparseable). A PA/PLLC/PC-style
+        # entity is itself required (Florida) to be named after the actual
+        # licensed professional running it — search FOREWARN under that
+        # embedded name FIRST (faster, usually correct) rather than only
+        # going through the officers/managers list below — but still keep
+        # that list as a fallback candidate too: a same-named PA occasionally
+        # isn't run by that exact person, so trying both raises the odds of
+        # landing on the right one instead of committing to just one guess.
+        candidates = []
+        if agent_name:
+            pa_person = _try_extract_pa_person(agent_name)
+            if pa_person["ok"]:
+                candidates.append({"first_name": pa_person["first_name"], "last_name": pa_person["last_name"],
+                                    "resolved_via": "PA/PLLC name"})
+
         for label in OFFICER_SECTION_LABELS:
             officer_section = _section_text(body_text, label)
             if not officer_section:
                 continue
-            for candidate in _officer_candidate_names(officer_section):
-                if _looks_like_company(candidate):
+            for candidate_name in _officer_candidate_names(officer_section):
+                if _looks_like_company(candidate_name):
                     continue
-                parsed = _split_person_name(candidate)
+                parsed = _split_person_name(candidate_name)
                 if parsed["ok"]:
-                    return {"first_name": parsed["first_name"], "last_name": parsed["last_name"],
-                            "resolved_via": "officer/manager", "skip_reason": ""}
+                    candidates.append({"first_name": parsed["first_name"], "last_name": parsed["last_name"],
+                                        "resolved_via": "officer/manager"})
 
-        return {"first_name": "", "last_name": "", "resolved_via": "",
-                "skip_reason": f"Found '{entity_name}' on Sunbiz but couldn't confidently resolve it to a person "
-                                f"(registered agent is a company, and no officer/manager parsed as an individual)"}
+        # De-dupe — the same person sometimes shows up as both the PA-name
+        # match and an officer — while preserving priority order.
+        seen, deduped = set(), []
+        for c in candidates:
+            key = (c["first_name"].lower(), c["last_name"].lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(c)
+        candidates = deduped
+
+        if not candidates:
+            return {"first_name": "", "last_name": "", "resolved_via": "",
+                    "skip_reason": f"Found '{entity_name}' on Sunbiz but couldn't confidently resolve it to a person "
+                                    f"(registered agent is a company, and no officer/manager parsed as an individual)",
+                    "candidates": []}
+
+        primary = candidates[0]
+        return {"first_name": primary["first_name"], "last_name": primary["last_name"],
+                "resolved_via": primary["resolved_via"], "skip_reason": "", "candidates": candidates}
 
     except PWTimeoutError:
         return {"first_name": "", "last_name": "", "resolved_via": "",

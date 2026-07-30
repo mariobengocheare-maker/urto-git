@@ -17,14 +17,56 @@ from pathlib import Path
 
 from werkzeug.utils import secure_filename
 
-DB_PATH = Path(__file__).parent / "urto_crm.db"
+_PROJECT_DIR = Path(__file__).parent
+
+
+def _resolve_data_dir() -> Path:
+    """Where urto_crm.db and uploaded documents actually live. Deliberately
+    kept OUTSIDE the project folder (same fix already used by the sibling
+    Wardrobe app's db.py) — every update (the URTO Updater OR a manual
+    ZIP-and-replace) installs into/over the project folder, so real client
+    data living inside it was never actually safe from an update wiping it
+    out. Falls back to living alongside this file when there's no
+    LOCALAPPDATA (e.g. this sandbox, non-Windows)."""
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        return Path(local_appdata) / "URTO"
+    return _PROJECT_DIR
+
+
+DATA_DIR = _resolve_data_dir()
+DB_PATH = DATA_DIR / "urto_crm.db"
 
 # Transaction Manager's uploaded document files (blank templates + signed
 # copies) — gitignored, same reasoning as urto_crm.db: real files, never
 # committed. Mirrored into the backup dir alongside the DB (see below).
-DOCUMENTS_DIR = Path(__file__).parent / "documents"
+DOCUMENTS_DIR = DATA_DIR / "documents"
 TEMPLATES_DIR = DOCUMENTS_DIR / "templates"
 SIGNED_DIR = DOCUMENTS_DIR / "signed"
+
+
+def _migrate_legacy_data_dir():
+    """One-time move of an existing urto_crm.db/documents folder from their
+    OLD location (inside the project folder, before this fix) into the new
+    stable DATA_DIR — only runs when DATA_DIR actually changed (LOCALAPPDATA
+    present) and the new location doesn't already have a DB. This is exactly
+    the bug that reset Mario's weekly lookup counter: the DB lived inside
+    the folder an update replaces, so nothing carried it forward. Safe to
+    run on every startup — it's a no-op once the DB already exists at the
+    new location."""
+    if DATA_DIR == _PROJECT_DIR or DB_PATH.exists():
+        return
+    legacy_db = _PROJECT_DIR / "urto_crm.db"
+    if not legacy_db.exists():
+        return
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(legacy_db, DB_PATH)
+    legacy_docs = _PROJECT_DIR / "documents"
+    if legacy_docs.exists() and not DOCUMENTS_DIR.exists():
+        shutil.copytree(legacy_docs, DOCUMENTS_DIR)
+
+
+_migrate_legacy_data_dir()
 
 # ---- Automatic backup ----
 # urto_crm.db lives only on this PC and is gitignored on purpose (it holds

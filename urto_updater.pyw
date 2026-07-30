@@ -9,8 +9,12 @@ GitHub, install it over this folder, and clean up after itself:
   - downloads + installs the new files
   - deletes the downloaded zip and extracted folder automatically —
     nothing left behind to Ctrl+A/Ctrl+V by hand or clean up yourself
-  - never touches your real data (urto_crm.db, backups/, outputs/,
-    documents/) since none of that ships in the GitHub zip anyway
+  - never touches your real data — urto_crm.db and uploaded documents now
+    live outside the project folder entirely (in LOCALAPPDATA, under a
+    URTO folder), so they're safe even if you ever run URTO from a
+    freshly-extracted folder instead of updating your existing one;
+    backups/ and outputs/ inside the project folder are still skipped too,
+    on top of none of this shipping in the GitHub zip anyway
 
 Safe to re-run any time. If the download or install fails partway,
 nothing gets overwritten and you're left exactly where you started.

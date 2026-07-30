@@ -122,20 +122,42 @@ def extract_first_phone(page) -> str:
 
 def process_row(page, row: dict, debug: bool = False) -> dict:
     entity_note = ""
+    candidates = None
     if row.get("is_entity"):
         entity_name = row.get("entity_name", "")
         resolved = resolve_entity_owner(page, entity_name, debug=debug)
         if resolved["skip_reason"]:
             return {"phone": "", "status": "SKIPPED", "notes": resolved["skip_reason"]}
+        # resolve_entity_owner may hand back more than one candidate person
+        # (e.g. a PA/PLLC's own embedded name, plus an officer/manager
+        # fallback) — try the top pick first, and only spend a second real
+        # FOREWARN search on a fallback candidate if the first comes back
+        # NOT_FOUND, rather than committing to a single guess.
+        candidates = resolved.get("candidates") or [
+            {"first_name": resolved["first_name"], "last_name": resolved["last_name"],
+             "resolved_via": resolved["resolved_via"]}
+        ]
+        primary = candidates[0]
         # Mutate the row itself: build_output_row() reads first/last name
         # back out of it afterward, so the resolved person becomes the
         # "owner" that was actually searched — same as for an individual.
-        row["first_name"] = resolved["first_name"]
-        row["last_name"] = resolved["last_name"]
-        entity_note = (f"Resolved via Sunbiz ({resolved['resolved_via']}): "
-                        f"'{entity_name}' -> {resolved['first_name']} {resolved['last_name']}. ")
+        row["first_name"] = primary["first_name"]
+        row["last_name"] = primary["last_name"]
+        entity_note = (f"Resolved via Sunbiz ({primary['resolved_via']}): "
+                        f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}. ")
 
     result = _run_forewarn_search(page, row, debug=debug)
+
+    if candidates and result["status"] == "NOT_FOUND":
+        for fallback in candidates[1:]:
+            row["first_name"] = fallback["first_name"]
+            row["last_name"] = fallback["last_name"]
+            entity_note += (f"No FOREWARN match for that name — retrying via Sunbiz "
+                             f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}. ")
+            result = _run_forewarn_search(page, row, debug=debug)
+            if result["status"] != "NOT_FOUND":
+                break
+
     result["notes"] = entity_note + result["notes"]
     return result
 
