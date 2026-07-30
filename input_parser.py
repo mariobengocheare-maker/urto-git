@@ -147,6 +147,19 @@ def _get(row: dict, header: str) -> str:
     return (row.get(header) or "").strip()
 
 
+# A CSV that's been round-tripped through Excel commonly renders a
+# numeric-looking column (a house number, unit number, zip) as e.g.
+# "1130.0" instead of "1130" — Excel infers the column as a number and
+# appends a trailing ".0" to whole numbers on save. FOREWARN's real address
+# text never has that ".0", so it silently breaks every single address
+# match against a row with this artifact. Stripped wherever it can appear.
+_FLOAT_ARTIFACT_RE = re.compile(r"(?<!\d)(\d+)\.0(?!\d)")
+
+
+def _strip_float_artifacts(text: str) -> str:
+    return _FLOAT_ARTIFACT_RE.sub(r"\1", text)
+
+
 def _clean(text: str) -> str:
     text = text.upper()
     text = re.sub(r"[().,*]", " ", text)
@@ -261,7 +274,7 @@ def convert_row(raw_row: dict, headers: dict) -> dict:
         "address": "",
         "city": _get(raw_row, headers.get("city")),
         "state": _get(raw_row, headers.get("state")),
-        "zip": _get(raw_row, headers.get("zip")).split("-")[0].strip(),
+        "zip": _strip_float_artifacts(_get(raw_row, headers.get("zip")).split("-")[0].strip()),
         "skip_reason": "",
     }
 
@@ -287,15 +300,15 @@ def convert_row(raw_row: dict, headers: dict) -> dict:
         return out
 
     if "address" in headers:
-        out["address"] = _get(raw_row, headers["address"])
+        out["address"] = _strip_float_artifacts(_get(raw_row, headers["address"]))
     else:
-        house = _get(raw_row, headers.get("house_number"))
+        house = _strip_float_artifacts(_get(raw_row, headers.get("house_number")))
         prefix = _get(raw_row, headers.get("prefix_direction"))
         street = _get(raw_row, headers.get("street_name"))
         street_type = _get(raw_row, headers.get("street_type"))
         post = _get(raw_row, headers.get("post_direction"))
         unit_type = _get(raw_row, headers.get("unit_type"))
-        unit_num = _get(raw_row, headers.get("unit_number"))
+        unit_num = _strip_float_artifacts(_get(raw_row, headers.get("unit_number")))
 
         if street.upper() == "PO BOX" or street_type.upper() == "PO BOX":
             out["skip_reason"] = "PO Box address — not a property FOREWARN can match"
