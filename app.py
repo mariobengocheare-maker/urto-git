@@ -29,8 +29,8 @@ app = Flask(__name__)
 
 # Bump these two together whenever a change is shipped, so Mario can tell at
 # a glance (bottom of every page) which build he's actually running.
-APP_VERSION = "1.4.0"
-APP_VERSION_DATE = "Jul 30, 2026 5:04 PM EST"
+APP_VERSION = "1.4.1"
+APP_VERSION_DATE = "Jul 30, 2026 5:10 PM EST"
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
