@@ -111,8 +111,8 @@ HEADER_ALIASES = {
     "unit_number": ["unit number", "unit", "apt", "apartment", "apt number", "unit apartment suite"],
     "city": ["situs city", "site city", "property city", "city"],
     "state": ["situs state", "site state", "property state", "state", "state abbreviation", "st"],
-    "zip": ["situs zip", "site zip", "property zip", "zip code", "zip", "zipcode", "postal code",
-            "zip5", "postal", "postal zip code"],
+    "zip": ["situs zip", "site zip", "property zip", "property zip code", "zip code", "zip",
+            "zipcode", "postal code", "zip5", "postal", "postal zip code"],
 }
 
 
