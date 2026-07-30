@@ -81,11 +81,22 @@ DATE_TOKEN_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$|^\d{4}$")
 
 # canonical field -> every header spelling we've seen for it, normalized
 # (lowercase, underscores/extra whitespace collapsed to single spaces).
+#
+# The property's own "situs"/"site"/"property" address, city, state, and zip
+# are listed BEFORE the generic aliases on purpose. A county tax-roll export
+# for an LLC/entity-owned parcel commonly has BOTH a generic "Address" column
+# (often the owner's/registered agent's own MAILING address — where their tax
+# bill goes) and a separate situs/property-address column for the parcel
+# itself. If both are present, matching the generic one first would silently
+# search FOREWARN against — and report back — the *owner's* address instead
+# of the actual property Mario is trying to find a phone number for. See the
+# "wrong-property-for-an-LLC" bug this shape caused.
 HEADER_ALIASES = {
     "first_name": ["first name", "fname", "given name", "first"],
     "last_name": ["last name", "lname", "surname", "last"],
     "owner_name": ["owner name 1", "owner name", "owner", "owner 1", "name"],
-    "address": ["address", "street address", "full address", "property address", "situs address"],
+    "address": ["situs address", "site address", "property address", "physical address",
+                "address", "street address", "full address"],
     "house_number": ["house number", "street number", "housenum", "house no"],
     "prefix_direction": ["prefix direction", "address pre direction", "pre direction", "predirection"],
     "street_name": ["street name"],
@@ -93,9 +104,9 @@ HEADER_ALIASES = {
     "post_direction": ["post direction", "address post direction", "postdirection"],
     "unit_type": ["unit type"],
     "unit_number": ["unit number", "unit", "apt", "apartment", "apt number"],
-    "city": ["city", "situs city"],
-    "state": ["state", "state abbreviation", "st"],
-    "zip": ["zip code", "zip", "zipcode", "postal code", "zip5", "postal"],
+    "city": ["situs city", "site city", "property city", "city"],
+    "state": ["situs state", "site state", "property state", "state", "state abbreviation", "st"],
+    "zip": ["situs zip", "site zip", "property zip", "zip code", "zip", "zipcode", "postal code", "zip5", "postal"],
 }
 
 
@@ -112,7 +123,14 @@ def resolve_headers(fieldnames) -> dict:
     by_normalized = {}
     for f in fieldnames or []:
         if f:
-            by_normalized.setdefault(_normalize_header(f), f)
+            norm = _normalize_header(f)
+            # A "Mailing Address/City/State/Zip" column is where the owner's
+            # tax bill goes, not the property itself — never let it stand in
+            # for the property's own address/city/state/zip, even if a
+            # generic alias would otherwise match its normalized name.
+            if "mailing" in norm:
+                continue
+            by_normalized.setdefault(norm, f)
 
     resolved = {}
     for canonical, aliases in HEADER_ALIASES.items():
