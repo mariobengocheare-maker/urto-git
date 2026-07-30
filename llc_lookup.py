@@ -61,16 +61,30 @@ def _looks_like_company(name: str) -> bool:
     return any(t in ENTITY_TOKENS for t in tokens)
 
 
+_NAME_SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
+
+
 def _split_person_name(name: str) -> dict:
     """Sunbiz lists officer/agent individuals as 'LAST, FIRST [MIDDLE]'. Only
     parse when that comma convention is actually present — never guess word
     order on a bare 'A B' pair, the same caution input_parser.py uses for
-    the general owner-name column."""
+    the general owner-name column.
+
+    Someone with a generational suffix is often listed as a THIRD
+    comma-separated segment instead — 'LAST, SUFFIX, FIRST [MIDDLE]' (e.g.
+    'HACKETT, II, JOHN') — which a plain split-on-first-comma mangles into
+    a garbage name (the suffix segment gets swallowed into "first name").
+    Detected and handled as its own case rather than guessed at generically."""
     name = name.strip()
     if "," not in name:
         return {"first_name": "", "last_name": "", "ok": False}
-    last, _, rest = name.partition(",")
-    rest_tokens = rest.strip().split()
+    parts = [p.strip() for p in name.split(",")]
+    if len(parts) == 3 and parts[1].upper().rstrip(".") in _NAME_SUFFIXES:
+        last, rest = parts[0], parts[2]
+    else:
+        last, _, rest = name.partition(",")
+        rest = rest.strip()
+    rest_tokens = rest.split()
     if not last.strip() or not rest_tokens:
         return {"first_name": "", "last_name": "", "ok": False}
     return {"first_name": rest_tokens[0].title(), "last_name": last.strip().title(), "ok": True}
