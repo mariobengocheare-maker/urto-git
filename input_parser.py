@@ -74,7 +74,7 @@ ENTITY_PHRASES = ["EST OF", "ESTATE OF", "ONLY REFERENCE", "CONFIDENTIAL"]
 # convention used elsewhere, just with trailing trust words (and often a
 # creation date) tacked on. TRUST_TOKENS flags a row as worth attempting
 # this on; TRUST_STOPWORDS are the trailing words stripped off first.
-TRUST_TOKENS = {"TRUST", "TRS", "JTRS"}
+TRUST_TOKENS = {"TRUST", "TRS", "JTRS", "TR"}
 TRUST_STOPWORDS = {
     "TRUST", "TRS", "JTRS", "REVOCABLE", "IRREVOCABLE", "LIVING", "FAMILY",
     "DECLARATION", "AGREEMENT", "AGR", "AGMT", "AMENDED", "RESTATED", "DTD",
@@ -100,23 +100,30 @@ HEADER_ALIASES = {
     "owner_name": ["owner name 1", "owner name", "owner", "owner 1", "name"],
     "address": ["situs address", "site address", "property address", "physical address",
                 "address", "street address", "full address"],
-    "house_number": ["house number", "street number", "housenum", "house no"],
-    "prefix_direction": ["prefix direction", "address pre direction", "pre direction", "predirection"],
-    "street_name": ["street name"],
-    "street_type": ["street type", "street suffix"],
-    "post_direction": ["post direction", "address post direction", "postdirection"],
+    "house_number": ["house number", "street number", "housenum", "house no", "property house number"],
+    "prefix_direction": ["prefix direction", "address pre direction", "pre direction", "predirection",
+                         "property street pre direction", "property pre direction"],
+    "street_name": ["street name", "property street name"],
+    "street_type": ["street type", "street suffix", "property street type"],
+    "post_direction": ["post direction", "address post direction", "postdirection",
+                       "property post direction", "property street post direction"],
     "unit_type": ["unit type"],
-    "unit_number": ["unit number", "unit", "apt", "apartment", "apt number"],
+    "unit_number": ["unit number", "unit", "apt", "apartment", "apt number", "unit apartment suite"],
     "city": ["situs city", "site city", "property city", "city"],
     "state": ["situs state", "site state", "property state", "state", "state abbreviation", "st"],
-    "zip": ["situs zip", "site zip", "property zip", "zip code", "zip", "zipcode", "postal code", "zip5", "postal"],
+    "zip": ["situs zip", "site zip", "property zip", "zip code", "zip", "zipcode", "postal code",
+            "zip5", "postal", "postal zip code"],
 }
 
 
 def _normalize_header(h: str) -> str:
     h = (h or "").strip().lower()
     h = h.replace("_", " ")
-    h = re.sub(r"\s+", " ", h)
+    # Strip punctuation some exports decorate headers with (parens, slashes,
+    # hashes, dashes) so e.g. "Postal (Zip) Code" and "Unit/Apartment/Suite #"
+    # normalize down to plain word sequences an alias can actually match.
+    h = re.sub(r"[()#/\-]", " ", h)
+    h = re.sub(r"\s+", " ", h).strip()
     return h
 
 
@@ -163,6 +170,19 @@ def _strip_float_artifacts(text: str) -> str:
     return _FLOAT_ARTIFACT_RE.sub(r"\1", text)
 
 
+def _clean_zip(raw_zip: str) -> str:
+    """Normalizes a zip field down to its plain 5-digit form. Handles the
+    dashed ZIP+4 shape ("12345-6789") already handled by the caller's own
+    split, plus a second real-world shape some exports use: a bare 9-digit
+    string with NO separator ("123456789" = zip "12345" + plus-4 "6789")
+    -- the standard US ZIP+4 convention always puts the real zip in the
+    first 5 digits, so truncating is safe rather than a guess."""
+    z = _strip_float_artifacts(raw_zip.split("-")[0].strip())
+    if len(z) == 9 and z.isdigit():
+        z = z[:5]
+    return z
+
+
 def _clean(text: str) -> str:
     text = text.upper()
     text = re.sub(r"[().,*]", " ", text)
@@ -180,31 +200,46 @@ def _no_entity(first_name="", last_name="", skip_reason=""):
     }
 
 
-def _try_extract_trust_person(tokens: list) -> dict:
+def _try_extract_trust_person(tokens: list, name_order: str = "last_first") -> dict:
     """Strips trailing trust-suffix words and a trailing creation date, then
-    applies the same known "LAST [SUFFIX] FIRST [MIDDLE]" county convention
-    already used for plain owner names. Returns None (never guesses) unless
-    a real first name is left over — 'AVILES FAMILY TRUST' has only a
-    surname and stays unresolved rather than inventing a first name."""
+    applies the known name convention (see parse_owner_name) to what's left.
+    Returns None (never guesses) unless a real first name is left over —
+    'AVILES FAMILY TRUST' has only a surname and stays unresolved rather
+    than inventing a first name."""
     core = list(tokens)
     while core and (DATE_TOKEN_RE.match(core[-1]) or core[-1] in TRUST_STOPWORDS):
         core.pop()
 
-    if len(core) < 2 or any(t in ENTITY_TOKENS for t in core) or core[1] == "&":
+    if len(core) < 2 or any(t in ENTITY_TOKENS for t in core) or "&" in core:
         return None
 
-    if len(core) >= 3 and core[1] in SUFFIXES:
-        last_name, first_name = core[0], core[2]
+    if name_order == "first_last":
+        if core[-1] in SUFFIXES and len(core) >= 3:
+            first_name, last_name = core[0], core[-2]
+        else:
+            first_name, last_name = core[0], core[-1]
     else:
-        last_name, first_name = core[0], core[1]
+        if len(core) >= 3 and core[1] in SUFFIXES:
+            last_name, first_name = core[0], core[2]
+        else:
+            last_name, first_name = core[0], core[1]
     return {"first_name": first_name.title(), "last_name": last_name.title()}
 
 
-def parse_owner_name(owner_raw: str) -> dict:
-    """Parses a single combined owner-name field under the county convention
-    'LAST [SUFFIX] FIRST [MIDDLE] [& CO-OWNER...]'. Returns
-    {first_name, last_name, is_entity, entity_name, skip_reason}.
+def parse_owner_name(owner_raw: str, name_order: str = "last_first") -> dict:
+    """Parses a single combined owner-name field. `name_order` controls
+    which convention it's assumed to follow:
 
+    - "last_first" (default): the Miami-Dade tax-roll convention,
+      'LAST [SUFFIX] FIRST [MIDDLE] [& CO-OWNER...]'.
+    - "first_last": a normal-English-order name, 'FIRST [MIDDLE] LAST
+      [SUFFIX]' — some third-party data aggregators (see
+      _detect_name_order) present an already-cleaned owner name this way
+      instead. Guessing the wrong one here silently reverses every name in
+      the file, so which convention applies is detected once per file from
+      its column shape, never per-row.
+
+    Returns {first_name, last_name, is_entity, entity_name, skip_reason}.
     skip_reason is set instead of guessing when the field is blank, an
     unresolvable placeholder/trust/estate, or an ambiguous multi-owner
     listing. is_entity is set instead when the name looks like a registered
@@ -230,7 +265,16 @@ def parse_owner_name(owner_raw: str) -> dict:
         }
 
     if TRUST_TOKENS & set(tokens):
-        extracted = _try_extract_trust_person(tokens)
+        # A trust's name is always attempted as "LAST FIRST [MIDDLE]" —
+        # deliberately NOT the file-level name_order. Even in a first-last
+        # aggregator export (e.g. IMAPP), trust ownership names look to be
+        # carried over verbatim from the raw county record rather than run
+        # through whatever name-cleanup normalized the plain owner names:
+        # confirmed on a real file where "SANCHEZ ELLIS A TRUST" cross-
+        # referenced against that same row's recorded-mortgage borrower
+        # ("LIVI ELLIS A SANCHEZ REVOCABLE") as Last=Sanchez, First=Ellis —
+        # last-first — despite plain rows in the same file being first-last.
+        extracted = _try_extract_trust_person(tokens, "last_first")
         if extracted:
             return _no_entity(first_name=extracted["first_name"], last_name=extracted["last_name"])
         return _no_entity(skip_reason="Trust name has a surname but no first name to search — needs manual lookup")
@@ -242,11 +286,19 @@ def parse_owner_name(owner_raw: str) -> dict:
         return _no_entity(skip_reason="Could not determine first/last name from owner field")
 
     if tokens[0] == "LE" and len(tokens) >= 3:
-        # Life-estate holder: "LE FIRST [MIDDLE] LAST [SUFFIX]"
+        # Life-estate holder: "LE FIRST [MIDDLE] LAST [SUFFIX]" — this county
+        # marker convention is unrelated to name_order, always first-last.
         name_tokens = tokens[1:]
         if name_tokens[-1] in SUFFIXES and len(name_tokens) >= 3:
             name_tokens = name_tokens[:-1]
         first_name, last_name = name_tokens[0], name_tokens[-1]
+    elif name_order == "first_last":
+        if "&" in tokens:
+            return _no_entity(skip_reason="Ambiguous multi-owner name format — needs manual review")
+        if tokens[-1] in SUFFIXES and len(tokens) >= 3:
+            first_name, last_name = tokens[0], tokens[-2]
+        else:
+            first_name, last_name = tokens[0], tokens[-1]
     else:
         # County default: "LAST [SUFFIX] FIRST [MIDDLE] [& CO-OWNER...]"
         if len(tokens) >= 3 and tokens[1] in SUFFIXES:
@@ -267,7 +319,30 @@ def has_address_columns(headers: dict) -> bool:
     return "address" in headers or "house_number" in headers or "street_name" in headers
 
 
-def convert_row(raw_row: dict, headers: dict) -> dict:
+# A raw county tax-roll export's combined owner-name column follows "LAST
+# FIRST [MIDDLE]" order. Some third-party property-data aggregators (e.g.
+# IMAPP) instead ship an already-cleaned "Owner Name 1" column in normal
+# "FIRST [MIDDLE] LAST" reading order — the opposite convention. Detected
+# once per file from a signature of columns that ONLY this kind of export
+# carries (never per-row, and never by guessing at a single ambiguous name),
+# since applying the wrong convention silently reverses every name in the
+# file. Confirmed against a real IMAPP export by cross-checking several
+# owner names against that same file's recorded-mortgage borrower field
+# (reliably "LAST FIRST MIDDLE"): "BRUCE WEMPLE" / mortgage "WEMPLE BRUCE M",
+# "JOSE BENGOCHEA" / mortgage "BENGOCHEA JOSE".
+_FIRST_LAST_FORMAT_SIGNATURE = {
+    "owner address house number", "estimated current value", "total living heated area",
+}
+
+
+def _detect_name_order(fieldnames) -> str:
+    normalized = {_normalize_header(f) for f in (fieldnames or []) if f}
+    if len(_FIRST_LAST_FORMAT_SIGNATURE & normalized) >= 2:
+        return "first_last"
+    return "last_first"
+
+
+def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") -> dict:
     out = {
         "owner_name_raw": "",
         "first_name": "",
@@ -277,7 +352,7 @@ def convert_row(raw_row: dict, headers: dict) -> dict:
         "address": "",
         "city": _get(raw_row, headers.get("city")),
         "state": _get(raw_row, headers.get("state")),
-        "zip": _strip_float_artifacts(_get(raw_row, headers.get("zip")).split("-")[0].strip()),
+        "zip": _clean_zip(_get(raw_row, headers.get("zip"))),
         "skip_reason": "",
     }
 
@@ -292,7 +367,7 @@ def convert_row(raw_row: dict, headers: dict) -> dict:
     else:
         owner_raw = _get(raw_row, headers.get("owner_name"))
         out["owner_name_raw"] = owner_raw
-        parsed = parse_owner_name(owner_raw)
+        parsed = parse_owner_name(owner_raw, name_order)
         out["first_name"] = parsed["first_name"]
         out["last_name"] = parsed["last_name"]
         out["is_entity"] = parsed["is_entity"]
@@ -355,7 +430,8 @@ def load_rows(fieldnames, raw_rows) -> list:
             "'Zip', 'Zip Code', or 'Postal Code'."
         )
 
-    return [convert_row(r, headers) for r in raw_rows]
+    name_order = _detect_name_order(fieldnames)
+    return [convert_row(r, headers, name_order) for r in raw_rows]
 
 
 def build_output_row(row: dict, result: dict) -> dict:
