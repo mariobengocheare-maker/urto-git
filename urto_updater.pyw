@@ -29,6 +29,7 @@ import time
 import tkinter as tk
 import urllib.request
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 REPO_ZIP_URL = "https://codeload.github.com/mariobengocheare-maker/urto-git/zip/refs/heads/claude/context-window-dgen3k"
@@ -120,6 +121,12 @@ def install_update(log, source_dir: Path):
             shutil.copytree(item, dest, dirs_exist_ok=True)
         else:
             shutil.copy2(item, dest)
+    # copy2 preserves the ZIP's own file timestamps (whenever GitHub
+    # packaged the commit), not the actual moment this install ran on
+    # Mario's PC — so the footer's "updated" timestamp needs its own marker,
+    # written from THIS machine's clock right now. app.py reads this instead
+    # of a hand-typed date, so it can never drift from reality again.
+    (INSTALL_DIR / "last_updated.txt").write_text(datetime.now().astimezone().isoformat())
 
 
 def install_requirements(log):

@@ -17,6 +17,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, request, send_file
@@ -28,10 +29,32 @@ from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
 app = Flask(__name__)
 
-# Bump these two together whenever a change is shipped, so Mario can tell at
-# a glance (bottom of every page) which build he's actually running.
-APP_VERSION = "1.5.1"
-APP_VERSION_DATE = "Aug 3, 2026 1:30 PM EST"
+# Bump this by hand whenever a change is shipped, so Mario can tell at a
+# glance (bottom of every page) which build he's actually running. The DATE
+# shown alongside it is NOT hand-typed (that used to drift out of sync with
+# reality) — see _get_last_updated_display() below, which reads the real
+# install moment straight off whatever PC is actually running this.
+APP_VERSION = "1.5.2"
+
+LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
+
+
+def _get_last_updated_display() -> str:
+    """The URTO Updater writes LAST_UPDATED_MARKER with this machine's own
+    clock at the moment it finishes installing (urto_updater.pyw's
+    install_update()) — that's the real "when did this PC last get updated"
+    answer, not a guess typed into source code weeks in advance. Falls back
+    to this file's own mtime (e.g. a fresh git clone, or an update installed
+    via the old manual ZIP method before the marker file existed)."""
+    try:
+        dt = datetime.fromisoformat(LAST_UPDATED_MARKER.read_text().strip())
+    except Exception:
+        try:
+            dt = datetime.fromtimestamp(Path(__file__).stat().st_mtime).astimezone()
+        except Exception:
+            return "unknown"
+    return dt.strftime("%b %d, %Y %I:%M %p %Z").strip()
+
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -154,7 +177,7 @@ def run_job_safe(job_id, rows):
 
 @app.route("/")
 def index():
-    return render_template("index.html", app_version=APP_VERSION, app_version_date=APP_VERSION_DATE)
+    return render_template("index.html", app_version=APP_VERSION, app_version_date=_get_last_updated_display())
 
 
 @app.route("/api/upload", methods=["POST"])
