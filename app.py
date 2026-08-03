@@ -35,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.5.9"
+APP_VERSION = "1.6.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -621,6 +621,28 @@ def set_google_drive_dir():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify(crm.get_backup_status())
+
+
+@app.route("/api/backup/health")
+def backup_health():
+    return jsonify(crm.check_data_health())
+
+
+@app.route("/api/backup/snapshots")
+def backup_snapshots():
+    return jsonify(crm.list_available_snapshots())
+
+
+@app.route("/api/backup/restore", methods=["POST"])
+def backup_restore():
+    path = (request.get_json(force=True) or {}).get("path", "").strip()
+    if not path:
+        return jsonify({"error": "No backup file specified."}), 400
+    try:
+        result = crm.restore_from_snapshot(path)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result)
 
 
 @app.route("/api/crm/calendar")

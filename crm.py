@@ -489,6 +489,104 @@ def get_backup_status() -> dict:
         "last_backup_destinations": _last_backup.get("destinations"),
     }
 
+
+def _count_clients_in_db(db_path: Path):
+    """Read-only client count from an arbitrary sqlite file — used to judge
+    backup snapshots without ever risking a write to them. Returns None if
+    the file doesn't exist or isn't a valid URTO database (a corrupt/partial
+    copy, or a version too old to have the clients table)."""
+    if not db_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        row = conn.execute("SELECT COUNT(*) AS c FROM clients").fetchone()
+        conn.close()
+        return row[0]
+    except Exception:
+        return None
+
+
+def list_available_snapshots() -> list:
+    """Every DB backup file (the always-current live mirror + every
+    timestamped snapshot) across every backup destination, newest first,
+    each annotated with how many clients it actually contains. Powers both
+    check_data_health() below and the in-app 'Restore from backup' tool —
+    Mario should never need a console or a manual file copy to recover from
+    a bad state."""
+    results = []
+    for dest in resolve_backup_dirs():
+        backup_dir = dest["path"]
+        if not backup_dir.exists():
+            continue
+        candidates = []
+        latest = backup_dir / LATEST_NAME
+        if latest.exists():
+            candidates.append(latest)
+        candidates.extend(sorted(backup_dir.glob("urto_crm_[0-9]*.db"), reverse=True))
+        for f in candidates:
+            try:
+                mtime = datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds")
+            except OSError:
+                mtime = None
+            results.append({
+                "destination": dest["label"],
+                "filename": f.name,
+                "path": str(f),
+                "modified_at": mtime,
+                "client_count": _count_clients_in_db(f),
+            })
+    results.sort(key=lambda r: r["modified_at"] or "", reverse=True)
+    return results
+
+
+def check_data_health() -> dict:
+    """Compares the LIVE database's client count against the most recent
+    known backup mirror (urto_crm_latest.db, whichever destination has the
+    newest one) — under normal operation these two should always be in
+    lockstep, since on_data_changed() rewrites the mirror the instant
+    anything changes (client added/edited/deleted). If the live DB somehow
+    has FEWER clients than that mirror, something bypassed the normal
+    save-and-mirror path entirely — e.g. a stale or freshly-recreated
+    database file got swapped into place (exactly what happened to Mario:
+    contacts added while running one URTO folder never carried over when a
+    different folder/location ended up being the one actually running
+    later). A genuine, intentional deletion by Mario is invisible to this
+    check, since the mirror would already have been updated to match at the
+    same moment the deletion happened."""
+    current_count = _count_clients_in_db(DB_PATH) or 0
+    mirrors = [
+        s for s in list_available_snapshots()
+        if s["filename"] == LATEST_NAME and s["client_count"] is not None
+    ]
+    if not mirrors:
+        return {"ok": True, "current_count": current_count, "best_known_count": current_count}
+    best = max(s["client_count"] for s in mirrors)
+    return {"ok": current_count >= best, "current_count": current_count, "best_known_count": best}
+
+
+def restore_from_snapshot(snapshot_path: str) -> dict:
+    """Restores the live database from a chosen backup file — self-service
+    recovery, no console, no manual file copying (per the standing 'no
+    console' rule). Only ever restores from a path list_available_snapshots()
+    itself returned, never an arbitrary path. Takes a fresh safety snapshot
+    of whatever's currently live FIRST, so restoring the wrong one is itself
+    trivially recoverable (it just becomes one more entry in the list)."""
+    known_paths = {s["path"] for s in list_available_snapshots()}
+    if snapshot_path not in known_paths:
+        raise ValueError("That's not a recognized backup file.")
+    src = Path(snapshot_path)
+    if not src.exists() or not src.is_file():
+        raise ValueError("That backup file no longer exists.")
+    # Read the chosen backup into memory BEFORE taking the safety snapshot —
+    # if the chosen file IS urto_crm_latest.db, backup_now() below would
+    # otherwise overwrite it with the current (possibly broken) live state
+    # before we ever get a chance to copy from it.
+    restore_bytes = src.read_bytes()
+    backup_now("pre-restore safety snapshot")
+    DB_PATH.write_bytes(restore_bytes)
+    on_data_changed("restored from backup")
+    return {"ok": True, "restored_from": str(src)}
+
 FREQUENCY_PRESETS = {
     "2_weeks": ("2 Weeks", 14),
     "3_weeks": ("3 Weeks", 21),

@@ -426,6 +426,19 @@
   .backup-bar .ok { color: #3fce7a; }
   .backup-bar .warn { color: #e0a52c; }
   .backup-bar-destinations { display: flex; gap: 14px; flex-wrap: wrap; }
+  #dataHealthWarning {
+    display: none; align-items: center; gap: 12px; margin-bottom: 14px;
+    padding: 12px 16px; border: 1px solid rgba(224,74,74,.5); border-radius: 8px;
+    background: rgba(90,20,20,.5); color: #ffb3b3; font-size: .88rem; font-weight: 600;
+  }
+  #dataHealthWarning button { white-space: nowrap; }
+  .restore-row {
+    display: flex; align-items: center; gap: 14px; padding: 10px 12px;
+    border: 1px solid rgba(201,162,39,.15); border-radius: 8px; margin-bottom: 8px;
+    background: rgba(19,28,46,.4); font-size: .85rem;
+  }
+  .restore-row .restore-info { flex: 1; }
+  .restore-row .restore-count { color: var(--gold-bright, #e0c060); font-weight: 600; }
   #gdriveSetupRow {
     display: none; align-items: center; gap: 8px; width: 100%;
     padding-top: 8px; border-top: 1px solid rgba(201,162,39,.12); font-size: .8rem;
@@ -1008,10 +1021,16 @@
   <h1>URTO CRM</h1>
   <p class="sub">Manage client relationships and automatic follow-up scheduling.</p>
 
+  <div id="dataHealthWarning">
+    <span id="dataHealthWarningText">⚠ Your CRM shows fewer clients than your most recent backup — some data may be missing.</span>
+    <button class="ghost small" id="dataHealthRestoreBtn">Restore from Backup…</button>
+  </div>
+
   <div class="backup-bar">
     <span id="backupStatusText">Checking backup status…</span>
     <span class="backup-bar-destinations" id="backupDestinations"></span>
     <button class="ghost small" id="backupNowBtn">Backup Now</button>
+    <button class="ghost small" id="openRestoreBtn">Restore from Backup…</button>
     <div id="gdriveSetupRow">
       <span>Google Drive folder not found automatically — paste its full path:</span>
       <input type="text" id="gdriveDirInput" placeholder="e.g. C:\Users\Mario\Google Drive">
@@ -1198,6 +1217,22 @@
 <footer class="site-footer">
   URTO — Ultimate Realtor Tool · Created by Mario Bengochea · v{{ app_version }} (updated {{ app_version_date }})
 </footer>
+
+<!-- Restore from Backup modal -->
+<div class="modal-overlay" id="restoreOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Restore from Backup</h2>
+      <button class="modal-close" id="restoreCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">
+      Every backup below is a real snapshot of your CRM. Restoring copies one back into place —
+      a safety snapshot of what's currently loaded is taken automatically first, so restoring the
+      wrong one is itself undoable.
+    </p>
+    <div id="restoreList">Loading backups…</div>
+  </div>
+</div>
 
 <!-- Add / Edit client modal -->
 <div class="modal-overlay" id="clientFormOverlay">
@@ -1671,7 +1706,7 @@ const txnSection = document.getElementById('txnSection');
 const TOP_TABS = [
   { key: 'home', btn: tabHomeBtn, section: homeSection, onShow: null },
   { key: 'lookup', btn: tabLookupBtn, section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
-  { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); } },
+  { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
 ];
@@ -1818,6 +1853,88 @@ backupNowBtn.addEventListener('click', async () => {
     backupNowBtn.textContent = 'Backup Now';
   }
 });
+
+/* ---- Data-loss safety net: unmissable warning + one-click restore ---- */
+const dataHealthWarning = document.getElementById('dataHealthWarning');
+const dataHealthWarningText = document.getElementById('dataHealthWarningText');
+const restoreOverlay = document.getElementById('restoreOverlay');
+const restoreList = document.getElementById('restoreList');
+
+async function checkDataHealth() {
+  try {
+    const res = await fetch('/api/backup/health');
+    const h = await res.json();
+    if (!h.ok) {
+      dataHealthWarningText.textContent =
+        `⚠ Your CRM shows ${h.current_count} client${h.current_count === 1 ? '' : 's'}, but a recent backup ` +
+        `has ${h.best_known_count} — some data may be missing.`;
+      dataHealthWarning.style.display = 'flex';
+    } else {
+      dataHealthWarning.style.display = 'none';
+    }
+  } catch (e) {
+    // never let a health-check failure block using the app
+  }
+}
+
+function formatSnapshotTime(iso) {
+  if (!iso) return 'unknown time';
+  return new Date(iso).toLocaleString();
+}
+
+async function openRestoreModal() {
+  restoreOverlay.classList.add('show');
+  restoreList.innerHTML = 'Loading backups…';
+  try {
+    const res = await fetch('/api/backup/snapshots');
+    const snaps = await res.json();
+    if (!snaps.length) {
+      restoreList.innerHTML = '<div class="empty-state">No backups found yet.</div>';
+      return;
+    }
+    restoreList.innerHTML = '';
+    for (const s of snaps) {
+      const row = document.createElement('div');
+      row.className = 'restore-row';
+      const countText = s.client_count === null ? 'unreadable' : `${s.client_count} client${s.client_count === 1 ? '' : 's'}`;
+      row.innerHTML = `
+        <div class="restore-info">
+          <div><strong>${escapeHtml(s.destination)}</strong> — ${escapeHtml(s.filename)}</div>
+          <div>${formatSnapshotTime(s.modified_at)} · <span class="restore-count">${countText}</span></div>
+        </div>
+        <button class="ghost small restore-btn">Restore this</button>
+      `;
+      row.querySelector('.restore-btn').addEventListener('click', async () => {
+        if (!confirm(`Restore your CRM from this ${s.destination} backup (${countText})? A safety snapshot of what's currently loaded will be taken first.`)) return;
+        try {
+          const r = await fetch('/api/backup/restore', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: s.path }),
+          });
+          const data = await r.json();
+          if (!r.ok) {
+            alert(data.error || 'Restore failed.');
+            return;
+          }
+          restoreOverlay.classList.remove('show');
+          alert('Restored. Reloading your client list…');
+          await loadClients();
+          await refreshBackupStatus();
+          await checkDataHealth();
+        } catch (e) {
+          alert("Couldn't reach URTO's server — try again.");
+        }
+      });
+      restoreList.appendChild(row);
+    }
+  } catch (e) {
+    restoreList.innerHTML = '<div class="empty-state">Could not load backups — try again.</div>';
+  }
+}
+
+document.getElementById('openRestoreBtn').addEventListener('click', openRestoreModal);
+document.getElementById('dataHealthRestoreBtn').addEventListener('click', openRestoreModal);
+document.getElementById('restoreCloseBtn').addEventListener('click', () => restoreOverlay.classList.remove('show'));
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
 const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
