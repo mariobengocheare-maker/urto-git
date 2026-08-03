@@ -34,7 +34,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.5.3"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -178,6 +178,14 @@ def run_job_safe(job_id, rows):
 @app.route("/")
 def index():
     return render_template("index.html", app_version=APP_VERSION, app_version_date=_get_last_updated_display())
+
+
+@app.route("/api/version")
+def api_version():
+    # Cheap, unauthenticated version check — lets launch_desktop.pyw detect
+    # "something's already on this port, but it's a stale pre-update process"
+    # and self-heal instead of just opening a browser tab to the old code.
+    return jsonify({"version": APP_VERSION})
 
 
 @app.route("/api/upload", methods=["POST"])

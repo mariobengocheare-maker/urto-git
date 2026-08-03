@@ -21,6 +21,7 @@ nothing gets overwritten and you're left exactly where you started.
 """
 
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,7 @@ REPO_ZIP_URL = "https://codeload.github.com/mariobengocheare-maker/urto-git/zip/
 INSTALL_DIR = Path(__file__).resolve().parent
 BACKUP_ROOT = INSTALL_DIR / "_update_backups"
 MAX_BACKUPS = 5
+APP_PORT = 5000
 
 # Never touched during install, even though they live alongside the code —
 # this is Mario's real data. None of it ships in the GitHub zip anyway (all
@@ -45,14 +47,33 @@ NEVER_TOUCH = {"urto_crm.db", "backups", "outputs", "documents", "flasklog.txt",
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def kill_running_app(log):
+def _port_is_open(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def kill_running_app(log) -> bool:
     """Stops any already-running `app.py` from THIS folder so its files
     aren't locked when we overwrite them — no manual Task Manager step.
     Matched on the full path to this folder's app.py, not just the bare
     filename — Mario also runs Wardrobe (mariobengocheare-maker/wardrobe),
     which has its own unrelated app.py, and a name-only match would risk
-    killing that instead if both happen to be running at once."""
+    killing that instead if both happen to be running at once.
+
+    Returns whether the port actually ended up free. This used to be pure
+    best-effort with no feedback at all — if the PowerShell command failed
+    for any reason (execution policy, WMI hiccup, timing), the OLD server
+    just kept running silently, and Mario would update, relaunch, and see
+    the OLD version with zero indication why. Now it actually verifies and
+    tells him plainly if manual intervention is needed, instead of leaving
+    him to guess."""
     log("Stopping URTO if it's currently running...")
+    if not _port_is_open(APP_PORT):
+        return True  # nothing was running — no-op, and no need to verify further
+
     target = str(INSTALL_DIR / "app.py").replace("'", "''")
     ps_cmd = (
         f"Get-CimInstance Win32_Process | "
@@ -64,9 +85,20 @@ def kill_running_app(log):
             ["powershell", "-NoProfile", "-Command", ps_cmd],
             capture_output=True, timeout=15, creationflags=NO_WINDOW,
         )
-    except Exception:
-        pass  # best-effort — if nothing was running, this is a harmless no-op
-    time.sleep(1)
+    except Exception as e:
+        log(f"  (couldn't run the stop command: {e})")
+
+    for _ in range(10):  # give it up to ~5s to actually let go of the port
+        if not _port_is_open(APP_PORT):
+            return True
+        time.sleep(0.5)
+
+    log("")
+    log("⚠ Couldn't confirm the old URTO server actually stopped.")
+    log("  Open Task Manager (Ctrl+Shift+Esc), end any 'pythonw.exe' or")
+    log("  'python.exe' process, then run this updater again — otherwise")
+    log("  you'll keep seeing the OLD version after this update finishes.")
+    return False
 
 
 def backup_current_install(log):
@@ -147,7 +179,7 @@ def install_requirements(log):
 
 def run_update(log) -> bool:
     try:
-        kill_running_app(log)
+        old_server_stopped = kill_running_app(log)
         backup_current_install(log)
         with tempfile.TemporaryDirectory(prefix="urto_update_") as tmp:
             source_dir = download_and_extract(log, Path(tmp))
@@ -156,7 +188,17 @@ def run_update(log) -> bool:
         # nothing left behind to manage by hand.
         install_requirements(log)
         log("")
-        log("Done! URTO is up to date.")
+        if old_server_stopped:
+            log("Done! URTO is up to date.")
+        else:
+            # The new files ARE on disk correctly — this is purely about the
+            # OLD process still holding the port, which is why Mario hit
+            # "both launch paths show the old version" (they just find
+            # something already answering on 5000 and open a tab to THAT,
+            # never starting a fresh process with the new code).
+            log("Files are updated, but the OLD version may still be running.")
+            log("See the warning above — end it in Task Manager before")
+            log("launching URTO, or you'll keep seeing the old version.")
         return True
     except Exception as e:
         log("")
