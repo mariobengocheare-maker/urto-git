@@ -6,9 +6,11 @@ follow-up data and schedule math.
 
 import calendar
 import csv
+import json
 import os
 import re
 import shutil
+import string
 import sqlite3
 import threading
 import uuid
@@ -85,14 +87,79 @@ _migrate_legacy_data_dir()
 LATEST_NAME = "urto_crm_latest.db"
 _backup_lock = threading.Lock()
 _dirty = False
-_last_backup = {"at": None, "path": None}
+_last_backup = {"at": None, "destinations": None}
 
 
-def resolve_backup_dir() -> Path:
+def _detect_google_drive_dir():
+    """Best-effort detection of Google Drive for Desktop's local **Mirror**
+    folder — NOT the default Stream/virtual-drive mode, which isn't a real
+    writable local path the same way OneDrive's synced folder is. Google
+    Drive doesn't set an env var the way OneDrive does, so this just checks
+    the common default locations; a manual override set via
+    set_google_drive_dir() (surfaced in the CRM's backup status bar) always
+    wins over this guess."""
+    candidates = [Path.home() / "Google Drive", Path.home() / "My Drive"]
+    for letter in string.ascii_uppercase:
+        candidates.append(Path(f"{letter}:/My Drive"))
+    for c in candidates:
+        try:
+            if c.exists() and c.is_dir():
+                return c
+        except OSError:
+            continue
+    return None
+
+
+def get_google_drive_dir():
+    """A saved manual path (app_settings) takes priority over auto-detection
+    — Mario can point this at wherever his Google Drive folder actually is
+    if auto-detect guesses wrong, without touching a console."""
+    conn = get_conn()
+    row = conn.execute("SELECT value FROM app_settings WHERE key = 'google_drive_dir'").fetchone()
+    conn.close()
+    if row and row["value"]:
+        p = Path(row["value"])
+        if p.exists() and p.is_dir():
+            return p
+    return _detect_google_drive_dir()
+
+
+def set_google_drive_dir(path_str: str):
+    p = Path(path_str)
+    if not p.exists() or not p.is_dir():
+        raise ValueError(f"'{path_str}' isn't a folder that exists on this PC")
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('google_drive_dir', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(p),),
+    )
+    conn.commit()
+    conn.close()
+
+
+def resolve_backup_dirs() -> list:
+    """Every place a backup actually gets written. Always includes the
+    local backups/ folder as a guaranteed baseline (never depends on either
+    cloud being present), plus OneDrive and/or Google Drive whenever
+    detected/configured — Mario wants both clouds simultaneously, not
+    either/or, so this is a list rather than the single-destination design
+    the original OneDrive-only backup used. Returns [{"label", "path"}, ...]."""
+    dests = []
     onedrive = os.environ.get("OneDriveConsumer") or os.environ.get("OneDrive")
-    base = Path(onedrive) / "URTO Backups" if onedrive else Path(__file__).parent / "backups"
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+    if onedrive:
+        p = Path(onedrive) / "URTO Backups"
+        p.mkdir(parents=True, exist_ok=True)
+        dests.append({"label": "OneDrive", "path": p})
+    gdrive = get_google_drive_dir()
+    if gdrive:
+        p = gdrive / "URTO Backups"
+        p.mkdir(parents=True, exist_ok=True)
+        dests.append({"label": "Google Drive", "path": p})
+    local = _PROJECT_DIR / "backups"
+    local.mkdir(parents=True, exist_ok=True)
+    dests.append({"label": "Local", "path": local})
+    return dests
 
 
 def mark_dirty():
@@ -100,74 +167,245 @@ def mark_dirty():
     _dirty = True
 
 
-def _mirror_documents_folder(backup_dir: Path):
-    """Mirrors DOCUMENTS_DIR (Transaction Manager's uploaded templates +
-    signed files) into the backup dir — copies new/changed files AND
-    removes ones no longer present in the source, so a deleted document
-    actually disappears from the backup too, same principle as the CRM's
-    instant-mirror deletions. Skipped entirely if there are no documents
-    yet, so this feature adds nothing to the backup folder until used."""
-    if not DOCUMENTS_DIR.exists():
-        return
-    dest_root = backup_dir / "documents"
-    dest_root.mkdir(parents=True, exist_ok=True)
+def _copy_if_newer(src: Path, dest: Path, expected: set):
+    """Shared copy step for the human-organized document mirror below —
+    tracks every dest path actually expected to exist so leftover files
+    (renamed/removed documents) can be cleaned up afterward."""
+    expected.add(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if not dest.exists() or dest.stat().st_mtime < src.stat().st_mtime:
+            shutil.copy2(src, dest)
+    except OSError:
+        pass
 
-    src_files = set()
-    for src_path in DOCUMENTS_DIR.rglob("*"):
-        if src_path.is_file():
-            rel = src_path.relative_to(DOCUMENTS_DIR)
-            src_files.add(rel)
-            dest_path = dest_root / rel
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+def _mirror_documents_folder(backup_dir: Path):
+    """Mirrors Transaction Manager's uploaded files into TWO human-browsable
+    folders (real names, not the internal stored/uuid filenames) rather than
+    a flat raw copy of DOCUMENTS_DIR:
+
+      * 'Transaction Checklist Documents/<Type>/<Document Name><ext>' — the
+        shared blank template for each document on a type's checklist.
+      * 'Transactions/<Transaction Title> (id)/<Document Name> - Template
+        <ext>' and '... - Signed<ext>' — one folder per actual transaction
+        (across every folder: active/closings/archive), using that
+        transaction's own snapshotted document names.
+
+    Full diff each run: copies new/changed files AND deletes anything in
+    the backup no longer expected (deleted document, renamed transaction,
+    removed signed upload, transaction itself deleted), same principle as
+    the CRM's instant-mirror deletions elsewhere."""
+    checklist_root = backup_dir / "Transaction Checklist Documents"
+    txns_root = backup_dir / "Transactions"
+    expected = set()
+
+    for txn_type, label in TRANSACTION_TYPES:
+        type_dir = checklist_root / _safe_name(label, txn_type)
+        for dt in list_document_types(txn_type):
+            if not dt.get("template_filename"):
+                continue
+            src = TEMPLATES_DIR / dt["template_filename"]
+            if not src.exists():
+                continue
+            ext = Path(dt.get("template_original_name") or dt["template_filename"]).suffix
+            dest = type_dir / f"{_safe_name(dt['name'], 'Document')}{ext}"
+            _copy_if_newer(src, dest, expected)
+
+    for folder in TRANSACTION_FOLDERS:
+        for txn in list_transactions(folder):
+            txn_dir = txns_root / f"{_safe_name(txn['title'], 'Transaction')} ({txn['id']})"
+            for doc in txn.get("documents") or []:
+                doc_name = _safe_name(doc.get("name") or "Document", "Document")
+                # Template: only the shared type-level file, if the doc's
+                # link to a document_type still exists (ON DELETE SET NULL
+                # when the type-level doc is removed — see build order #22).
+                dt_id = doc.get("document_type_id")
+                if dt_id:
+                    dt = get_document_type(dt_id)
+                    if dt and dt.get("template_filename"):
+                        src = TEMPLATES_DIR / dt["template_filename"]
+                        if src.exists():
+                            ext = Path(dt.get("template_original_name") or dt["template_filename"]).suffix
+                            _copy_if_newer(src, txn_dir / f"{doc_name} - Template{ext}", expected)
+                if doc.get("signed_filename"):
+                    src = SIGNED_DIR / doc["signed_filename"]
+                    if src.exists():
+                        ext = Path(doc.get("signed_original_name") or doc["signed_filename"]).suffix
+                        _copy_if_newer(src, txn_dir / f"{doc_name} - Signed{ext}", expected)
+
+    for root in (checklist_root, txns_root):
+        if not root.exists():
+            continue
+        for existing in list(root.rglob("*")):
+            if existing.is_file() and existing not in expected:
+                existing.unlink(missing_ok=True)
+        for existing in sorted([p for p in root.rglob("*") if p.is_dir()], key=lambda p: -len(str(p))):
             try:
-                if not dest_path.exists() or dest_path.stat().st_mtime < src_path.stat().st_mtime:
-                    shutil.copy2(src_path, dest_path)
+                existing.rmdir()  # only removes it if now empty
             except OSError:
                 pass
 
-    for dest_path in list(dest_root.rglob("*")):
-        if dest_path.is_file() and dest_path.relative_to(dest_root) not in src_files:
-            dest_path.unlink(missing_ok=True)
-    for dest_path in sorted([p for p in dest_root.rglob("*") if p.is_dir()], key=lambda p: -len(str(p))):
+
+def _safe_name(name: str, fallback: str) -> str:
+    """Filesystem-safe version of a human name for a backup file/folder —
+    strips characters Windows rejects but keeps spaces/apostrophes/parens so
+    the result still reads naturally when Mario browses the backup folder."""
+    cleaned = re.sub(r'[<>:"/\\|?*]', "", (name or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned or fallback
+
+
+def _write_crm_contacts_export(backup_dir: Path):
+    """One human-readable .txt file per client under 'CRM Contacts/' — so
+    Mario's contacts are actually browsable/readable straight from OneDrive
+    or Google Drive, not just locked inside the raw urto_crm.db file. Cheap
+    (small text files), so this runs on the INSTANT mirror path, not just
+    the periodic snapshot — deletion propagates the same way as everywhere
+    else: anything not in the current client list gets removed."""
+    dest_root = backup_dir / "CRM Contacts"
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    clients = list_clients()
+    expected = set()
+    for c in clients:
+        fname = f"{_safe_name(c['name'], 'Unnamed Client')} ({c['id']}).txt"
+        expected.add(fname)
+        lines = [
+            c["name"] or "(no name)",
+            f"Phone: {c.get('phone') or '—'}",
+            f"Address: {c.get('address') or '—'}",
+            f"Contact info: {c.get('contact_info') or '—'}",
+            f"Client since: {c.get('created_at') or '—'}",
+            "",
+        ]
+        if c.get("frequency_label"):
+            lines.append(f"Individual follow-up: {c['frequency_label']} — next: {c.get('next_followup_date') or '—'}")
+        for lf in c.get("list_followups") or []:
+            lines.append(f"Contact List follow-up ({lf['name']}): next {lf['next_call_date']}")
+        if not c.get("frequency_label") and not c.get("list_followups"):
+            lines.append("No automatic follow-up.")
+        lines.append("")
+        lines.append("--- Notes ---")
+        notes = list_notes(c["id"])
+        if notes:
+            for n in notes:
+                lines.append(f"[{n.get('created_at', '')}] {n.get('text', '')}")
+        else:
+            lines.append("(no notes yet)")
         try:
-            dest_path.rmdir()  # only removes it if now empty
+            (dest_root / fname).write_text("\n".join(lines), encoding="utf-8")
         except OSError:
+            pass
+
+    for existing in dest_root.glob("*.txt"):
+        if existing.name not in expected:
+            existing.unlink(missing_ok=True)
+
+
+def _write_full_data_export(backup_dir: Path):
+    """Single JSON file with EVERY piece of URTO data — clients, notes,
+    contact lists + membership, calendar events, transactions + their
+    documents, document checklists, and the weekly lookup count. Meant to
+    be pasted straight into a fresh Claude conversation to describe the
+    entire current state of Mario's CRM (e.g. to rebuild/restore it, or
+    just as a complete point-in-time reference) — cheap to regenerate
+    (a handful of SELECTs + json.dumps), so it runs on every single instant
+    mirror, not just the periodic snapshot."""
+    conn = get_conn()
+    export = {
+        "_note": (
+            "Full data export of URTO (Mario Bengochea's real-estate CRM/tool). "
+            "This file is regenerated automatically every time any data changes. "
+            "It describes every client, note, follow-up, contact list, calendar "
+            "event, and transaction currently in the app."
+        ),
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "clients": [dict(r) for r in conn.execute("SELECT * FROM clients ORDER BY id").fetchall()],
+        "notes": [dict(r) for r in conn.execute("SELECT * FROM notes ORDER BY id").fetchall()],
+        "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
+        "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
+        "events": [dict(r) for r in conn.execute("SELECT * FROM events ORDER BY id").fetchall()],
+        "document_types": [dict(r) for r in conn.execute("SELECT * FROM document_types ORDER BY id").fetchall()],
+        "transactions": [dict(r) for r in conn.execute("SELECT * FROM transactions ORDER BY id").fetchall()],
+        "transaction_documents": [
+            dict(r) for r in conn.execute("SELECT * FROM transaction_documents ORDER BY id").fetchall()
+        ],
+        "lookup_stats": [dict(r) for r in conn.execute("SELECT * FROM lookup_stats ORDER BY week_start").fetchall()],
+    }
+    conn.close()
+    try:
+        (backup_dir / "URTO_Full_Data_Export.json").write_text(
+            json.dumps(export, indent=2, default=str), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def _instant_document_mirror():
+    """Mirrors the Transaction Manager document folders to every backup
+    destination right away — called from the specific document-mutation
+    functions (upload/remove a template or signed file, create/delete a
+    transaction) rather than from the general on_data_changed() instant
+    path, so routine note/follow-up saves don't pay for real file I/O on
+    every single edit — only actual document changes do."""
+    for dest_info in resolve_backup_dirs():
+        try:
+            _mirror_documents_folder(dest_info["path"])
+        except Exception:
             pass
 
 
 def _write_backup(reason, snapshot: bool, keep=30) -> dict:
-    """Copy the live DB to the backup dir. Always refreshes the live mirror;
-    when snapshot=True also writes a timestamped copy, prunes old ones, and
-    mirrors the Transaction Manager documents folder (kept off the
-    high-frequency instant-mirror path since it can involve real file I/O,
-    not just a small DB overwrite — snapshot runs at most every ~60s, on
-    startup, or via "Backup Now", which is frequent enough for documents).
-    Copying a plain (non-WAL) sqlite file with no open write transaction is a
-    consistent, safe file copy."""
+    """Copy the live DB to every backup destination (OneDrive/Google
+    Drive/Local — see resolve_backup_dirs()). Always refreshes the live
+    mirror, the human-readable CRM Contacts export, and the full JSON data
+    export (all cheap); when snapshot=True also writes a timestamped DB
+    copy, prunes old ones, and mirrors the Transaction Manager documents
+    folders (kept off the high-frequency instant-mirror path since it can
+    involve real file I/O — see _instant_document_mirror() for the
+    document-specific exception). One destination failing (e.g. a cloud
+    folder briefly locked) never blocks the others."""
     global _dirty, _last_backup
     with _backup_lock:
         if not DB_PATH.exists():
             return _last_backup
-        backup_dir = resolve_backup_dir()
-
-        mirror = backup_dir / LATEST_NAME
-        shutil.copy2(DB_PATH, mirror)
-        dest = mirror
-
-        if snapshot:
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            dest = backup_dir / f"urto_crm_{stamp}.db"
-            shutil.copy2(DB_PATH, dest)
-            snaps = sorted(backup_dir.glob("urto_crm_[0-9]*.db"))
-            for old in snaps[:-keep]:
-                old.unlink(missing_ok=True)
+        results = []
+        for dest_info in resolve_backup_dirs():
+            backup_dir = dest_info["path"]
             try:
-                _mirror_documents_folder(backup_dir)
+                mirror = backup_dir / LATEST_NAME
+                shutil.copy2(DB_PATH, mirror)
+                dest_path = mirror
+
+                if snapshot:
+                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    dest_path = backup_dir / f"urto_crm_{stamp}.db"
+                    shutil.copy2(DB_PATH, dest_path)
+                    snaps = sorted(backup_dir.glob("urto_crm_[0-9]*.db"))
+                    for old in snaps[:-keep]:
+                        old.unlink(missing_ok=True)
+
+                try:
+                    _write_crm_contacts_export(backup_dir)
+                except Exception:
+                    pass
+                try:
+                    _write_full_data_export(backup_dir)
+                except Exception:
+                    pass
+                if snapshot:
+                    try:
+                        _mirror_documents_folder(backup_dir)
+                    except Exception:
+                        pass  # never let a documents-folder hiccup break the DB backup
+
+                results.append({"label": dest_info["label"], "path": str(dest_path)})
             except Exception:
-                pass  # never let a documents-folder hiccup break the DB backup
+                continue
 
         _dirty = False
-        _last_backup = {"at": datetime.now().isoformat(timespec="seconds"), "path": str(dest), "reason": reason}
+        _last_backup = {"at": datetime.now().isoformat(timespec="seconds"), "destinations": results, "reason": reason}
         return _last_backup
 
 
@@ -178,19 +416,20 @@ def backup_now(reason="manual", keep=30) -> dict:
 
 def backup_instant(reason="save") -> dict:
     """Instant backup after a data change: refresh the live mirror only, so the
-    current state (including deletions) is on OneDrive immediately without
-    churning through the capped snapshot history on every single edit."""
+    current state (including deletions) is on every backup destination
+    immediately without churning through the capped snapshot history on
+    every single edit."""
     return _write_backup(reason, snapshot=False)
 
 
 def on_data_changed(reason="save"):
-    """Called after any CRM mutation: mirror to OneDrive right away, and flag
+    """Called after any CRM mutation: mirror everywhere right away, and flag
     the DB so the slow watcher also lays down a timestamped history snapshot."""
     mark_dirty()
     try:
         backup_instant(reason)
     except Exception:
-        # A backup failure (e.g. OneDrive folder briefly locked) must never
+        # A backup failure (e.g. a cloud folder briefly locked) must never
         # break the actual save — the dirty flag means the watcher retries.
         pass
 
@@ -202,11 +441,14 @@ def backup_if_dirty():
 
 def get_backup_status() -> dict:
     onedrive = os.environ.get("OneDriveConsumer") or os.environ.get("OneDrive")
+    gdrive = get_google_drive_dir()
     return {
-        "backup_dir": str(resolve_backup_dir()),
+        "destinations": [{"label": d["label"], "path": str(d["path"])} for d in resolve_backup_dirs()],
         "onedrive_detected": bool(onedrive),
+        "google_drive_detected": bool(gdrive),
+        "google_drive_dir": str(gdrive) if gdrive else None,
         "last_backup_at": _last_backup["at"],
-        "last_backup_path": _last_backup["path"],
+        "last_backup_destinations": _last_backup.get("destinations"),
     }
 
 FREQUENCY_PRESETS = {
@@ -1176,6 +1418,7 @@ def delete_document_type(document_type_id: int):
     conn.commit()
     conn.close()
     on_data_changed("document type removed")
+    _instant_document_mirror()
 
 
 def set_document_type_template(document_type_id: int, file_storage) -> dict:
@@ -1194,6 +1437,7 @@ def set_document_type_template(document_type_id: int, file_storage) -> dict:
     updated = conn.execute("SELECT * FROM document_types WHERE id = ?", (document_type_id,)).fetchone()
     conn.close()
     on_data_changed("document template uploaded")
+    _instant_document_mirror()
     return dict(updated)
 
 
@@ -1209,6 +1453,7 @@ def remove_document_type_template(document_type_id: int):
         conn.commit()
     conn.close()
     on_data_changed("document template removed")
+    _instant_document_mirror()
 
 
 # ---- Transactions ----
@@ -1277,6 +1522,7 @@ def create_transaction(transaction_type: str, title: str) -> dict:
     ).fetchall()
     conn.close()
     on_data_changed("transaction created")
+    _instant_document_mirror()
     return _transaction_to_dict(row, [dict(d) for d in docs])
 
 
@@ -1354,6 +1600,7 @@ def delete_transaction(transaction_id: int):
     conn.commit()
     conn.close()
     on_data_changed("transaction deleted")
+    _instant_document_mirror()
 
 
 def upload_signed_document(transaction_document_id: int, file_storage) -> dict:
@@ -1377,6 +1624,7 @@ def upload_signed_document(transaction_document_id: int, file_storage) -> dict:
     ).fetchone()
     conn.close()
     on_data_changed("signed document uploaded")
+    _instant_document_mirror()
     return dict(updated)
 
 
@@ -1399,4 +1647,5 @@ def remove_signed_document(transaction_document_id: int) -> dict:
     ).fetchone()
     conn.close()
     on_data_changed("signed document removed")
+    _instant_document_mirror()
     return dict(updated)

@@ -418,13 +418,23 @@
 
   /* ---- CRM ---- */
   .backup-bar {
-    display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px;
     padding: 8px 14px; border: 1px solid rgba(201,162,39,.12); border-radius: 8px;
     background: rgba(19,28,46,.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     font-size: .82rem; color: var(--text-secondary);
   }
   .backup-bar .ok { color: #3fce7a; }
   .backup-bar .warn { color: #e0a52c; }
+  .backup-bar-destinations { display: flex; gap: 14px; flex-wrap: wrap; }
+  #gdriveSetupRow {
+    display: none; align-items: center; gap: 8px; width: 100%;
+    padding-top: 8px; border-top: 1px solid rgba(201,162,39,.12); font-size: .8rem;
+  }
+  #gdriveSetupRow input {
+    flex: 1; min-width: 200px; background: rgba(8,12,22,.6); border: 1px solid rgba(201,162,39,.25);
+    border-radius: 6px; padding: 5px 9px; color: var(--text-secondary); font-size: .8rem;
+  }
+  #gdriveSetupMsg { font-size: .78rem; }
 
   /* ---- Owner Lookup: weekly count badge ---- */
   .weekly-count-bar {
@@ -1000,7 +1010,14 @@
 
   <div class="backup-bar">
     <span id="backupStatusText">Checking backup status…</span>
+    <span class="backup-bar-destinations" id="backupDestinations"></span>
     <button class="ghost small" id="backupNowBtn">Backup Now</button>
+    <div id="gdriveSetupRow">
+      <span>Google Drive folder not found automatically — paste its full path:</span>
+      <input type="text" id="gdriveDirInput" placeholder="e.g. C:\Users\Mario\Google Drive">
+      <button class="ghost small" id="gdriveDirSaveBtn">Save</button>
+      <span id="gdriveSetupMsg"></span>
+    </div>
   </div>
 
   <div class="crm-subtabs">
@@ -1705,7 +1722,12 @@ setTimeout(() => {
 }, 5000);
 
 const backupStatusText = document.getElementById('backupStatusText');
+const backupDestinations = document.getElementById('backupDestinations');
 const backupNowBtn = document.getElementById('backupNowBtn');
+const gdriveSetupRow = document.getElementById('gdriveSetupRow');
+const gdriveDirInput = document.getElementById('gdriveDirInput');
+const gdriveDirSaveBtn = document.getElementById('gdriveDirSaveBtn');
+const gdriveSetupMsg = document.getElementById('gdriveSetupMsg');
 
 function formatBackupTime(iso) {
   if (!iso) return 'never';
@@ -1720,13 +1742,43 @@ async function refreshBackupStatus() {
   try {
     const res = await fetch('/api/backup/status');
     const s = await res.json();
-    const where = s.onedrive_detected ? 'OneDrive' : 'local backups folder (OneDrive not detected)';
-    const cls = s.onedrive_detected ? 'ok' : 'warn';
-    backupStatusText.innerHTML = `<span class="${cls}">●</span> Last backup: ${formatBackupTime(s.last_backup_at)} — saved to ${where}`;
+    backupStatusText.innerHTML = `<span class="ok">●</span> Last backup: ${formatBackupTime(s.last_backup_at)}`;
+    const chip = (label, on) => `<span class="${on ? 'ok' : 'warn'}">${on ? '●' : '○'} ${label}</span>`;
+    backupDestinations.innerHTML = [
+      chip('OneDrive', s.onedrive_detected),
+      chip('Google Drive', s.google_drive_detected),
+      chip('Local', true),
+    ].join('');
+    gdriveSetupRow.style.display = s.google_drive_detected ? 'none' : 'flex';
   } catch (e) {
     backupStatusText.textContent = 'Backup status unavailable';
   }
 }
+
+gdriveDirSaveBtn.addEventListener('click', async () => {
+  const path = gdriveDirInput.value.trim();
+  if (!path) return;
+  gdriveDirSaveBtn.disabled = true;
+  gdriveSetupMsg.textContent = 'Saving…';
+  try {
+    const res = await fetch('/api/backup/google_drive_dir', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      gdriveSetupMsg.textContent = data.error || "Couldn't save that folder.";
+    } else {
+      gdriveSetupMsg.textContent = '';
+      gdriveDirInput.value = '';
+      await refreshBackupStatus();
+    }
+  } catch (e) {
+    gdriveSetupMsg.textContent = 'Something went wrong saving that.';
+  } finally {
+    gdriveDirSaveBtn.disabled = false;
+  }
+});
 
 backupNowBtn.addEventListener('click', async () => {
   backupNowBtn.disabled = true;

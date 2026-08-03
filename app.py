@@ -29,8 +29,8 @@ app = Flask(__name__)
 
 # Bump these two together whenever a change is shipped, so Mario can tell at
 # a glance (bottom of every page) which build he's actually running.
-APP_VERSION = "1.4.3"
-APP_VERSION_DATE = "Jul 30, 2026 6:20 PM EST"
+APP_VERSION = "1.5.0"
+APP_VERSION_DATE = "Aug 3, 2026 12:00 PM EST"
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -452,6 +452,18 @@ def backup_status():
 @app.route("/api/backup/run", methods=["POST"])
 def backup_run():
     return jsonify(crm.backup_now("manual"))
+
+
+@app.route("/api/backup/google_drive_dir", methods=["POST"])
+def set_google_drive_dir():
+    path = (request.get_json(force=True) or {}).get("path", "").strip()
+    if not path:
+        return jsonify({"error": "Enter a folder path."}), 400
+    try:
+        crm.set_google_drive_dir(path)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(crm.get_backup_status())
 
 
 @app.route("/api/crm/calendar")
