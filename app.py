@@ -19,6 +19,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from playwright.sync_api import sync_playwright
@@ -34,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.5.5"
+APP_VERSION = "1.5.6"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -45,7 +46,13 @@ def _get_last_updated_display() -> str:
     install_update()) — that's the real "when did this PC last get updated"
     answer, not a guess typed into source code weeks in advance. Falls back
     to this file's own mtime (e.g. a fresh git clone, or an update installed
-    via the old manual ZIP method before the marker file existed)."""
+    via the old manual ZIP method before the marker file existed).
+
+    Always displayed converted to America/New_York (Mario's own Miami-Dade
+    timezone), regardless of what timezone the installing PC's system clock
+    is actually set to — a plain datetime.now().astimezone() only carries a
+    fixed UTC-offset tzinfo, whose %Z prints an ugly "UTC-04:00" instead of
+    a real "EST"/"EDT" abbreviation, so this explicitly re-zones it."""
     try:
         dt = datetime.fromisoformat(LAST_UPDATED_MARKER.read_text().strip())
     except Exception:
@@ -53,7 +60,12 @@ def _get_last_updated_display() -> str:
             dt = datetime.fromtimestamp(Path(__file__).stat().st_mtime).astimezone()
         except Exception:
             return "unknown"
-    return dt.strftime("%b %d, %Y %I:%M %p %Z").strip()
+    try:
+        dt = dt.astimezone(ZoneInfo("America/New_York"))
+        tz_label = dt.strftime("%Z")
+    except Exception:
+        tz_label = dt.strftime("%Z") or "local time"
+    return f"{dt.strftime('%b %d, %Y %I:%M %p')} {tz_label} (Miami Time)".strip()
 
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
