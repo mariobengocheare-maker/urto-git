@@ -35,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.5.7"
+APP_VERSION = "1.5.8"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -88,24 +88,34 @@ JOBS_LOCK = threading.Lock()
 
 # The desktop launcher starts this server detached, with no window — so
 # nothing closes it automatically when Mario's done, and he was having to
-# hunt it down in Task Manager every time. The frontend pings /api/heartbeat
-# every few seconds while a tab is open and fires /api/shutdown the instant
-# one closes; the watchdog thread below is the fallback for anything that
-# skips that (a crash, force-closing the browser, the PC sleeping) — if no
-# heartbeat arrives for a while, it shuts the server down on its own. Same
-# pattern already shipped on Wardrobe.
+# hunt it down in Task Manager every time. Each browser tab generates its
+# own tab_id on load and pings /api/heartbeat every few seconds, and fires
+# /api/shutdown (with that same tab_id) the instant it closes; the watchdog
+# thread below is the fallback for anything that skips that (a crash,
+# force-closing the browser, the PC sleeping) — if a tab hasn't been heard
+# from in a while, it's dropped from the active set. The server only
+# actually exits once the active set is EMPTY — tracking per-tab instead of
+# one global "last heartbeat" is what makes this safe with more than one
+# URTO tab open: closing one tab used to fire a global shutdown and kill
+# the server out from under a SECOND tab that was still genuinely in use
+# (Mario hit this — "New Transaction" failed with "couldn't reach the
+# server" moments after the page had loaded fine). Same general pattern
+# already shipped on Wardrobe, adapted here for multi-tab correctness.
 #
-# HEARTBEAT_TIMEOUT used to be 20s, which turned out to be a real bug: most
-# browsers throttle a BACKGROUND tab's JS timers hard (sometimes to once a
-# minute or less) — so switching away from URTO for a bit (e.g. to the OS
-# file picker to grab a document to upload) could silently blow past 20s
-# with the tab never actually closed, and the watchdog would kill the
+# HEARTBEAT_TIMEOUT used to be 20s, which was ALSO a real bug on its own:
+# most browsers throttle a BACKGROUND tab's JS timers hard (sometimes to
+# once a minute or less) — so switching away from URTO for a bit (e.g. to
+# the OS file picker to grab a document to upload) could silently blow past
+# 20s with the tab never actually closed, and the watchdog would kill the
 # server out from under an in-progress upload/save. Raised to a much more
 # forgiving window, and _request_in_progress() below adds a second, more
 # direct guard: never exit while ANY real request (upload, note save,
 # transaction edit, ...) is actually being handled, not just a FOREWARN job.
-_last_heartbeat = {"t": None}
 HEARTBEAT_TIMEOUT = 180
+
+_active_tabs = {}  # tab_id -> last-heartbeat time.time()
+_active_tabs_lock = threading.Lock()
+_ever_connected = {"v": False}  # don't let the watchdog fire before the very first tab has even had a chance to check in
 
 _active_requests = {"count": 0}
 _active_requests_lock = threading.Lock()
@@ -143,15 +153,25 @@ def _safe_to_exit() -> bool:
     return not _job_in_progress() and not _request_in_progress()
 
 
+def _get_tab_id() -> str:
+    data = request.get_json(silent=True) or {}
+    return data.get("tab_id") or "default"
+
+
 @app.route("/api/heartbeat", methods=["POST"])
 def heartbeat():
-    _last_heartbeat["t"] = time.time()
+    with _active_tabs_lock:
+        _active_tabs[_get_tab_id()] = time.time()
+        _ever_connected["v"] = True
     return jsonify({"ok": True})
 
 
 @app.route("/api/shutdown", methods=["POST"])
 def shutdown():
-    if _safe_to_exit():
+    with _active_tabs_lock:
+        _active_tabs.pop(_get_tab_id(), None)
+        any_tabs_left = bool(_active_tabs)
+    if not any_tabs_left and _safe_to_exit():
         threading.Timer(0.2, lambda: os._exit(0)).start()
     return jsonify({"ok": True})
 
@@ -159,8 +179,13 @@ def shutdown():
 def _watchdog():
     while True:
         time.sleep(5)
-        t = _last_heartbeat["t"]
-        if t is not None and (time.time() - t) > HEARTBEAT_TIMEOUT and _safe_to_exit():
+        now = time.time()
+        with _active_tabs_lock:
+            stale = [tid for tid, t in _active_tabs.items() if now - t > HEARTBEAT_TIMEOUT]
+            for tid in stale:
+                del _active_tabs[tid]
+            any_tabs_left = bool(_active_tabs)
+        if _ever_connected["v"] and not any_tabs_left and _safe_to_exit():
             os._exit(0)
 
 

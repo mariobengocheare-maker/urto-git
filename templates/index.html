@@ -1721,16 +1721,23 @@ setTimeout(() => {
   }
 }, 5000);
 
-// Keeps the server alive only while this tab is actually open — the desktop
-// launcher starts it detached with no window, so without this Mario had to
-// find and kill it in Task Manager by hand every time. Pings every few
-// seconds while open; fires a shutdown the instant the tab closes (a real
-// lookup in progress is never interrupted — the server checks that itself).
+// Keeps the server alive only while at least one tab is actually open — the
+// desktop launcher starts it detached with no window, so without this Mario
+// had to find and kill it in Task Manager by hand every time. Each tab gets
+// its own ID so the server can track multiple open tabs independently —
+// closing ONE tab must never kill the server while another tab is still
+// genuinely in use (this happened for real: closing/reloading one tab fired
+// a global shutdown that killed the server out from under a second tab,
+// which then failed with "couldn't reach the server" on its next click).
+const URTO_TAB_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 setInterval(() => {
-  fetch('/api/heartbeat', { method: 'POST' }).catch(() => {});
+  fetch('/api/heartbeat', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tab_id: URTO_TAB_ID }),
+  }).catch(() => {});
 }, 5000);
 window.addEventListener('pagehide', () => {
-  navigator.sendBeacon('/api/shutdown');
+  navigator.sendBeacon('/api/shutdown', new Blob([JSON.stringify({ tab_id: URTO_TAB_ID })], { type: 'application/json' }));
 });
 
 const backupStatusText = document.getElementById('backupStatusText');
