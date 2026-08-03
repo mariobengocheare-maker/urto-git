@@ -631,6 +631,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+            list_id INTEGER REFERENCES contact_lists(id) ON DELETE CASCADE,
             title TEXT NOT NULL,
             date TEXT NOT NULL,
             time TEXT,
@@ -638,6 +639,13 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    # Migration for an events table from before list_id existed (a manual
+    # calendar event linked to a whole Contact List, not just one client —
+    # see build order #54) — ALTER TABLE ADD COLUMN would error on a DB that
+    # already has it, so only run it if the column is actually missing.
+    events_cols = {row["name"] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
+    if "list_id" not in events_cols:
+        conn.execute("ALTER TABLE events ADD COLUMN list_id INTEGER REFERENCES contact_lists(id) ON DELETE CASCADE")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS contact_lists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -805,6 +813,45 @@ def resolve_interval_days(frequency_key: str, custom_amount, custom_unit) -> tup
     return None, None
 
 
+class DuplicatePhoneError(Exception):
+    """Raised when a client save would give two CRM clients the same phone
+    number. A person can belong to multiple Contact Lists, but two separate
+    CRM clients sharing one phone number is almost always the same person
+    getting added twice — see Mario's explicit request."""
+    def __init__(self, existing_client_name):
+        self.existing_client_name = existing_client_name
+        super().__init__(f"This phone number is already in your CRM, under {existing_client_name}.")
+
+
+def _normalize_phone_key(phone: str) -> str:
+    """Digits-only, US-country-code-stripped, so '(305) 555-1212',
+    '305-555-1212', and '+13055551212' all compare equal. Returns '' for no
+    phone at all — an empty phone never counts as a duplicate."""
+    digits = re.sub(r"\D", "", phone or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits
+
+
+def find_client_by_phone(phone: str, exclude_id=None):
+    """Returns the existing client dict whose phone matches (ignoring
+    formatting), or None. Used both for duplicate-prevention on save and for
+    merging a dial list into a Contact List without creating duplicate
+    clients."""
+    key = _normalize_phone_key(phone)
+    if not key:
+        return None
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM clients").fetchall()
+    conn.close()
+    for r in rows:
+        if exclude_id is not None and r["id"] == exclude_id:
+            continue
+        if _normalize_phone_key(r["phone"]) == key:
+            return client_to_dict(r)
+    return None
+
+
 def client_to_dict(row) -> dict:
     d = dict(row)
     today = date.today()
@@ -817,6 +864,9 @@ def client_to_dict(row) -> dict:
 
 
 def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None) -> dict:
+    dup = find_client_by_phone(phone)
+    if dup:
+        raise DuplicatePhoneError(dup["name"])
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
     created_at = date.today().isoformat()
     next_followup_date = None
@@ -888,6 +938,9 @@ def get_client(client_id) -> dict:
 
 
 def update_client(client_id, name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None) -> dict:
+    dup = find_client_by_phone(phone, exclude_id=client_id)
+    if dup:
+        raise DuplicatePhoneError(dup["name"])
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
 
     conn = get_conn()
@@ -1260,8 +1313,10 @@ def _now_time():
 
 EVENT_JOIN_SELECT = """
     SELECT events.*, clients.name AS client_name, clients.phone AS client_phone,
-           clients.address AS client_address
-    FROM events LEFT JOIN clients ON clients.id = events.client_id
+           clients.address AS client_address, contact_lists.name AS list_name
+    FROM events
+    LEFT JOIN clients ON clients.id = events.client_id
+    LEFT JOIN contact_lists ON contact_lists.id = events.list_id
 """
 
 
@@ -1271,11 +1326,12 @@ def _event_to_dict(row) -> dict:
     return d
 
 
-def create_event(client_id, title, date_str, time_str, notes) -> dict:
+def create_event(client_id, title, date_str, time_str, notes, list_id=None) -> dict:
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO events (client_id, title, date, time, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (client_id or None, title, date_str, time_str or None, notes or "", datetime.now().isoformat(timespec="seconds")),
+        "INSERT INTO events (client_id, list_id, title, date, time, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (client_id or None, list_id or None, title, date_str, time_str or None, notes or "",
+         datetime.now().isoformat(timespec="seconds")),
     )
     conn.commit()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (cur.lastrowid,)).fetchone()
@@ -1284,15 +1340,15 @@ def create_event(client_id, title, date_str, time_str, notes) -> dict:
     return _event_to_dict(row)
 
 
-def update_event(event_id, client_id, title, date_str, time_str, notes) -> dict:
+def update_event(event_id, client_id, title, date_str, time_str, notes, list_id=None) -> dict:
     conn = get_conn()
     existing = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
     if not existing:
         conn.close()
         return None
     conn.execute(
-        "UPDATE events SET client_id=?, title=?, date=?, time=?, notes=? WHERE id=?",
-        (client_id or None, title, date_str, time_str or None, notes or "", event_id),
+        "UPDATE events SET client_id=?, list_id=?, title=?, date=?, time=?, notes=? WHERE id=?",
+        (client_id or None, list_id or None, title, date_str, time_str or None, notes or "", event_id),
     )
     conn.commit()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (event_id,)).fetchone()
@@ -1357,6 +1413,7 @@ def get_today_followups() -> list:
         item = {
             "kind": "manual", "client_id": e["client_id"], "client_name": e.get("client_name"),
             "phone": e.get("client_phone"), "address": e.get("client_address"),
+            "list_id": e["list_id"], "list_name": e.get("list_name"),
             "title": e["title"], "time": e["time"],
             "status": "manual", "notes": e.get("notes") or "", "event_id": e["id"],
         }
@@ -1462,6 +1519,7 @@ def get_calendar_events(year: int, month: int) -> list:
         events.append({
             "kind": "manual", "event_id": e["id"],
             "client_id": e["client_id"], "client_name": e.get("client_name"),
+            "list_id": e["list_id"], "list_name": e.get("list_name"),
             "date": e["date"], "time": e["time"], "title": e["title"],
             "notes": e.get("notes") or "", "status": "manual",
         })

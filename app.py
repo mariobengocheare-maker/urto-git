@@ -35,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.6.3"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -387,6 +387,8 @@ def crm_create_client():
             custom_unit=data.get("custom_unit"),
             list_ids=data.get("list_ids"),
         )
+    except crm.DuplicatePhoneError as e:
+        return jsonify({"error": str(e)}), 409
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid custom follow-up amount"}), 400
     return jsonify(client)
@@ -420,6 +422,8 @@ def crm_update_client(client_id):
             custom_unit=data.get("custom_unit"),
             list_ids=data.get("list_ids"),
         )
+    except crm.DuplicatePhoneError as e:
+        return jsonify({"error": str(e)}), 409
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid custom follow-up amount"}), 400
     if not client:
@@ -574,8 +578,11 @@ def crm_create_event():
     client_id = data.get("client_id") or None
     if client_id and not crm.get_client(client_id):
         return jsonify({"error": "Client not found"}), 404
+    list_id = data.get("list_id") or None
+    if list_id and not crm.get_contact_list(list_id):
+        return jsonify({"error": "Contact list not found"}), 404
     event = crm.create_event(
-        client_id=client_id, title=title, date_str=date_str,
+        client_id=client_id, list_id=list_id, title=title, date_str=date_str,
         time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
     )
     return jsonify(event)
@@ -591,8 +598,11 @@ def crm_update_event(event_id):
     client_id = data.get("client_id") or None
     if client_id and not crm.get_client(client_id):
         return jsonify({"error": "Client not found"}), 404
+    list_id = data.get("list_id") or None
+    if list_id and not crm.get_contact_list(list_id):
+        return jsonify({"error": "Contact list not found"}), 404
     event = crm.update_event(
-        event_id, client_id=client_id, title=title, date_str=date_str,
+        event_id, client_id=client_id, list_id=list_id, title=title, date_str=date_str,
         time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
     )
     if not event:
