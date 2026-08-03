@@ -1177,6 +1177,9 @@
       </div>
       <div class="dialer-hint">Enter = call current number &nbsp;·&nbsp; &larr;/&rarr; = move through the list</div>
     </div>
+    <div class="row" style="margin: 14px 0 0">
+      <button class="ghost" id="dialerSaveToListBtn">💾 Save This List to a Contact List</button>
+    </div>
     <div class="dialer-list" id="dialerListEl"></div>
   </div>
 </section>
@@ -1552,6 +1555,63 @@
         <button type="submit">Import</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Save Dialer List to a Contact List -->
+<div class="modal-overlay" id="dialerSaveListOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Save This List to a Contact List</h2>
+      <button class="modal-close" id="dialerSaveListCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">
+      Every entry in this dial list will be saved (or matched, if already in your CRM) and added to the
+      chosen Contact List — new people merge in automatically going forward, follow-up schedule and all.
+    </p>
+    <div class="error-box" id="dialerSaveListError"></div>
+
+    <div class="form-group">
+      <label><input type="radio" name="dslMode" id="dslModeExisting" value="existing" checked> Add to an existing list</label>
+    </div>
+    <div class="form-group" id="dslExistingRow">
+      <select id="dslExistingSelect"></select>
+    </div>
+
+    <div class="form-group">
+      <label><input type="radio" name="dslMode" id="dslModeNew" value="new"> Create a new list</label>
+    </div>
+    <div id="dslNewFields" style="display:none">
+      <div class="form-group">
+        <label for="dslNewName">List name *</label>
+        <input type="text" id="dslNewName" placeholder="e.g. 9350 Bay Harbor Dr">
+      </div>
+      <div class="form-group">
+        <label for="dslNewFrequency">Call this whole list every</label>
+        <select id="dslNewFrequency">
+          <option value="none">No recurring schedule</option>
+          <option value="2_weeks" selected>2 Weeks</option>
+          <option value="3_weeks">3 Weeks</option>
+          <option value="4_weeks">4 Weeks</option>
+          <option value="2_months">2 Months</option>
+          <option value="6_months">6 Months</option>
+          <option value="custom">Custom...</option>
+        </select>
+      </div>
+      <div class="form-group row" id="dslNewCustomRow" style="display:none; margin-top:0">
+        <input type="number" id="dslNewCustomAmount" min="1" value="30" style="width:80px">
+        <select id="dslNewCustomUnit">
+          <option value="days">Days</option>
+          <option value="weeks">Weeks</option>
+          <option value="months">Months</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="dialerSaveListCancelBtn">Cancel</button>
+      <button id="dialerSaveListSubmitBtn">Save List</button>
+    </div>
   </div>
 </div>
 
@@ -2905,6 +2965,145 @@ dialerCompleteRoundBtn.addEventListener('click', async () => {
   if (res.ok) {
     const list = await res.json();
     dialerListDueHint.textContent = `Shared schedule: ${listCallLabel(list)}`;
+  }
+});
+
+/* ---- Save the whole loaded dial list into a Contact List (new or existing) ---- */
+const dialerSaveListOverlay = document.getElementById('dialerSaveListOverlay');
+const dialerSaveListError = document.getElementById('dialerSaveListError');
+const dslExistingRow = document.getElementById('dslExistingRow');
+const dslExistingSelect = document.getElementById('dslExistingSelect');
+const dslNewFields = document.getElementById('dslNewFields');
+const dslNewName = document.getElementById('dslNewName');
+const dslNewFrequency = document.getElementById('dslNewFrequency');
+const dslNewCustomRow = document.getElementById('dslNewCustomRow');
+const dslNewCustomAmount = document.getElementById('dslNewCustomAmount');
+const dslNewCustomUnit = document.getElementById('dslNewCustomUnit');
+const dialerSaveListSubmitBtn = document.getElementById('dialerSaveListSubmitBtn');
+
+function updateDslModeVisibility() {
+  const isNew = document.getElementById('dslModeNew').checked;
+  dslExistingRow.style.display = isNew ? 'none' : 'block';
+  dslNewFields.style.display = isNew ? 'block' : 'none';
+}
+document.getElementById('dslModeExisting').addEventListener('change', updateDslModeVisibility);
+document.getElementById('dslModeNew').addEventListener('change', updateDslModeVisibility);
+dslNewFrequency.addEventListener('change', () => {
+  dslNewCustomRow.style.display = dslNewFrequency.value === 'custom' ? 'flex' : 'none';
+});
+
+document.getElementById('dialerSaveToListBtn').addEventListener('click', async () => {
+  dialerSaveListError.style.display = 'none';
+  dialerSaveListError.textContent = '';
+  document.getElementById('dslModeExisting').checked = true;
+  document.getElementById('dslModeNew').checked = false;
+  dslNewName.value = '';
+  dslNewFrequency.value = '2_weeks';
+  dslNewCustomRow.style.display = 'none';
+  updateDslModeVisibility();
+  try {
+    const res = await fetch('/api/crm/contact_lists');
+    const lists = res.ok ? await res.json() : [];
+    dslExistingSelect.innerHTML = lists.length
+      ? lists.map(l => `<option value="${l.id}">${escapeHtml(l.name)} (${l.member_count} member${l.member_count === 1 ? '' : 's'})</option>`).join('')
+      : '<option value="">No existing lists yet — create a new one below</option>';
+  } catch (e) {
+    dslExistingSelect.innerHTML = '<option value="">Could not load lists</option>';
+  }
+  dialerSaveListOverlay.classList.add('show');
+});
+
+document.getElementById('dialerSaveListCloseBtn').addEventListener('click', () => dialerSaveListOverlay.classList.remove('show'));
+document.getElementById('dialerSaveListCancelBtn').addEventListener('click', () => dialerSaveListOverlay.classList.remove('show'));
+
+dialerSaveListSubmitBtn.addEventListener('click', async () => {
+  dialerSaveListError.style.display = 'none';
+  const isNew = document.getElementById('dslModeNew').checked;
+
+  try {
+    let listId;
+    if (isNew) {
+      const name = dslNewName.value.trim();
+      if (!name) {
+        dialerSaveListError.textContent = 'Type a list name first.';
+        dialerSaveListError.style.display = 'block';
+        return;
+      }
+      const res = await fetch('/api/crm/contact_lists', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          frequency_key: dslNewFrequency.value,
+          custom_amount: dslNewCustomAmount.value,
+          custom_unit: dslNewCustomUnit.value,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        dialerSaveListError.textContent = data.error || 'Could not create that list.';
+        dialerSaveListError.style.display = 'block';
+        return;
+      }
+      listId = (await res.json()).id;
+    } else {
+      listId = Number(dslExistingSelect.value);
+      if (!listId) {
+        dialerSaveListError.textContent = 'Pick an existing list, or switch to "Create a new list".';
+        dialerSaveListError.style.display = 'block';
+        return;
+      }
+    }
+
+    dialerSaveListSubmitBtn.disabled = true;
+    dialerSaveListSubmitBtn.textContent = 'Saving…';
+
+    // Every entry without a matched CRM client gets created fresh — no
+    // individual follow-up schedule (frequency_key: 'none'), since the
+    // Contact List's own shared schedule is what governs them from here on.
+    for (const entry of dialerList) {
+      if (entry.clientId) continue;
+      if (!entry.name && !entry.phone) continue;
+      const res = await fetch('/api/crm/clients', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: entry.name || entry.phone || 'New lead',
+          phone: entry.phone || '',
+          address: entry.address || '',
+          frequency_key: 'none',
+        }),
+      });
+      if (res.ok) {
+        const c = await res.json();
+        entry.clientId = c.id;
+      }
+    }
+
+    const clientIds = [...new Set(dialerList.map(e => e.clientId).filter(Boolean))];
+    if (!clientIds.length) {
+      dialerSaveListError.textContent = 'Nothing to save — this list has no phone numbers or names.';
+      dialerSaveListError.style.display = 'block';
+      return;
+    }
+
+    const addRes = await fetch(`/api/crm/contact_lists/${listId}/members/add`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_ids: clientIds }),
+    });
+    if (!addRes.ok) {
+      dialerSaveListError.textContent = 'Could not add these contacts to the list.';
+      dialerSaveListError.style.display = 'block';
+      return;
+    }
+
+    dialerSaveListOverlay.classList.remove('show');
+    renderDialerCard();
+    alert(`Saved ${clientIds.length} contact${clientIds.length === 1 ? '' : 's'} to the list.`);
+  } catch (e) {
+    dialerSaveListError.textContent = "Couldn't reach URTO's server — try again.";
+    dialerSaveListError.style.display = 'block';
+  } finally {
+    dialerSaveListSubmitBtn.disabled = false;
+    dialerSaveListSubmitBtn.textContent = 'Save List';
   }
 });
 

@@ -1063,6 +1063,30 @@ def set_list_members(list_id, client_ids) -> dict:
     return get_contact_list(list_id)
 
 
+def add_list_members(list_id, client_ids) -> dict:
+    """Adds client_ids to a list's membership WITHOUT touching anyone
+    already there — unlike set_list_members (a full replace, built for the
+    checkbox-style Manage Members editor which always sends the FULL
+    desired set), this is for merging a batch in without disturbing
+    existing members. Used by the Dialer's 'Save This List to a Contact
+    List' feature — saving a dial list into an EXISTING list must never
+    wipe out members who simply weren't on that particular dial list."""
+    conn = get_conn()
+    row = conn.execute("SELECT id FROM contact_lists WHERE id = ?", (list_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    for client_id in client_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)",
+            (list_id, client_id),
+        )
+    conn.commit()
+    conn.close()
+    on_data_changed("contact list membership updated")
+    return get_contact_list(list_id)
+
+
 def get_client_list_ids(client_id) -> list:
     conn = get_conn()
     rows = conn.execute(
