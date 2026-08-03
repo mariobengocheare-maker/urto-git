@@ -1143,6 +1143,7 @@
         <div class="contact-line"><span class="lbl">Phone</span><span id="dciPhone">—</span></div>
         <div class="contact-line"><span class="lbl">Contact</span><span id="dciContact">—</span></div>
         <div class="contact-line"><span class="lbl">Address</span><span id="dciAddress">—</span></div>
+        <div class="contact-line"><span class="lbl">Last called</span><span id="dciLastCalled">—</span></div>
         <div id="dciFollowup" class="dialer-client-info-followup"></div>
         <div class="dialer-client-info-notes-head">Notes</div>
         <div id="dciNotes"></div>
@@ -1359,6 +1360,7 @@
     <div class="contact-line"><span class="lbl">Phone</span><span id="cdPhone">—</span></div>
     <div class="contact-line"><span class="lbl">Contact</span><span id="cdContact">—</span></div>
     <div class="contact-line"><span class="lbl">Address</span><span id="cdAddress">—</span></div>
+    <div class="contact-line"><span class="lbl">Last called</span><span id="cdLastCalled">—</span></div>
 
     <div class="row">
       <button class="ghost small" id="cdEditBtn">Edit</button>
@@ -2187,6 +2189,19 @@ const cfListsBox = document.getElementById('cfListsBox');
 // instead of jumping to the client-detail modal).
 let clientFormOrigin = null;
 
+function formatLastCalled(iso) {
+  if (!iso) return 'Never';
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  if (sameDay) return `Today at ${time}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday at ${time}`;
+  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} at ${time}`;
+}
+
 function followupLabel(client) {
   if (client.frequency_label) {
     const statusText = {
@@ -2219,6 +2234,7 @@ async function loadClients() {
       <div>
         <div class="name">${escapeHtml(c.name)}</div>
         <div class="meta">${escapeHtml(c.phone || 'No phone')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
+        <div class="meta">Last called: ${escapeHtml(formatLastCalled(c.last_called_at))}</div>
       </div>
       <span class="status-pill followup-tag ${pillClass}">${escapeHtml(followupLabel(c))}</span>
     `;
@@ -2345,6 +2361,7 @@ async function openClientDetail(id) {
   document.getElementById('cdPhone').textContent = c.phone || '—';
   document.getElementById('cdContact').textContent = c.contact_info || '—';
   document.getElementById('cdAddress').textContent = c.address || '—';
+  document.getElementById('cdLastCalled').textContent = formatLastCalled(c.last_called_at);
 
   const followupInfo = document.getElementById('cdFollowupInfo');
   const completeBtn = document.getElementById('cdCompleteFollowupBtn');
@@ -3373,6 +3390,7 @@ async function updateDialerClientInfo(entry) {
   document.getElementById('dciPhone').textContent = c.phone || '—';
   document.getElementById('dciContact').textContent = c.contact_info || '—';
   document.getElementById('dciAddress').textContent = c.address || '—';
+  document.getElementById('dciLastCalled').textContent = formatLastCalled(c.last_called_at);
 
   const followupEl = document.getElementById('dciFollowup');
   followupEl.innerHTML = (c.frequency_label || (c.list_followups && c.list_followups.length))
@@ -3554,10 +3572,24 @@ document.getElementById('dictateSaveBtn').addEventListener('click', async () => 
 
 document.getElementById('dictateDiscardBtn').addEventListener('click', resetDictation);
 
+// There's no reliable browser event for "the tel: call actually happened" —
+// clicking to call is treated as the call, same approximation the rest of
+// the Dialer (dictation, follow-up text) already relies on.
+function logCallForEntry(entry) {
+  if (!entry || !entry.clientId) return;
+  fetch(`/api/crm/clients/${entry.clientId}/log_call`, { method: 'POST' })
+    .then(() => {
+      if (dialerList[dialerIndex] === entry) updateDialerClientInfo(entry);
+    })
+    .catch(() => {});
+}
+
 function callCurrentDialerEntry() {
   if (dialerList.length === 0) return;
-  const tel = normalizePhone(dialerList[dialerIndex].phone);
+  const entry = dialerList[dialerIndex];
+  const tel = normalizePhone(entry.phone);
   if (!tel) { alert('No valid phone number for this entry.'); return; }
+  logCallForEntry(entry);
   window.location.href = 'tel:' + tel;
 }
 
@@ -3569,6 +3601,7 @@ function dialerPrev() {
 }
 
 document.getElementById('dialerCallBtn').addEventListener('click', callCurrentDialerEntry);
+dialerPhoneEl.addEventListener('click', () => logCallForEntry(dialerList[dialerIndex]));
 document.getElementById('dialerNextBtn').addEventListener('click', dialerNext);
 document.getElementById('dialerPrevBtn').addEventListener('click', dialerPrev);
 

@@ -35,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.6.3"
+APP_VERSION = "1.6.4"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -452,6 +452,14 @@ def crm_add_note(client_id):
 @app.route("/api/crm/clients/<int:client_id>/complete_followup", methods=["POST"])
 def crm_complete_followup(client_id):
     client = crm.complete_followup(client_id)
+    if not client:
+        abort(404)
+    return jsonify(client)
+
+
+@app.route("/api/crm/clients/<int:client_id>/log_call", methods=["POST"])
+def crm_log_call(client_id):
+    client = crm.log_call(client_id)
     if not client:
         abort(404)
     return jsonify(client)

@@ -616,9 +616,15 @@ def init_db():
             created_at TEXT NOT NULL,
             frequency_label TEXT,
             interval_days INTEGER,
-            next_followup_date TEXT
+            next_followup_date TEXT,
+            last_called_at TEXT
         )
     """)
+    # Migration for a clients table from before last_called_at existed (see
+    # build order #55) — same guarded-ALTER pattern as events.list_id above.
+    clients_cols = {row["name"] for row in conn.execute("PRAGMA table_info(clients)").fetchall()}
+    if "last_called_at" not in clients_cols:
+        conn.execute("ALTER TABLE clients ADD COLUMN last_called_at TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -984,6 +990,25 @@ def delete_client(client_id):
     # Refresh the OneDrive mirror right away so the deleted contact is gone
     # from the backup too, not just the local DB.
     on_data_changed("client deleted")
+
+
+def log_call(client_id) -> dict:
+    """Stamps a client as called just now — fired whenever Mario actually
+    places a call from the Dialer (there's no reliable way to detect a
+    tel: link's call was answered/completed, so 'clicked to call' is the
+    same approximation the rest of the Dialer already uses)."""
+    conn = get_conn()
+    existing = conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return None
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute("UPDATE clients SET last_called_at = ? WHERE id = ?", (now, client_id))
+    conn.commit()
+    row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    conn.close()
+    on_data_changed("call logged")
+    return client_to_dict(row)
 
 
 def complete_followup(client_id) -> dict:
