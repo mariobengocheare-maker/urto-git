@@ -3088,7 +3088,18 @@ txnListSubtabs.querySelectorAll('button').forEach(btn => {
 
 async function ensureTxnTypesLoaded() {
   if (txnTypes.length) return;
-  const res = await fetch('/api/txn/types');
+  // A raw network hiccup here (fetch() itself throwing, not just a non-OK
+  // response) used to propagate silently up through the button's click
+  // handler with no try/catch anywhere — the click registered, the fetch
+  // died, and the modal that was supposed to open next never did, with
+  // zero feedback that anything went wrong. Turned into a clear error the
+  // caller can show instead.
+  let res;
+  try {
+    res = await fetch('/api/txn/types');
+  } catch (e) {
+    throw new Error("Couldn't reach URTO's server — try clicking again.");
+  }
   txnTypes = res.ok ? await res.json() : [];
 }
 
@@ -3277,7 +3288,12 @@ const txnNewType = document.getElementById('txnNewType');
 const txnNewError = document.getElementById('txnNewError');
 
 txnNewBtn.addEventListener('click', async () => {
-  await ensureTxnTypesLoaded();
+  try {
+    await ensureTxnTypesLoaded();
+  } catch (e) {
+    alert(e.message);
+    return;
+  }
   txnNewType.innerHTML = txnTypes.map(t => `<option value="${t.key}">${escapeHtml(t.label)}</option>`).join('');
   txnNewTitle.value = '';
   txnNewError.style.display = 'none';
@@ -3310,11 +3326,15 @@ const txnNewDocName = document.getElementById('txnNewDocName');
 let activeTxnTypeForDocs = null;
 
 txnManageDocsBtn.addEventListener('click', async () => {
-  await ensureTxnTypesLoaded();
-  activeTxnTypeForDocs = txnTypes[0]?.key || null;
-  renderTxnTypeSubtabs();
-  await loadDocTypesList();
-  txnDocTypesOverlay.classList.add('show');
+  try {
+    await ensureTxnTypesLoaded();
+    activeTxnTypeForDocs = txnTypes[0]?.key || null;
+    renderTxnTypeSubtabs();
+    await loadDocTypesList();
+    txnDocTypesOverlay.classList.add('show');
+  } catch (e) {
+    alert(e.message || "Couldn't open document checklists — try clicking again.");
+  }
 });
 document.getElementById('txnDocTypesCloseBtn').addEventListener('click', () => {
   txnDocTypesOverlay.classList.remove('show');
@@ -3338,7 +3358,12 @@ function renderTxnTypeSubtabs() {
 
 async function loadDocTypesList() {
   if (!activeTxnTypeForDocs) return;
-  const res = await fetch(`/api/txn/document_types?type=${encodeURIComponent(activeTxnTypeForDocs)}`);
+  let res;
+  try {
+    res = await fetch(`/api/txn/document_types?type=${encodeURIComponent(activeTxnTypeForDocs)}`);
+  } catch (e) {
+    throw new Error("Couldn't reach URTO's server — try clicking again.");
+  }
   const docs = res.ok ? await res.json() : [];
   txnDocTypesList.innerHTML = '';
   if (docs.length === 0) {
@@ -3445,10 +3470,17 @@ async function submitNewDocType() {
     return;
   }
   if (!activeTxnTypeForDocs) return;
-  const res = await fetch('/api/txn/document_types', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transaction_type: activeTxnTypeForDocs, name }),
-  });
+  let res;
+  try {
+    res = await fetch('/api/txn/document_types', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction_type: activeTxnTypeForDocs, name }),
+    });
+  } catch (e) {
+    txnDocTypeError.textContent = "Couldn't reach URTO's server — try clicking again.";
+    txnDocTypeError.style.display = 'block';
+    return;
+  }
   if (res.ok) {
     txnNewDocName.value = '';
     loadDocTypesList();
