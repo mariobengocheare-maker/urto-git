@@ -339,6 +339,7 @@ def _write_full_data_export(backup_dir: Path):
             dict(r) for r in conn.execute("SELECT * FROM transaction_documents ORDER BY id").fetchall()
         ],
         "lookup_stats": [dict(r) for r in conn.execute("SELECT * FROM lookup_stats ORDER BY week_start").fetchall()],
+        "text_presets": [dict(r) for r in conn.execute("SELECT * FROM text_presets ORDER BY sort_order, id").fetchall()],
     }
     conn.close()
     try:
@@ -709,6 +710,14 @@ def init_db():
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS text_presets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            created_at TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -1785,3 +1794,41 @@ def remove_signed_document(transaction_document_id: int) -> dict:
     on_data_changed("signed document removed")
     _instant_document_mirror()
     return dict(updated)
+
+
+# ---- Follow-up text presets ----
+# Reusable preset messages for the "Follow-up Text" button (client detail
+# view + Dialer) — opens an sms: link pre-filled with the chosen client's
+# phone number and either a preset or a custom-typed message. No telephony
+# account/cost involved: this just hands off to whatever the OS/Phone Link
+# already has registered for sms: links (Mario confirmed Phone Link handles
+# real sending for his iPhone over Bluetooth).
+
+def list_text_presets() -> list:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM text_presets ORDER BY sort_order, id").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_text_preset(text: str) -> dict:
+    conn = get_conn()
+    max_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS m FROM text_presets").fetchone()["m"]
+    now = datetime.now().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO text_presets (text, sort_order, created_at) VALUES (?, ?, ?)",
+        (text, max_order + 1, now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM text_presets WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    on_data_changed("text preset added")
+    return dict(row)
+
+
+def delete_text_preset(preset_id: int):
+    conn = get_conn()
+    conn.execute("DELETE FROM text_presets WHERE id = ?", (preset_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("text preset removed")

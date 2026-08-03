@@ -426,6 +426,14 @@
   .backup-bar .ok { color: #3fce7a; }
   .backup-bar .warn { color: #e0a52c; }
   .backup-bar-destinations { display: flex; gap: 14px; flex-wrap: wrap; }
+  .text-preset-list { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; }
+  .text-preset-row {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid rgba(201,162,39,.15); border-radius: 7px;
+    background: rgba(19,28,46,.4); font-size: .84rem;
+  }
+  .text-preset-row .preset-text { flex: 1; cursor: pointer; }
+  .text-preset-row .preset-delete { color: var(--danger-fg, #e05a5a); cursor: pointer; background: none; border: none; font-size: 1rem; }
   #dataHealthWarning {
     display: none; align-items: center; gap: 12px; margin-bottom: 14px;
     padding: 12px 16px; border: 1px solid rgba(224,74,74,.5); border-radius: 8px;
@@ -1164,6 +1172,9 @@
         <button class="call-btn" id="dialerCallBtn">Call (Enter)</button>
         <button class="ghost" id="dialerNextBtn">Next &rarr;</button>
       </div>
+      <div class="dialer-controls">
+        <button class="ghost" id="dialerTextBtn">📱 Follow-up Text</button>
+      </div>
       <div class="dialer-hint">Enter = call current number &nbsp;·&nbsp; &larr;/&rarr; = move through the list</div>
     </div>
     <div class="dialer-list" id="dialerListEl"></div>
@@ -1298,6 +1309,42 @@
   </div>
 </div>
 
+<!-- Follow-up Text modal (shared by client detail view + Dialer) -->
+<div class="modal-overlay" id="textFollowupOverlay">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-head">
+      <h2>Follow-up Text</h2>
+      <button class="modal-close" id="textFollowupCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">
+      To: <strong id="textFollowupRecipient">—</strong>
+    </p>
+
+    <div class="form-group">
+      <label>Presets (click to load into the message box)</label>
+      <div id="textPresetList" class="text-preset-list"></div>
+    </div>
+
+    <div class="form-group">
+      <label for="textFollowupBody">Message</label>
+      <textarea id="textFollowupBody" rows="4" placeholder="Type a custom message, or click a preset above…"></textarea>
+    </div>
+
+    <div class="modal-actions">
+      <button id="textFollowupSendBtn">📱 Open Text</button>
+    </div>
+
+    <div class="detail-section">
+      <h3>Manage Presets</h3>
+      <div class="row" style="margin-top:0">
+        <input type="text" id="textPresetNewInput" placeholder="Add a new preset message…" style="flex:1">
+        <button class="small" id="textPresetAddBtn">+ Add</button>
+      </div>
+      <div class="error-box" id="textPresetError" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Client detail modal -->
 <div class="modal-overlay" id="clientDetailOverlay">
   <div class="modal" style="max-width:600px">
@@ -1312,6 +1359,7 @@
 
     <div class="row">
       <button class="ghost small" id="cdEditBtn">Edit</button>
+      <button class="ghost small" id="cdTextBtn">📱 Follow-up Text</button>
       <button class="danger small" id="cdDeleteBtn" style="display:inline-block; background:var(--danger-fg)">Delete Client</button>
     </div>
 
@@ -1936,6 +1984,107 @@ document.getElementById('openRestoreBtn').addEventListener('click', openRestoreM
 document.getElementById('dataHealthRestoreBtn').addEventListener('click', openRestoreModal);
 document.getElementById('restoreCloseBtn').addEventListener('click', () => restoreOverlay.classList.remove('show'));
 
+/* ---- Follow-up Text: shared by the client detail view and the Dialer ---- */
+const textFollowupOverlay = document.getElementById('textFollowupOverlay');
+const textFollowupRecipient = document.getElementById('textFollowupRecipient');
+const textFollowupBody = document.getElementById('textFollowupBody');
+const textPresetList = document.getElementById('textPresetList');
+const textPresetNewInput = document.getElementById('textPresetNewInput');
+const textPresetError = document.getElementById('textPresetError');
+let textFollowupPhone = '';
+
+async function loadTextPresetsIntoModal() {
+  textPresetList.innerHTML = 'Loading…';
+  try {
+    const res = await fetch('/api/text_presets');
+    const presets = await res.json();
+    if (!presets.length) {
+      textPresetList.innerHTML = '<div class="empty-state">No presets yet — add one below.</div>';
+      return;
+    }
+    textPresetList.innerHTML = '';
+    for (const p of presets) {
+      const row = document.createElement('div');
+      row.className = 'text-preset-row';
+      row.innerHTML = `<span class="preset-text">${escapeHtml(p.text)}</span><button class="preset-delete" title="Delete preset">&times;</button>`;
+      row.querySelector('.preset-text').addEventListener('click', () => {
+        textFollowupBody.value = p.text;
+      });
+      row.querySelector('.preset-delete').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await fetch(`/api/text_presets/${p.id}`, { method: 'DELETE' });
+        loadTextPresetsIntoModal();
+      });
+      textPresetList.appendChild(row);
+    }
+  } catch (e) {
+    textPresetList.innerHTML = '<div class="empty-state">Could not load presets.</div>';
+  }
+}
+
+function openTextFollowup(name, phone) {
+  // Close any other open modal first (e.g. the client detail view this was
+  // launched from) — two stacked .modal-overlay elements share the same
+  // z-index, so whichever is later in the DOM would otherwise sit on top
+  // and swallow clicks meant for this one.
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  textFollowupPhone = phone || '';
+  textFollowupRecipient.textContent = `${name || 'Unknown'} (${phone || 'no phone on file'})`;
+  textFollowupBody.value = '';
+  textPresetError.style.display = 'none';
+  loadTextPresetsIntoModal();
+  textFollowupOverlay.classList.add('show');
+}
+
+document.getElementById('textFollowupCloseBtn').addEventListener('click', () => textFollowupOverlay.classList.remove('show'));
+
+document.getElementById('textFollowupSendBtn').addEventListener('click', () => {
+  if (!textFollowupPhone) {
+    alert('No phone number on file for this contact.');
+    return;
+  }
+  const body = textFollowupBody.value.trim();
+  const smsUrl = `sms:${normalizePhone(textFollowupPhone)}${body ? '?body=' + encodeURIComponent(body) : ''}`;
+  window.location.href = smsUrl;
+});
+
+document.getElementById('textPresetAddBtn').addEventListener('click', async () => {
+  const text = textPresetNewInput.value.trim();
+  textPresetError.style.display = 'none';
+  if (!text) {
+    textPresetError.textContent = 'Type a message first.';
+    textPresetError.style.display = 'block';
+    return;
+  }
+  try {
+    const res = await fetch('/api/text_presets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      textPresetError.textContent = data.error || 'Could not add that preset.';
+      textPresetError.style.display = 'block';
+      return;
+    }
+    textPresetNewInput.value = '';
+    loadTextPresetsIntoModal();
+  } catch (e) {
+    textPresetError.textContent = "Couldn't reach URTO's server — try again.";
+    textPresetError.style.display = 'block';
+  }
+});
+
+document.getElementById('cdTextBtn').addEventListener('click', () => {
+  openTextFollowup(document.getElementById('cdName').textContent, document.getElementById('cdPhone').textContent);
+});
+
+document.getElementById('dialerTextBtn').addEventListener('click', () => {
+  if (!dialerList.length) return;
+  const entry = dialerList[dialerIndex];
+  openTextFollowup(entry.name, entry.phone);
+});
+
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
 const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
 const crmTabListsBtn = document.getElementById('crmTabListsBtn');
@@ -2074,10 +2223,17 @@ clientForm.addEventListener('submit', async (e) => {
   const id = clientFormId.value;
   const url = id ? `/api/crm/clients/${id}` : '/api/crm/clients';
   const method = id ? 'PUT' : 'POST';
-  const res = await fetch(url, {
-    method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-  });
-  const data = await res.json();
+  let res, data;
+  try {
+    res = await fetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    data = await res.json();
+  } catch (err) {
+    clientFormError.textContent = "Couldn't reach URTO's server — try clicking Save again.";
+    clientFormError.style.display = 'block';
+    return;
+  }
   if (!res.ok) {
     clientFormError.textContent = data.error || 'Could not save client.';
     clientFormError.style.display = 'block';
@@ -2089,9 +2245,16 @@ clientForm.addEventListener('submit', async (e) => {
   if (!id) {
     const noteText = cfNotes.value.trim();
     if (noteText) {
-      await fetch(`/api/crm/clients/${data.id}/notes`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: noteText }),
-      });
+      try {
+        await fetch(`/api/crm/clients/${data.id}/notes`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: noteText }),
+        });
+      } catch (err) {
+        // The client itself already saved successfully above — don't block
+        // on the optional note failing, just let Mario know so he can add
+        // it manually from the client detail view instead.
+        alert("Client saved, but the initial note couldn't be saved — add it from the client's detail view.");
+      }
     }
   }
 

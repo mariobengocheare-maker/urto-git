@@ -35,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -643,6 +643,25 @@ def backup_restore():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify(result)
+
+
+@app.route("/api/text_presets", methods=["GET"])
+def get_text_presets():
+    return jsonify(crm.list_text_presets())
+
+
+@app.route("/api/text_presets", methods=["POST"])
+def create_text_preset():
+    text = (request.get_json(force=True) or {}).get("text", "").strip()
+    if not text:
+        return jsonify({"error": "Type a message first."}), 400
+    return jsonify(crm.add_text_preset(text)), 201
+
+
+@app.route("/api/text_presets/<int:preset_id>", methods=["DELETE"])
+def remove_text_preset(preset_id):
+    crm.delete_text_preset(preset_id)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/crm/calendar")
