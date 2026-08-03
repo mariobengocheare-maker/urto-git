@@ -1730,12 +1730,20 @@ setTimeout(() => {
 // a global shutdown that killed the server out from under a second tab,
 // which then failed with "couldn't reach the server" on its next click).
 const URTO_TAB_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-setInterval(() => {
+function sendHeartbeat() {
   fetch('/api/heartbeat', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tab_id: URTO_TAB_ID }),
   }).catch(() => {});
-}, 5000);
+}
+// Fire one immediately on load, not just on the first 5s interval tick — a
+// freshly-opened tab (e.g. right after the URTO Updater launches a new one)
+// needs to register itself in _active_tabs FAST. Mario hit the race this
+// closes: he closed the old tab the instant the new one opened, before its
+// first heartbeat had gone out, so the server briefly saw zero active tabs
+// and shut itself down on the tab he was about to use.
+sendHeartbeat();
+setInterval(sendHeartbeat, 5000);
 window.addEventListener('pagehide', () => {
   navigator.sendBeacon('/api/shutdown', new Blob([JSON.stringify({ tab_id: URTO_TAB_ID })], { type: 'application/json' }));
 });

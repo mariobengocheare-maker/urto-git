@@ -35,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.5.8"
+APP_VERSION = "1.5.9"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -116,6 +116,8 @@ HEARTBEAT_TIMEOUT = 180
 _active_tabs = {}  # tab_id -> last-heartbeat time.time()
 _active_tabs_lock = threading.Lock()
 _ever_connected = {"v": False}  # don't let the watchdog fire before the very first tab has even had a chance to check in
+_server_started_at = time.time()
+STARTUP_GRACE_SECONDS = 15  # a just-launched tab needs a moment for its first heartbeat to land
 
 _active_requests = {"count": 0}
 _active_requests_lock = threading.Lock()
@@ -171,7 +173,12 @@ def shutdown():
     with _active_tabs_lock:
         _active_tabs.pop(_get_tab_id(), None)
         any_tabs_left = bool(_active_tabs)
-    if not any_tabs_left and _safe_to_exit():
+    # A brand-new tab (e.g. one the URTO Updater just launched) needs a
+    # moment for its own first heartbeat to land before it's fairly counted
+    # as "active" — without this, closing an OLD tab in that same instant
+    # could see zero active tabs and shut down the server on the new one.
+    within_startup_grace = (time.time() - _server_started_at) < STARTUP_GRACE_SECONDS
+    if not any_tabs_left and not within_startup_grace and _safe_to_exit():
         threading.Timer(0.2, lambda: os._exit(0)).start()
     return jsonify({"ok": True})
 
@@ -185,7 +192,8 @@ def _watchdog():
             for tid in stale:
                 del _active_tabs[tid]
             any_tabs_left = bool(_active_tabs)
-        if _ever_connected["v"] and not any_tabs_left and _safe_to_exit():
+        within_startup_grace = (now - _server_started_at) < STARTUP_GRACE_SECONDS
+        if _ever_connected["v"] and not any_tabs_left and not within_startup_grace and _safe_to_exit():
             os._exit(0)
 
 
