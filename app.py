@@ -34,7 +34,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.5.4"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -82,8 +82,41 @@ JOBS_LOCK = threading.Lock()
 # skips that (a crash, force-closing the browser, the PC sleeping) — if no
 # heartbeat arrives for a while, it shuts the server down on its own. Same
 # pattern already shipped on Wardrobe.
+#
+# HEARTBEAT_TIMEOUT used to be 20s, which turned out to be a real bug: most
+# browsers throttle a BACKGROUND tab's JS timers hard (sometimes to once a
+# minute or less) — so switching away from URTO for a bit (e.g. to the OS
+# file picker to grab a document to upload) could silently blow past 20s
+# with the tab never actually closed, and the watchdog would kill the
+# server out from under an in-progress upload/save. Raised to a much more
+# forgiving window, and _request_in_progress() below adds a second, more
+# direct guard: never exit while ANY real request (upload, note save,
+# transaction edit, ...) is actually being handled, not just a FOREWARN job.
 _last_heartbeat = {"t": None}
-HEARTBEAT_TIMEOUT = 20
+HEARTBEAT_TIMEOUT = 180
+
+_active_requests = {"count": 0}
+_active_requests_lock = threading.Lock()
+_EXEMPT_PATHS = {"/api/heartbeat", "/api/shutdown"}
+
+
+@app.before_request
+def _track_request_start():
+    if request.path not in _EXEMPT_PATHS:
+        with _active_requests_lock:
+            _active_requests["count"] += 1
+
+
+@app.teardown_request
+def _track_request_end(exc=None):
+    if request.path not in _EXEMPT_PATHS:
+        with _active_requests_lock:
+            _active_requests["count"] = max(0, _active_requests["count"] - 1)
+
+
+def _request_in_progress() -> bool:
+    with _active_requests_lock:
+        return _active_requests["count"] > 0
 
 
 def _job_in_progress() -> bool:
@@ -94,6 +127,10 @@ def _job_in_progress() -> bool:
         return any(j["status"] in ("starting", "awaiting_login", "running") for j in JOBS.values())
 
 
+def _safe_to_exit() -> bool:
+    return not _job_in_progress() and not _request_in_progress()
+
+
 @app.route("/api/heartbeat", methods=["POST"])
 def heartbeat():
     _last_heartbeat["t"] = time.time()
@@ -102,7 +139,7 @@ def heartbeat():
 
 @app.route("/api/shutdown", methods=["POST"])
 def shutdown():
-    if not _job_in_progress():
+    if _safe_to_exit():
         threading.Timer(0.2, lambda: os._exit(0)).start()
     return jsonify({"ok": True})
 
@@ -111,7 +148,7 @@ def _watchdog():
     while True:
         time.sleep(5)
         t = _last_heartbeat["t"]
-        if t is not None and (time.time() - t) > HEARTBEAT_TIMEOUT and not _job_in_progress():
+        if t is not None and (time.time() - t) > HEARTBEAT_TIMEOUT and _safe_to_exit():
             os._exit(0)
 
 
