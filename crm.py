@@ -19,6 +19,13 @@ from pathlib import Path
 
 from werkzeug.utils import secure_filename
 
+# Keep this in sync with urto_updater.pyw's REPO_ZIP_URL — same repo/branch,
+# just also surfaced as a plain link inside the backups themselves so the
+# code is recoverable even starting from nothing but a Google Drive/OneDrive
+# folder (e.g. after losing the PC entirely).
+GITHUB_REPO_URL = "https://github.com/mariobengocheare-maker/urto-git"
+GITHUB_ZIP_URL = "https://codeload.github.com/mariobengocheare-maker/urto-git/zip/refs/heads/claude/context-window-dgen3k"
+
 _PROJECT_DIR = Path(__file__).parent
 
 
@@ -342,6 +349,33 @@ def _write_full_data_export(backup_dir: Path):
         pass
 
 
+def _write_code_download_link(backup_dir: Path):
+    """A plain-text pointer to the app's own code, sitting right next to the
+    data backups — so recovering from losing this PC entirely is genuinely
+    two steps (GitHub for the code, this backup folder for the data), not
+    'go find the GitHub link from somewhere else.' Static content, so this
+    is nearly free to rewrite on every instant mirror."""
+    text = (
+        "URTO — code recovery\n"
+        "=====================\n\n"
+        "This folder has your DATA (client/CRM database, documents, this "
+        "text file). The APP ITSELF (the code) lives on GitHub, not here:\n\n"
+        f"Download link (ZIP): {GITHUB_ZIP_URL}\n"
+        f"Repository page: {GITHUB_REPO_URL}\n\n"
+        "If you ever lose this PC or need a fresh install:\n"
+        "  1. Download the ZIP link above and extract it — that's the app.\n"
+        "  2. Copy urto_crm.db and the documents/ folder from this backup "
+        "folder into the new install's data location (URTO migrates it "
+        "into place automatically the first time it runs).\n"
+        "  3. Re-run 'Create URTO Updater Desktop Icon.vbs' once so future "
+        "updates go back to being one click.\n"
+    )
+    try:
+        (backup_dir / "CODE_DOWNLOAD_LINK.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _instant_document_mirror():
     """Mirrors the Transaction Manager document folders to every backup
     destination right away — called from the specific document-mutation
@@ -392,6 +426,10 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
                     pass
                 try:
                     _write_full_data_export(backup_dir)
+                except Exception:
+                    pass
+                try:
+                    _write_code_download_link(backup_dir)
                 except Exception:
                     pass
                 if snapshot:

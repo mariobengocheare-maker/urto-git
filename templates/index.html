@@ -1721,6 +1721,18 @@ setTimeout(() => {
   }
 }, 5000);
 
+// Keeps the server alive only while this tab is actually open — the desktop
+// launcher starts it detached with no window, so without this Mario had to
+// find and kill it in Task Manager by hand every time. Pings every few
+// seconds while open; fires a shutdown the instant the tab closes (a real
+// lookup in progress is never interrupted — the server checks that itself).
+setInterval(() => {
+  fetch('/api/heartbeat', { method: 'POST' }).catch(() => {});
+}, 5000);
+window.addEventListener('pagehide', () => {
+  navigator.sendBeacon('/api/shutdown');
+});
+
 const backupStatusText = document.getElementById('backupStatusText');
 const backupDestinations = document.getElementById('backupDestinations');
 const backupNowBtn = document.getElementById('backupNowBtn');

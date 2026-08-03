@@ -13,6 +13,7 @@ automation, driven from your own machine.
 
 import csv
 import io
+import os
 import threading
 import time
 import uuid
@@ -29,8 +30,8 @@ app = Flask(__name__)
 
 # Bump these two together whenever a change is shipped, so Mario can tell at
 # a glance (bottom of every page) which build he's actually running.
-APP_VERSION = "1.5.0"
-APP_VERSION_DATE = "Aug 3, 2026 12:00 PM EST"
+APP_VERSION = "1.5.1"
+APP_VERSION_DATE = "Aug 3, 2026 1:30 PM EST"
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -49,6 +50,49 @@ threading.Thread(target=_backup_watcher, daemon=True).start()
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
+
+# The desktop launcher starts this server detached, with no window — so
+# nothing closes it automatically when Mario's done, and he was having to
+# hunt it down in Task Manager every time. The frontend pings /api/heartbeat
+# every few seconds while a tab is open and fires /api/shutdown the instant
+# one closes; the watchdog thread below is the fallback for anything that
+# skips that (a crash, force-closing the browser, the PC sleeping) — if no
+# heartbeat arrives for a while, it shuts the server down on its own. Same
+# pattern already shipped on Wardrobe.
+_last_heartbeat = {"t": None}
+HEARTBEAT_TIMEOUT = 20
+
+
+def _job_in_progress() -> bool:
+    """Never auto-close mid-lookup — a real headed Chromium window may be
+    scraping FOREWARN in a background thread, and killing the process would
+    abandon that run with no partial-results file ever written."""
+    with JOBS_LOCK:
+        return any(j["status"] in ("starting", "awaiting_login", "running") for j in JOBS.values())
+
+
+@app.route("/api/heartbeat", methods=["POST"])
+def heartbeat():
+    _last_heartbeat["t"] = time.time()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/shutdown", methods=["POST"])
+def shutdown():
+    if not _job_in_progress():
+        threading.Timer(0.2, lambda: os._exit(0)).start()
+    return jsonify({"ok": True})
+
+
+def _watchdog():
+    while True:
+        time.sleep(5)
+        t = _last_heartbeat["t"]
+        if t is not None and (time.time() - t) > HEARTBEAT_TIMEOUT and not _job_in_progress():
+            os._exit(0)
+
+
+threading.Thread(target=_watchdog, daemon=True).start()
 
 
 def run_job(job_id, rows):
