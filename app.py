@@ -35,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.6.4"
+APP_VERSION = "1.7.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -386,6 +386,7 @@ def crm_create_client():
             custom_amount=data.get("custom_amount"),
             custom_unit=data.get("custom_unit"),
             list_ids=data.get("list_ids"),
+            start_date=(data.get("start_date") or "").strip() or None,
         )
     except crm.DuplicatePhoneError as e:
         return jsonify({"error": str(e)}), 409

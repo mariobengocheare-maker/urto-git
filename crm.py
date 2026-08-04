@@ -869,7 +869,7 @@ def client_to_dict(row) -> dict:
     return d
 
 
-def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None) -> dict:
+def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None, start_date=None) -> dict:
     dup = find_client_by_phone(phone)
     if dup:
         raise DuplicatePhoneError(dup["name"])
@@ -877,7 +877,10 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
     created_at = date.today().isoformat()
     next_followup_date = None
     if interval_days:
-        next_followup_date = (date.today() + timedelta(days=interval_days)).isoformat()
+        # start_date lets a caller anchor the schedule to an explicit date
+        # (e.g. "follow up every 4 weeks starting next Monday" from the
+        # voice-add-client feature) instead of the default today+interval.
+        next_followup_date = start_date if start_date else (date.today() + timedelta(days=interval_days)).isoformat()
 
     conn = get_conn()
     cur = conn.execute(

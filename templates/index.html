@@ -789,6 +789,13 @@
   .dictate-review { margin-top: 10px; }
   .dictate-review label { display: block; margin-bottom: 5px; font-size: .82rem; }
   .dictate-review textarea { width: 100%; }
+  .voice-fill-box { padding: 12px 14px; margin-bottom: 14px; border-radius: 10px; background: rgba(8,13,24,.35); border: 1px solid var(--border); text-align: left; }
+  .voice-fill-banner {
+    margin-top: 10px; padding: 8px 12px; border-radius: 8px;
+    background: rgba(255,196,0,.12); color: var(--gold-bright);
+    border: 1px solid rgba(255,196,0,.35); font-size: .82rem; font-weight: 600;
+  }
+  #cfStartDateNote { color: var(--text-secondary); font-size: .82rem; }
   .dialer-hint { color: var(--text-secondary); font-size: .78rem; margin-top: 18px; }
   .dialer-controls { display: flex; justify-content: center; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
   .dialer-controls button.call-btn { background: var(--success-fg); padding: 12px 28px; font-size: 1rem; }
@@ -1257,6 +1264,13 @@
       <button class="modal-close" id="clientFormCloseBtn">&times;</button>
     </div>
     <div class="error-box" id="clientFormError"></div>
+    <div class="voice-fill-box" id="voiceFillBox">
+      <button type="button" class="dictate-btn" id="voiceFillBtn">🎙 Voice-fill this form</button>
+      <div class="dictate-hint" id="voiceFillHint">Say something like: "Add a client named Jose Bengochea, property at 123 Main St, follow up every 4 weeks starting next Monday, add a note saying he likes cars." Then review everything below before saving.</div>
+      <div class="dictate-live" id="voiceFillLive" style="display:none"></div>
+      <div class="voice-fill-banner" id="voiceFillBanner" style="display:none">🎙 Filled from voice — please review every field below before saving.</div>
+      <div class="error-box" id="voiceFillError" style="display:none"></div>
+    </div>
     <form id="clientForm">
       <input type="hidden" id="clientFormId">
       <div class="form-group">
@@ -1294,6 +1308,10 @@
           <option value="weeks">Weeks</option>
           <option value="months">Months</option>
         </select>
+      </div>
+      <div class="form-group" id="cfStartDateRow" style="display:none; margin-top:0">
+        <span id="cfStartDateNote"></span>
+        <button type="button" id="cfStartDateClearBtn" class="ghost" style="padding:2px 8px; font-size:0.85em">Use default instead</button>
       </div>
       <div class="form-group" id="cfNotesRow">
         <label for="cfNotes">Notes (optional)</label>
@@ -2256,6 +2274,255 @@ async function renderCfListsBox(selectedIds) {
   `).join('');
 }
 
+/* ===================== Voice-fill Add Client (free, rule-based) =====================
+ * Transcribes with the same free browser Web Speech API as call-note dictation,
+ * then extracts fields with keyword/trigger matching (same "match by meaning, not
+ * exact phrasing" philosophy as input_parser.py's CSV column matching) — NOT a real
+ * AI/NLU model, so it works well for a fairly consistent phrasing pattern and can
+ * misparse unusual wording. It never auto-saves: parsed fields just populate the
+ * normal Add Client form for Mario to review/correct before hitting Save. */
+let cfStartDateOverride = null;
+
+function titleCase(s) {
+  return s.split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
+function capitalizeFirst(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const WORD_NUMBERS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12 };
+
+function parseRelativeDate(phrase) {
+  const p = phrase.trim().toLowerCase();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const addDays = (n) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() + n);
+    return d;
+  };
+  const toIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  if (/^today\b/.test(p)) return toIso(today);
+  if (/^tomorrow\b/.test(p)) return toIso(addDays(1));
+
+  let m = /(\d+)\s+days?\b/.exec(p);
+  if (m && /^in\s+/.test(p)) return toIso(addDays(Number(m[1])));
+  m = /(\d+)\s+weeks?\b/.exec(p);
+  if (m && /^in\s+/.test(p)) return toIso(addDays(Number(m[1]) * 7));
+
+  const wd = new RegExp(`\\b(${WEEKDAYS.join('|')})\\b`).exec(p);
+  if (wd) {
+    const target = WEEKDAYS.indexOf(wd[1]);
+    let diff = (target - today.getDay() + 7) % 7;
+    if (diff === 0) diff = 7; // "next Monday" (or a bare weekday) always means a future date, not today
+    return toIso(addDays(diff));
+  }
+  return null;
+}
+
+function parseFollowup(value, result) {
+  let v = value.trim();
+  const countMatch = /^\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve)\s+(day|days|week|weeks|month|months)\b/i.exec(v);
+  if (!countMatch) { result.matched.followupFailed = true; return; }
+  const count = /^\d+$/.test(countMatch[1]) ? Number(countMatch[1]) : WORD_NUMBERS[countMatch[1].toLowerCase()];
+  const unit = countMatch[2].toLowerCase().replace(/s$/, '');
+
+  if (unit === 'week' && count === 2) result.frequencyKey = '2_weeks';
+  else if (unit === 'week' && count === 3) result.frequencyKey = '3_weeks';
+  else if (unit === 'week' && count === 4) result.frequencyKey = '4_weeks';
+  else if (unit === 'month' && count === 2) result.frequencyKey = '2_months';
+  else if (unit === 'month' && count === 6) result.frequencyKey = '6_months';
+  else {
+    result.frequencyKey = 'custom';
+    result.customAmount = count;
+    result.customUnit = unit + 's';
+  }
+  result.matched.followup = true;
+
+  const startMatch = /\bstarting\b\s*(.+)$/i.exec(v);
+  if (startMatch) {
+    const iso = parseRelativeDate(startMatch[1]);
+    if (iso) { result.startDate = iso; result.matched.startDate = true; }
+  }
+}
+
+function extractName(raw) {
+  let v = raw.trim();
+  const stop = /\b(?:name|he|she|his|her|they|their|who|which|that)\b/i.exec(v);
+  if (stop) v = v.slice(0, stop.index);
+  v = v.replace(/^(?:a\s+)/i, '').replace(/[.,]+$/, '').trim();
+  return titleCase(v);
+}
+
+function parseVoiceCommand(raw) {
+  const text = raw.trim().replace(/\s+/g, ' ');
+  const result = {
+    name: '', address: '', frequencyKey: null, customAmount: null, customUnit: null,
+    startDate: null, note: '', matched: {},
+  };
+
+  const TRIGGERS = [
+    { field: 'name', re: /\b(?:add a client named|add a new client named|new client named|client named|add a client with|client with|name is)\b/i },
+    { field: 'address', re: /\b(?:(?:has\s+a\s+)?property(?:\s+is)?\s+at|address\s+is|located\s+at|lives\s+at|home\s+address\s+is|property\s+address\s+is)\b/i },
+    { field: 'followup', re: /\b(?:follow[- ]?up(?:\s+with\s+(?:him|her|them))?\s+every|call(?:\s+(?:him|her|them))?\s+every|remind\s+me\s+every|every)\b/i },
+    { field: 'note', re: /\b(?:add a note saying|add a note that|note saying|note that|add a note)\b/i },
+  ];
+
+  const matches = [];
+  for (const t of TRIGGERS) {
+    const m = t.re.exec(text);
+    if (m) matches.push({ field: t.field, start: m.index, valueStart: m.index + m[0].length });
+  }
+  matches.sort((a, b) => a.start - b.start);
+
+  for (let i = 0; i < matches.length; i++) {
+    const t = matches[i];
+    const sliceEnd = (i + 1 < matches.length) ? matches[i + 1].start : text.length;
+    const raw = text.slice(t.valueStart, sliceEnd).trim();
+    if (t.field === 'name') { result.name = extractName(raw); result.matched.name = true; }
+    else if (t.field === 'address') { result.address = raw.replace(/[.,]+$/, '').trim(); result.matched.address = true; }
+    else if (t.field === 'followup') { parseFollowup(raw, result); }
+    else if (t.field === 'note') { result.note = capitalizeFirst(raw.replace(/[.,]+$/, '').trim()); result.matched.note = true; }
+  }
+  return result;
+}
+
+function applyVoiceParseToForm(result) {
+  const filled = [];
+  if (result.name) { cfName.value = result.name; filled.push('name'); }
+  if (result.address) { cfAddress.value = result.address; filled.push('address'); }
+  if (result.frequencyKey) {
+    cfFrequency.value = result.frequencyKey;
+    cfCustomRow.style.display = result.frequencyKey === 'custom' ? 'flex' : 'none';
+    if (result.frequencyKey === 'custom') {
+      cfCustomAmount.value = result.customAmount;
+      cfCustomUnit.value = result.customUnit;
+    }
+    filled.push('follow-up schedule');
+  }
+  if (result.startDate) {
+    cfStartDateOverride = result.startDate;
+    document.getElementById('cfStartDateNote').textContent = `Follow-up schedule starts: ${result.startDate}`;
+    document.getElementById('cfStartDateRow').style.display = 'flex';
+    filled.push('follow-up start date');
+  }
+  if (result.note) { cfNotes.value = result.note; filled.push('note'); }
+
+  const banner = document.getElementById('voiceFillBanner');
+  if (filled.length) {
+    banner.textContent = `🎙 Filled from voice (${filled.join(', ')}) — please review every field below before saving.`;
+    banner.style.display = 'block';
+  } else {
+    showVoiceFillError("Couldn't pick out any fields from that — try rephrasing, or just fill the form in by hand.");
+  }
+  if (result.matched.followupFailed) {
+    showVoiceFillError('Heard a follow-up schedule but couldn\'t parse the interval — set "Automatic Follow-up" manually.');
+  }
+}
+
+document.getElementById('cfStartDateClearBtn').addEventListener('click', () => {
+  cfStartDateOverride = null;
+  document.getElementById('cfStartDateRow').style.display = 'none';
+});
+
+const VoiceSpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const voiceFillBtn = document.getElementById('voiceFillBtn');
+const voiceFillLive = document.getElementById('voiceFillLive');
+const voiceFillError = document.getElementById('voiceFillError');
+let voiceRecognition = null;
+let voiceRecognizing = false;
+let voiceManualStop = false;
+let voiceFinalText = '';
+
+if (!VoiceSpeechRec) {
+  voiceFillBtn.disabled = true;
+  voiceFillBtn.textContent = '🎙 Voice input not supported in this browser';
+  document.getElementById('voiceFillHint').textContent = 'Try Chrome or Edge for voice-fill — for now, fill the form in below.';
+}
+
+function showVoiceFillError(msg) {
+  voiceFillError.textContent = msg;
+  voiceFillError.style.display = 'block';
+}
+
+function resetVoiceFill() {
+  if (voiceRecognizing) { voiceManualStop = true; try { voiceRecognition && voiceRecognition.stop(); } catch (e) {} }
+  voiceRecognizing = false;
+  voiceFinalText = '';
+  cfStartDateOverride = null;
+  if (voiceFillBtn) {
+    voiceFillBtn.classList.remove('recording');
+    voiceFillBtn.textContent = VoiceSpeechRec ? '🎙 Voice-fill this form' : '🎙 Voice input not supported in this browser';
+  }
+  voiceFillLive.style.display = 'none';
+  voiceFillLive.textContent = '';
+  voiceFillError.style.display = 'none';
+  document.getElementById('voiceFillBanner').style.display = 'none';
+  document.getElementById('cfStartDateRow').style.display = 'none';
+}
+
+voiceFillBtn.addEventListener('click', () => {
+  voiceFillError.style.display = 'none';
+  document.getElementById('voiceFillBanner').style.display = 'none';
+  if (!VoiceSpeechRec) return;
+  if (voiceRecognizing) { voiceManualStop = true; try { voiceRecognition.stop(); } catch (e) {} return; }
+
+  voiceFinalText = '';
+  voiceManualStop = false;
+  voiceRecognition = new VoiceSpeechRec();
+  voiceRecognition.lang = 'en-US';
+  voiceRecognition.continuous = true;
+  voiceRecognition.interimResults = true;
+
+  voiceRecognition.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const chunk = e.results[i][0].transcript;
+      if (e.results[i].isFinal) voiceFinalText += chunk + ' ';
+      else interim += chunk;
+    }
+    voiceFillLive.textContent = (voiceFinalText + interim).trim() || 'Listening…';
+  };
+
+  voiceRecognition.onerror = (e) => {
+    voiceRecognizing = false;
+    voiceManualStop = true;
+    voiceFillBtn.classList.remove('recording');
+    voiceFillBtn.textContent = '🎙 Voice-fill this form';
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      showVoiceFillError('Microphone access was blocked. Allow the mic for this page and try again.');
+    } else if (e.error === 'no-speech') {
+      showVoiceFillError("Didn't catch any speech — try again and speak after clicking.");
+    } else {
+      showVoiceFillError('Voice capture error. You can fill the form in by hand instead.');
+    }
+  };
+
+  voiceRecognition.onend = () => {
+    if (voiceRecognizing && !voiceManualStop) { try { voiceRecognition.start(); return; } catch (e) {} }
+    voiceRecognizing = false;
+    voiceFillBtn.classList.remove('recording');
+    voiceFillBtn.textContent = '🎙 Voice-fill this form';
+    voiceFillLive.style.display = 'none';
+    const text = voiceFinalText.trim();
+    if (text) applyVoiceParseToForm(parseVoiceCommand(text));
+    else if (!voiceFillError.textContent) showVoiceFillError("Didn't catch anything — click and try again.");
+  };
+
+  try {
+    voiceRecognition.start();
+    voiceRecognizing = true;
+    voiceFillBtn.classList.add('recording');
+    voiceFillBtn.textContent = '⏹ Stop & fill form';
+    voiceFillLive.style.display = 'block';
+    voiceFillLive.textContent = 'Listening…';
+  } catch (e) {
+    showVoiceFillError('Could not start voice capture. You can fill the form in by hand instead.');
+  }
+});
+
 function resetClientForm() {
   clientForm.reset();
   clientFormId.value = '';
@@ -2267,6 +2534,7 @@ function resetClientForm() {
   // editing, notes are managed in the client-detail view instead.
   cfNotesRow.style.display = 'block';
   renderCfListsBox([]);
+  resetVoiceFill();
 }
 
 addClientBtn.addEventListener('click', () => {
@@ -2286,6 +2554,7 @@ clientForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   clientFormError.style.display = 'none';
   const listIds = [...cfListsBox.querySelectorAll('input[type=checkbox]:checked')].map(cb => Number(cb.value));
+  const id = clientFormId.value;
   const payload = {
     name: cfName.value,
     phone: cfPhone.value,
@@ -2296,7 +2565,7 @@ clientForm.addEventListener('submit', async (e) => {
     custom_unit: cfCustomUnit.value,
     list_ids: listIds,
   };
-  const id = clientFormId.value;
+  if (!id && cfStartDateOverride) payload.start_date = cfStartDateOverride;
   const url = id ? `/api/crm/clients/${id}` : '/api/crm/clients';
   const method = id ? 'PUT' : 'POST';
   let res, data;
