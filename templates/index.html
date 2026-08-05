@@ -657,6 +657,11 @@
   .note-item:last-child { border-bottom: none; }
   .note-item .note-time { color: var(--text-secondary); font-size: .74rem; margin-bottom: 3px; }
 
+  .call-history-link { color: var(--gold); font-size: .78rem; text-decoration: none; }
+  .call-history-link:hover { text-decoration: underline; }
+  .ch-item { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: .88rem; }
+  .ch-item:last-child { border-bottom: none; }
+
   .followup-box {
     background: var(--bg);
     border-radius: 8px;
@@ -1150,7 +1155,7 @@
         <div class="contact-line"><span class="lbl">Phone</span><span id="dciPhone">—</span></div>
         <div class="contact-line"><span class="lbl">Contact</span><span id="dciContact">—</span></div>
         <div class="contact-line"><span class="lbl">Address</span><span id="dciAddress">—</span></div>
-        <div class="contact-line"><span class="lbl">Last called</span><span id="dciLastCalled">—</span></div>
+        <div class="contact-line"><span class="lbl">Last called</span><span id="dciLastCalled">—</span> <a href="#" class="call-history-link" id="dciCallHistoryLink">Call History</a></div>
         <div id="dciFollowup" class="dialer-client-info-followup"></div>
         <div class="dialer-client-info-notes-head">Notes</div>
         <div id="dciNotes"></div>
@@ -1332,6 +1337,16 @@
 </div>
 
 <!-- Follow-up Text modal (shared by client detail view + Dialer) -->
+<div class="modal-overlay" id="callHistoryOverlay">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-head">
+      <h2>Call History — <span id="chClientName">—</span></h2>
+      <button class="modal-close" id="callHistoryCloseBtn">&times;</button>
+    </div>
+    <div id="chList"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="textFollowupOverlay">
   <div class="modal" style="max-width:520px">
     <div class="modal-head">
@@ -1378,7 +1393,7 @@
     <div class="contact-line"><span class="lbl">Phone</span><span id="cdPhone">—</span></div>
     <div class="contact-line"><span class="lbl">Contact</span><span id="cdContact">—</span></div>
     <div class="contact-line"><span class="lbl">Address</span><span id="cdAddress">—</span></div>
-    <div class="contact-line"><span class="lbl">Last called</span><span id="cdLastCalled">—</span></div>
+    <div class="contact-line"><span class="lbl">Last called</span><span id="cdLastCalled">—</span> <a href="#" class="call-history-link" id="cdCallHistoryLink">Call History</a></div>
 
     <div class="row">
       <button class="ghost small" id="cdEditBtn">Edit</button>
@@ -2689,6 +2704,39 @@ async function openClientDetail(id) {
 }
 
 document.getElementById('clientDetailCloseBtn').addEventListener('click', () => clientDetailOverlay.classList.remove('show'));
+
+/* ===================== Call History ===================== */
+const callHistoryOverlay = document.getElementById('callHistoryOverlay');
+
+async function openCallHistory(clientId, clientName) {
+  if (!clientId) return;
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  document.getElementById('chClientName').textContent = clientName || '—';
+  const chList = document.getElementById('chList');
+  chList.innerHTML = '<div class="empty-state">Loading…</div>';
+  callHistoryOverlay.classList.add('show');
+
+  const res = await fetch(`/api/crm/clients/${clientId}/call_history`);
+  const history = res.ok ? await res.json() : [];
+  if (history.length === 0) {
+    chList.innerHTML = '<div class="empty-state">No calls logged yet.</div>';
+    return;
+  }
+  chList.innerHTML = history.map(h => `<div class="ch-item">${escapeHtml(formatNoteTime(h.called_at))}</div>`).join('');
+}
+
+document.getElementById('callHistoryCloseBtn').addEventListener('click', () => callHistoryOverlay.classList.remove('show'));
+
+document.getElementById('cdCallHistoryLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  openCallHistory(currentClientId, document.getElementById('cdName').textContent);
+});
+
+document.getElementById('dciCallHistoryLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  const entry = dialerList[dialerIndex];
+  if (entry) openCallHistory(entry.clientId, entry.name);
+});
 
 document.getElementById('cdAddNoteBtn').addEventListener('click', async () => {
   const input = document.getElementById('cdNoteInput');

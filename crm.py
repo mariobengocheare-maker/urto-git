@@ -330,6 +330,7 @@ def _write_full_data_export(backup_dir: Path):
         "exported_at": datetime.now().isoformat(timespec="seconds"),
         "clients": [dict(r) for r in conn.execute("SELECT * FROM clients ORDER BY id").fetchall()],
         "notes": [dict(r) for r in conn.execute("SELECT * FROM notes ORDER BY id").fetchall()],
+        "call_log": [dict(r) for r in conn.execute("SELECT * FROM call_log ORDER BY id").fetchall()],
         "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
         "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
         "events": [dict(r) for r in conn.execute("SELECT * FROM events ORDER BY id").fetchall()],
@@ -631,6 +632,13 @@ def init_db():
             client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
             text TEXT NOT NULL,
             created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS call_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            called_at TEXT NOT NULL
         )
     """)
     conn.execute("""
@@ -999,7 +1007,9 @@ def log_call(client_id) -> dict:
     """Stamps a client as called just now — fired whenever Mario actually
     places a call from the Dialer (there's no reliable way to detect a
     tel: link's call was answered/completed, so 'clicked to call' is the
-    same approximation the rest of the Dialer already uses)."""
+    same approximation the rest of the Dialer already uses). Every call is
+    also appended to call_log (full history), not just the latest
+    timestamp — see list_call_history()."""
     conn = get_conn()
     existing = conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,)).fetchone()
     if not existing:
@@ -1007,11 +1017,22 @@ def log_call(client_id) -> dict:
         return None
     now = datetime.now().isoformat(timespec="seconds")
     conn.execute("UPDATE clients SET last_called_at = ? WHERE id = ?", (now, client_id))
+    conn.execute("INSERT INTO call_log (client_id, called_at) VALUES (?, ?)", (client_id, now))
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
     on_data_changed("call logged")
     return client_to_dict(row)
+
+
+def list_call_history(client_id) -> list:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, called_at FROM call_log WHERE client_id = ? ORDER BY called_at DESC, id DESC",
+        (client_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def complete_followup(client_id) -> dict:
