@@ -2220,6 +2220,29 @@ function formatLastCalled(iso) {
   return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} at ${time}`;
 }
 
+// Notes are stored as "YYYY-MM-DD HH:MM" (24-hour, sortable) — parsed manually
+// rather than via `new Date()` since that space-separated shape isn't reliably
+// parsed across browsers, then displayed 12-hour with AM/PM.
+function formatNoteTime(raw) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(raw || '');
+  if (!m) return raw || '';
+  const [, y, mo, d, h, mi] = m;
+  const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi));
+  const dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const timeStr = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `${dateStr}, ${timeStr}`;
+}
+
+// Calendar events / follow-ups store a plain 24-hour "HH:MM" (native
+// input[type=time] value) — reformatted 12-hour with AM/PM for display.
+function formatTime12(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = hhmm.split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = (h % 12) || 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+}
+
 function followupLabel(client) {
   if (client.frequency_label) {
     const statusText = {
@@ -2656,7 +2679,7 @@ async function openClientDetail(id) {
     for (const n of c.notes) {
       const div = document.createElement('div');
       div.className = 'note-item';
-      div.innerHTML = `<div class="note-time">${escapeHtml(n.created_at)}</div>${escapeHtml(n.text)}`;
+      div.innerHTML = `<div class="note-time">${escapeHtml(formatNoteTime(n.created_at))}</div>${escapeHtml(n.text)}`;
       notesList.appendChild(div);
     }
   }
@@ -3018,7 +3041,7 @@ async function renderCalendar() {
     cell.appendChild(dayNum);
     for (const e of (eventsByDay[dateStr] || [])) {
       const chip = document.createElement('div');
-      const label = e.kind === 'manual' ? (e.list_name ? `💰 ${e.time ? e.time + ' ' : ''}${e.title}` : e.client_name ? `${e.time ? e.time + ' ' : ''}${e.title}` : e.title)
+      const label = e.kind === 'manual' ? (e.list_name ? `💰 ${e.time ? formatTime12(e.time) + ' ' : ''}${e.title}` : `${e.time ? formatTime12(e.time) + ' ' : ''}${e.title}`)
         : e.kind === 'list' ? `💰 ${e.list_name}`
         : e.client_name;
       chip.className = `cal-chip ${e.kind === 'manual' ? 'manual' : e.status}`;
@@ -3221,7 +3244,7 @@ dialerSourceTodayBtn.addEventListener('click', async () => {
   }
   loadDialerList(withPhones.map(i => ({
     name: i.client_name || i.title, phone: i.phone, clientId: i.client_id,
-    meta: [i.time, i.title, i.status === 'overdue' ? 'OVERDUE' : ''].filter(Boolean).join(' · '),
+    meta: [i.time ? formatTime12(i.time) : '', i.title, i.status === 'overdue' ? 'OVERDUE' : ''].filter(Boolean).join(' · '),
   })));
 });
 
@@ -3674,7 +3697,7 @@ async function updateDialerClientInfo(entry) {
     for (const n of c.notes) {
       const div = document.createElement('div');
       div.className = 'note-item';
-      div.innerHTML = `<div class="note-time">${escapeHtml(n.created_at)}</div>${escapeHtml(n.text)}`;
+      div.innerHTML = `<div class="note-time">${escapeHtml(formatNoteTime(n.created_at))}</div>${escapeHtml(n.text)}`;
       notesEl.appendChild(div);
     }
   }
