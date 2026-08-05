@@ -3657,8 +3657,33 @@ function parseDialerText(text) {
   return entries;
 }
 
+// Collapses entries that share the same phone number (e.g. the same owner's
+// name appearing on multiple rows of a lookup-results CSV because they own
+// more than one property) into a single dial entry, so Mario never calls the
+// same number twice in one session. Any extra address gets folded into the
+// kept entry's meta line instead of silently dropped.
+function dedupeDialerEntries(entries) {
+  const seen = new Map();
+  const result = [];
+  for (const e of entries) {
+    const key = normalizePhone(e.phone);
+    if (!key) { result.push(e); continue; }
+    if (seen.has(key)) {
+      const kept = seen.get(key);
+      const extra = e.address || e.meta;
+      if (extra && extra !== kept.address && !(kept.meta || '').includes(extra)) {
+        kept.meta = kept.meta ? `${kept.meta}; also ${extra}` : `also ${extra}`;
+      }
+      continue;
+    }
+    seen.set(key, e);
+    result.push(e);
+  }
+  return result;
+}
+
 async function loadDialerList(entries) {
-  dialerList = await matchEntriesToClients(entries);
+  dialerList = await matchEntriesToClients(dedupeDialerEntries(entries));
   dialerIndex = 0;
   dialerEmpty.style.display = dialerList.length ? 'none' : 'block';
   dialerCardWrap.style.display = dialerList.length ? 'block' : 'none';
