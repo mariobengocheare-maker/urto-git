@@ -1360,42 +1360,126 @@ def import_contact_list_file(name, address, frequency_key, custom_amount, custom
 
 
 RECURRING_IMPORT_FIELDS = {"name", "phone", "address", "notes", "frequency_key", "custom_amount", "custom_unit"}
+RECURRING_IMPORT_NOTE_PREFIX = "Imported from Outlook calendar"
 
 
-def import_recurring_followups_csv(raw_text: str) -> dict:
+def _parse_recurring_import_rows(raw_text: str):
+    """Shared row parser for both the preview and the commit step, so the
+    row a given index refers to is guaranteed identical between the two
+    (the preview's checkbox selections are keyed by this same row index)."""
+    reader = csv.DictReader(raw_text.splitlines())
+    if not reader.fieldnames or not RECURRING_IMPORT_FIELDS.issubset(set(reader.fieldnames)):
+        return None
+    rows = []
+    for row in reader:
+        name = (row.get("name") or "").strip()
+        notes = (row.get("notes") or "").strip()
+        rows.append({
+            "name": name,
+            "phone": (row.get("phone") or "").strip(),
+            "address": (row.get("address") or "").strip(),
+            "notes": notes,
+            "frequency_key": (row.get("frequency_key") or "none").strip() or "none",
+            "custom_amount": (row.get("custom_amount") or "").strip() or None,
+            "custom_unit": (row.get("custom_unit") or "").strip() or None,
+            "note_text": f"{RECURRING_IMPORT_NOTE_PREFIX}: {notes}" if notes else f"{RECURRING_IMPORT_NOTE_PREFIX}.",
+        })
+    return rows
+
+
+def _find_recurring_import_match(name, phone, address):
+    """Finds the existing client this row would be merged into, if any.
+    Phone is the primary key (find_client_by_phone, same as everywhere
+    else). A phone-less row (most of this export -- Outlook reminders
+    rarely have a number in the body) falls back to matching a client
+    that was already created by a PRIOR run of this exact import (same
+    name + address, and already carries an "Imported from Outlook
+    calendar" note) -- narrow enough to never match a client Mario
+    entered by hand under a common first name, but catches a re-run of
+    the same file so it merges instead of duplicating (see build order
+    #62 -- a re-run before this fix created real duplicate clients for
+    every phone-less name)."""
+    if phone:
+        return find_client_by_phone(phone)
+    if not name:
+        return None
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT DISTINCT clients.* FROM clients
+           JOIN notes ON notes.client_id = clients.id
+           WHERE notes.text LIKE ? AND lower(clients.name) = lower(?)
+             AND lower(coalesce(clients.address, '')) = lower(?)""",
+        (f"{RECURRING_IMPORT_NOTE_PREFIX}%", name, address),
+    ).fetchall()
+    conn.close()
+    return client_to_dict(rows[0]) if rows else None
+
+
+def preview_recurring_followups_csv(raw_text: str) -> list:
+    """Dry run: parses the CSV and reports what each row WOULD do, with no
+    writes -- lets the CRM Clients dropzone show a confirm screen (every
+    row pre-checked to import/replace, Mario can uncheck any he doesn't
+    want touched) before committing anything."""
+    rows = _parse_recurring_import_rows(raw_text)
+    if rows is None:
+        return None
+    preview = []
+    for i, row in enumerate(rows):
+        if not row["name"]:
+            action, matched_name = "skip", None
+        else:
+            match = _find_recurring_import_match(row["name"], row["phone"], row["address"])
+            if not match:
+                action, matched_name = "create", None
+            elif match["interval_days"] is None:
+                action, matched_name = "update", match["name"]
+            else:
+                action, matched_name = "note_only", match["name"]
+        preview.append({
+            "index": i, "name": row["name"], "phone": row["phone"], "address": row["address"],
+            "action": action, "matched_client_name": matched_name,
+        })
+    return preview
+
+
+def import_recurring_followups_csv(raw_text: str, selected_indices=None) -> dict:
     """Imports the specific CSV shape produced by the Outlook recurring-
     follow-up export (name/phone/address/notes/frequency_key/custom_amount/
     custom_unit columns) — a one-time backfill, not a general contacts
     import (see import_contact_list_file/parse_contact_import for that).
 
-    Dedup is phone-based, same as everywhere else in this file
-    (find_client_by_phone): a phone that already matches a CRM client
-    updates that client instead of creating a duplicate. To avoid silently
+    `selected_indices`, when given, restricts the import to just those row
+    indices (matching preview_recurring_followups_csv's numbering) — the
+    confirm screen's per-row checkboxes. None means "import every row",
+    same as before that screen existed.
+
+    Dedup tries phone first (find_client_by_phone, same as everywhere else
+    in this file), then falls back to matching a client already created by
+    a prior run of this same import (see _find_recurring_import_match) —
+    so re-running the same file is always safe. To avoid silently
     clobbering data Mario already entered by hand, an existing client's
-    name/address/schedule are only filled in where they're currently
+    schedule/address are only filled in where they're currently
     blank/unset — the imported note is always appended regardless, and
     never overwrites a client's own name."""
-    reader = csv.DictReader(raw_text.splitlines())
-    if not reader.fieldnames or not RECURRING_IMPORT_FIELDS.issubset(set(reader.fieldnames)):
+    rows = _parse_recurring_import_rows(raw_text)
+    if rows is None:
         return {"created": 0, "updated": 0, "skipped": 0, "errors": ["File doesn't match the expected recurring-follow-up export columns."]}
 
     created = updated = skipped = 0
     errors = []
     with _deferred_backup():
-        for row in reader:
-            name = (row.get("name") or "").strip()
+        for i, row in enumerate(rows):
+            if selected_indices is not None and i not in selected_indices:
+                skipped += 1
+                continue
+            name = row["name"]
             if not name:
                 skipped += 1
                 continue
-            phone = (row.get("phone") or "").strip()
-            address = (row.get("address") or "").strip()
-            notes = (row.get("notes") or "").strip()
-            frequency_key = (row.get("frequency_key") or "none").strip() or "none"
-            custom_amount = (row.get("custom_amount") or "").strip() or None
-            custom_unit = (row.get("custom_unit") or "").strip() or None
-            note_text = f"Imported from Outlook calendar: {notes}" if notes else "Imported from Outlook calendar."
+            phone, address, note_text = row["phone"], row["address"], row["note_text"]
+            frequency_key, custom_amount, custom_unit = row["frequency_key"], row["custom_amount"], row["custom_unit"]
 
-            existing = find_client_by_phone(phone) if phone else None
+            existing = _find_recurring_import_match(name, phone, address)
             try:
                 if existing:
                     # Only fill in a schedule/address the client doesn't already

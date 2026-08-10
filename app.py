@@ -13,6 +13,7 @@ automation, driven from your own machine.
 
 import csv
 import io
+import json
 import os
 import threading
 import time
@@ -35,7 +36,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -584,12 +585,30 @@ def crm_import_vcard():
     return jsonify(contact_list)
 
 
+@app.route("/api/crm/import_recurring_csv/preview", methods=["POST"])
+def crm_import_recurring_csv_preview():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    raw_text = request.files["file"].read().decode("utf-8", errors="replace")
+    rows = crm.preview_recurring_followups_csv(raw_text)
+    if rows is None:
+        return jsonify({"error": "File doesn't match the expected recurring-follow-up export columns."}), 400
+    return jsonify({"rows": rows})
+
+
 @app.route("/api/crm/import_recurring_csv", methods=["POST"])
 def crm_import_recurring_csv():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     raw_text = request.files["file"].read().decode("utf-8", errors="replace")
-    result = crm.import_recurring_followups_csv(raw_text)
+    selected_indices = None
+    raw_indices = request.form.get("selected_indices")
+    if raw_indices is not None:
+        try:
+            selected_indices = set(json.loads(raw_indices))
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid selected_indices"}), 400
+    result = crm.import_recurring_followups_csv(raw_text, selected_indices=selected_indices)
     return jsonify(result)
 
 

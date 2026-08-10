@@ -1603,6 +1603,27 @@
   </div>
 </div>
 
+<!-- Confirm the recurring-follow-up CSV import before writing anything -->
+<div class="modal-overlay" id="recurImportOverlay">
+  <div class="modal" style="max-width:660px">
+    <div class="modal-head">
+      <h2>Review Before Importing</h2>
+      <button class="modal-close" id="recurImportCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">Every contact below is checked by default. Uncheck any you don't want to import/update right now — nothing is saved until you confirm.</p>
+    <div class="error-box" id="recurImportError" style="display:none"></div>
+    <div class="row" style="margin:0 0 10px">
+      <button type="button" class="ghost small" id="recurImportSelectAllBtn">Select All</button>
+      <button type="button" class="ghost small" id="recurImportSelectNoneBtn">Select None</button>
+    </div>
+    <div id="recurImportList" class="cl-member-box" style="max-height:360px"></div>
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="recurImportCancelBtn">Cancel</button>
+      <button type="button" id="recurImportConfirmBtn">Import 0 Contacts</button>
+    </div>
+  </div>
+</div>
+
 <!-- Save Dialer List to a Contact List -->
 <div class="modal-overlay" id="dialerSaveListOverlay">
   <div class="modal">
@@ -3039,27 +3060,104 @@ clImportForm.addEventListener('submit', async (e) => {
 const recurringImportDropzone = document.getElementById('recurringImportDropzone');
 const recurringImportFileInput = document.getElementById('recurringImportFileInput');
 const recurringImportResult = document.getElementById('recurringImportResult');
+const recurImportOverlay = document.getElementById('recurImportOverlay');
+const recurImportError = document.getElementById('recurImportError');
+const recurImportList = document.getElementById('recurImportList');
+const recurImportConfirmBtn = document.getElementById('recurImportConfirmBtn');
+let recurImportFile = null;
+let recurImportRows = [];
 
-async function uploadRecurringImport(file) {
+const RECUR_ACTION_LABELS = {
+  create: '🆕 New client',
+  update: 'Fills in a schedule for existing client',
+  note_only: 'Already has a schedule — adds a note only',
+  skip: '(blank row, skipped)',
+};
+
+async function openRecurImportPreview(file) {
   recurringImportResult.style.display = 'block';
-  recurringImportResult.textContent = 'Importing…';
+  recurringImportResult.textContent = 'Reading file…';
   const form = new FormData();
   form.append('file', file);
+  try {
+    const res = await fetch('/api/crm/import_recurring_csv/preview', { method: 'POST', body: form });
+    const data = await res.json();
+    recurringImportResult.style.display = 'none';
+    if (!res.ok) {
+      recurringImportResult.style.display = 'block';
+      recurringImportResult.textContent = `⚠ ${data.error || 'Could not read that file.'}`;
+      return;
+    }
+    recurImportFile = file;
+    recurImportRows = data.rows;
+    renderRecurImportList();
+    recurImportError.style.display = 'none';
+    recurImportOverlay.classList.add('show');
+  } catch (err) {
+    recurringImportResult.style.display = 'block';
+    recurringImportResult.textContent = "⚠ Couldn't reach URTO's server. Check your connection and try again.";
+  }
+}
+
+function renderRecurImportList() {
+  recurImportList.innerHTML = recurImportRows.filter(r => r.action !== 'skip').map(r => `
+    <label>
+      <input type="checkbox" class="recur-row-cb" data-index="${r.index}" checked>
+      <span>
+        <strong>${escapeHtml(r.name)}</strong>${r.phone ? ' · ' + escapeHtml(r.phone) : ''}
+        <span style="color:var(--text-secondary)"> — ${RECUR_ACTION_LABELS[r.action] || r.action}${r.matched_client_name ? ` ("${escapeHtml(r.matched_client_name)}")` : ''}</span>
+      </span>
+    </label>
+  `).join('') || '<p class="sub">No usable rows found in that file.</p>';
+  recurImportList.querySelectorAll('.recur-row-cb').forEach(cb => cb.addEventListener('change', updateRecurImportConfirmCount));
+  updateRecurImportConfirmCount();
+}
+
+function updateRecurImportConfirmCount() {
+  const n = recurImportList.querySelectorAll('.recur-row-cb:checked').length;
+  recurImportConfirmBtn.textContent = `Import ${n} Contact${n === 1 ? '' : 's'}`;
+  recurImportConfirmBtn.disabled = n === 0;
+}
+
+document.getElementById('recurImportSelectAllBtn').addEventListener('click', () => {
+  recurImportList.querySelectorAll('.recur-row-cb').forEach(cb => cb.checked = true);
+  updateRecurImportConfirmCount();
+});
+document.getElementById('recurImportSelectNoneBtn').addEventListener('click', () => {
+  recurImportList.querySelectorAll('.recur-row-cb').forEach(cb => cb.checked = false);
+  updateRecurImportConfirmCount();
+});
+document.getElementById('recurImportCloseBtn').addEventListener('click', () => recurImportOverlay.classList.remove('show'));
+document.getElementById('recurImportCancelBtn').addEventListener('click', () => recurImportOverlay.classList.remove('show'));
+
+recurImportConfirmBtn.addEventListener('click', async () => {
+  const selected = [...recurImportList.querySelectorAll('.recur-row-cb:checked')].map(cb => parseInt(cb.dataset.index, 10));
+  recurImportError.style.display = 'none';
+  recurImportConfirmBtn.disabled = true;
+  const form = new FormData();
+  form.append('file', recurImportFile);
+  form.append('selected_indices', JSON.stringify(selected));
   try {
     const res = await fetch('/api/crm/import_recurring_csv', { method: 'POST', body: form });
     const data = await res.json();
     if (!res.ok) {
-      recurringImportResult.textContent = `⚠ ${data.error || 'Could not import that file.'}`;
+      recurImportError.textContent = data.error || 'Could not import that file.';
+      recurImportError.style.display = 'block';
+      recurImportConfirmBtn.disabled = false;
       return;
     }
+    recurImportOverlay.classList.remove('show');
+    recurringImportResult.style.display = 'block';
     let msg = `✅ Imported: ${data.created} new client${data.created === 1 ? '' : 's'}, ${data.updated} updated, ${data.skipped} skipped.`;
     if (data.errors && data.errors.length) msg += ` (${data.errors.length} row error${data.errors.length === 1 ? '' : 's'}: ${data.errors.join('; ')})`;
     recurringImportResult.textContent = msg;
     loadClients();
   } catch (err) {
-    recurringImportResult.textContent = "⚠ Couldn't reach URTO's server. Check your connection and try again.";
+    recurImportError.textContent = "⚠ Couldn't reach URTO's server. Check your connection and try again.";
+    recurImportError.style.display = 'block';
+    recurImportConfirmBtn.disabled = false;
   }
-}
+});
 
 recurringImportDropzone.addEventListener('click', () => recurringImportFileInput.click());
 recurringImportDropzone.addEventListener('dragover', e => { e.preventDefault(); recurringImportDropzone.classList.add('drag'); });
@@ -3067,10 +3165,10 @@ recurringImportDropzone.addEventListener('dragleave', () => recurringImportDropz
 recurringImportDropzone.addEventListener('drop', e => {
   e.preventDefault();
   recurringImportDropzone.classList.remove('drag');
-  if (e.dataTransfer.files.length) uploadRecurringImport(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) openRecurImportPreview(e.dataTransfer.files[0]);
 });
 recurringImportFileInput.addEventListener('change', () => {
-  if (recurringImportFileInput.files.length) uploadRecurringImport(recurringImportFileInput.files[0]);
+  if (recurringImportFileInput.files.length) openRecurImportPreview(recurringImportFileInput.files[0]);
   recurringImportFileInput.value = '';
 });
 
