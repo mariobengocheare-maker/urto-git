@@ -462,6 +462,31 @@ def backup_instant(reason="save") -> dict:
     return _write_backup(reason, snapshot=False)
 
 
+class _deferred_backup:
+    """Context manager for a loop that calls create_client/update_client/
+    add_note many times in one request (a bulk import) — each of those
+    normally calls on_data_changed() itself, which does a FULL instant
+    mirror (whole-DB copy + a re-written CRM Contacts .txt per existing
+    client + the full JSON export, to every backup destination). Doing
+    that once per row in a 50+ row import means dozens of full mirror
+    passes in a single request, which on a real OneDrive/Google Drive
+    synced folder (or just a CRM with a few hundred existing clients) is
+    slow enough to look hung. Inside this block, on_data_changed() is
+    swapped for the cheap mark_dirty()-only version; the real one-time
+    mirror runs once when the block exits."""
+    def __enter__(self):
+        global on_data_changed
+        self._real = on_data_changed
+        on_data_changed = lambda reason="save": mark_dirty()
+        return self
+
+    def __exit__(self, *exc):
+        global on_data_changed
+        on_data_changed = self._real
+        on_data_changed("bulk import")
+        return False
+
+
 def on_data_changed(reason="save"):
     """Called after any CRM mutation: mirror everywhere right away, and flag
     the DB so the slow watcher also lays down a timestamped history snapshot."""
@@ -1322,14 +1347,16 @@ def import_contact_list_file(name, address, frequency_key, custom_amount, custom
     if not contacts:
         return None
     client_ids = []
-    for contact_name, phone, contact_address in contacts:
-        client = create_client(
-            name=contact_name, phone=phone, contact_info="", address=contact_address or address or "",
-            frequency_key="none", custom_amount=None, custom_unit=None,
-        )
-        client_ids.append(client["id"])
-    contact_list = create_contact_list(name, frequency_key, custom_amount, custom_unit)
-    return set_list_members(contact_list["id"], client_ids)
+    with _deferred_backup():
+        for contact_name, phone, contact_address in contacts:
+            client = create_client(
+                name=contact_name, phone=phone, contact_info="", address=contact_address or address or "",
+                frequency_key="none", custom_amount=None, custom_unit=None,
+            )
+            client_ids.append(client["id"])
+        contact_list = create_contact_list(name, frequency_key, custom_amount, custom_unit)
+        result = set_list_members(contact_list["id"], client_ids)
+    return result
 
 
 RECURRING_IMPORT_FIELDS = {"name", "phone", "address", "notes", "frequency_key", "custom_amount", "custom_unit"}
@@ -1354,47 +1381,48 @@ def import_recurring_followups_csv(raw_text: str) -> dict:
 
     created = updated = skipped = 0
     errors = []
-    for row in reader:
-        name = (row.get("name") or "").strip()
-        if not name:
-            skipped += 1
-            continue
-        phone = (row.get("phone") or "").strip()
-        address = (row.get("address") or "").strip()
-        notes = (row.get("notes") or "").strip()
-        frequency_key = (row.get("frequency_key") or "none").strip() or "none"
-        custom_amount = (row.get("custom_amount") or "").strip() or None
-        custom_unit = (row.get("custom_unit") or "").strip() or None
-        note_text = f"Imported from Outlook calendar: {notes}" if notes else "Imported from Outlook calendar."
+    with _deferred_backup():
+        for row in reader:
+            name = (row.get("name") or "").strip()
+            if not name:
+                skipped += 1
+                continue
+            phone = (row.get("phone") or "").strip()
+            address = (row.get("address") or "").strip()
+            notes = (row.get("notes") or "").strip()
+            frequency_key = (row.get("frequency_key") or "none").strip() or "none"
+            custom_amount = (row.get("custom_amount") or "").strip() or None
+            custom_unit = (row.get("custom_unit") or "").strip() or None
+            note_text = f"Imported from Outlook calendar: {notes}" if notes else "Imported from Outlook calendar."
 
-        existing = find_client_by_phone(phone) if phone else None
-        try:
-            if existing:
-                # Only fill in a schedule/address the client doesn't already
-                # have — never clobber a schedule Mario already set by hand,
-                # preset or custom alike. The imported note is added either way.
-                if existing["interval_days"] is None:
-                    client = update_client(
-                        existing["id"], name=existing["name"], phone=existing["phone"],
-                        contact_info=existing["contact_info"], address=existing["address"] or address,
+            existing = find_client_by_phone(phone) if phone else None
+            try:
+                if existing:
+                    # Only fill in a schedule/address the client doesn't already
+                    # have — never clobber a schedule Mario already set by hand,
+                    # preset or custom alike. The imported note is added either way.
+                    if existing["interval_days"] is None:
+                        client = update_client(
+                            existing["id"], name=existing["name"], phone=existing["phone"],
+                            contact_info=existing["contact_info"], address=existing["address"] or address,
+                            frequency_key=frequency_key, custom_amount=custom_amount, custom_unit=custom_unit,
+                        )
+                    else:
+                        client = existing
+                    add_note(client["id"], note_text)
+                    updated += 1
+                else:
+                    client = create_client(
+                        name=name, phone=phone, contact_info="", address=address,
                         frequency_key=frequency_key, custom_amount=custom_amount, custom_unit=custom_unit,
                     )
-                else:
-                    client = existing
-                add_note(client["id"], note_text)
-                updated += 1
-            else:
-                client = create_client(
-                    name=name, phone=phone, contact_info="", address=address,
-                    frequency_key=frequency_key, custom_amount=custom_amount, custom_unit=custom_unit,
-                )
-                add_note(client["id"], note_text)
-                created += 1
-        except DuplicatePhoneError:
-            skipped += 1
-        except (ValueError, TypeError) as exc:
-            errors.append(f"{name}: {exc}")
-            skipped += 1
+                    add_note(client["id"], note_text)
+                    created += 1
+            except DuplicatePhoneError:
+                skipped += 1
+            except (ValueError, TypeError) as exc:
+                errors.append(f"{name}: {exc}")
+                skipped += 1
 
     return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
