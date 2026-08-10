@@ -1332,6 +1332,73 @@ def import_contact_list_file(name, address, frequency_key, custom_amount, custom
     return set_list_members(contact_list["id"], client_ids)
 
 
+RECURRING_IMPORT_FIELDS = {"name", "phone", "address", "notes", "frequency_key", "custom_amount", "custom_unit"}
+
+
+def import_recurring_followups_csv(raw_text: str) -> dict:
+    """Imports the specific CSV shape produced by the Outlook recurring-
+    follow-up export (name/phone/address/notes/frequency_key/custom_amount/
+    custom_unit columns) — a one-time backfill, not a general contacts
+    import (see import_contact_list_file/parse_contact_import for that).
+
+    Dedup is phone-based, same as everywhere else in this file
+    (find_client_by_phone): a phone that already matches a CRM client
+    updates that client instead of creating a duplicate. To avoid silently
+    clobbering data Mario already entered by hand, an existing client's
+    name/address/schedule are only filled in where they're currently
+    blank/unset — the imported note is always appended regardless, and
+    never overwrites a client's own name."""
+    reader = csv.DictReader(raw_text.splitlines())
+    if not reader.fieldnames or not RECURRING_IMPORT_FIELDS.issubset(set(reader.fieldnames)):
+        return {"created": 0, "updated": 0, "skipped": 0, "errors": ["File doesn't match the expected recurring-follow-up export columns."]}
+
+    created = updated = skipped = 0
+    errors = []
+    for row in reader:
+        name = (row.get("name") or "").strip()
+        if not name:
+            skipped += 1
+            continue
+        phone = (row.get("phone") or "").strip()
+        address = (row.get("address") or "").strip()
+        notes = (row.get("notes") or "").strip()
+        frequency_key = (row.get("frequency_key") or "none").strip() or "none"
+        custom_amount = (row.get("custom_amount") or "").strip() or None
+        custom_unit = (row.get("custom_unit") or "").strip() or None
+        note_text = f"Imported from Outlook calendar: {notes}" if notes else "Imported from Outlook calendar."
+
+        existing = find_client_by_phone(phone) if phone else None
+        try:
+            if existing:
+                # Only fill in a schedule/address the client doesn't already
+                # have — never clobber a schedule Mario already set by hand,
+                # preset or custom alike. The imported note is added either way.
+                if existing["interval_days"] is None:
+                    client = update_client(
+                        existing["id"], name=existing["name"], phone=existing["phone"],
+                        contact_info=existing["contact_info"], address=existing["address"] or address,
+                        frequency_key=frequency_key, custom_amount=custom_amount, custom_unit=custom_unit,
+                    )
+                else:
+                    client = existing
+                add_note(client["id"], note_text)
+                updated += 1
+            else:
+                client = create_client(
+                    name=name, phone=phone, contact_info="", address=address,
+                    frequency_key=frequency_key, custom_amount=custom_amount, custom_unit=custom_unit,
+                )
+                add_note(client["id"], note_text)
+                created += 1
+        except DuplicatePhoneError:
+            skipped += 1
+        except (ValueError, TypeError) as exc:
+            errors.append(f"{name}: {exc}")
+            skipped += 1
+
+    return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
+
+
 def add_note(client_id, text) -> dict:
     conn = get_conn()
     created_at = date.today().isoformat() + " " + _now_time()

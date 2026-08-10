@@ -35,7 +35,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.7.3"
+APP_VERSION = "1.8.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -582,6 +582,15 @@ def crm_import_vcard():
     if not contact_list:
         return jsonify({"error": "No contacts with both a name and phone number were found in that file."}), 400
     return jsonify(contact_list)
+
+
+@app.route("/api/crm/import_recurring_csv", methods=["POST"])
+def crm_import_recurring_csv():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    raw_text = request.files["file"].read().decode("utf-8", errors="replace")
+    result = crm.import_recurring_followups_csv(raw_text)
+    return jsonify(result)
 
 
 @app.route("/api/crm/events", methods=["POST"])

@@ -1069,6 +1069,16 @@
     <div class="row" style="margin-top:0">
       <button id="addClientBtn">+ Add Client</button>
     </div>
+
+    <div class="card">
+      <div id="recurringImportDropzone" class="dropzone">
+        <p><strong>📅 Import Recurring Follow-ups (Outlook Export)</strong></p>
+        <p>Drag &amp; drop the recurring-follow-up CSV here, or click to browse — adds/updates a CRM client for each recurring Outlook reminder, with its follow-up schedule and notes carried over. A phone number that already matches a client updates that client instead of creating a duplicate.</p>
+        <input type="file" id="recurringImportFileInput" accept=".csv" style="display:none">
+      </div>
+      <div id="recurringImportResult" style="display:none; margin-top:10px"></div>
+    </div>
+
     <div id="clientList" class="client-list"></div>
   </div>
 
@@ -3023,6 +3033,45 @@ clImportForm.addEventListener('submit', async (e) => {
   vcardFileInput.value = '';
   loadContactLists();
   alert(`Imported ${data.member_count} contact${data.member_count === 1 ? '' : 's'} into "${data.name}".`);
+});
+
+/* ---- Import recurring follow-ups CSV (one-time Outlook backfill) ---- */
+const recurringImportDropzone = document.getElementById('recurringImportDropzone');
+const recurringImportFileInput = document.getElementById('recurringImportFileInput');
+const recurringImportResult = document.getElementById('recurringImportResult');
+
+async function uploadRecurringImport(file) {
+  recurringImportResult.style.display = 'block';
+  recurringImportResult.textContent = 'Importing…';
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/crm/import_recurring_csv', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      recurringImportResult.textContent = `⚠ ${data.error || 'Could not import that file.'}`;
+      return;
+    }
+    let msg = `✅ Imported: ${data.created} new client${data.created === 1 ? '' : 's'}, ${data.updated} updated, ${data.skipped} skipped.`;
+    if (data.errors && data.errors.length) msg += ` (${data.errors.length} row error${data.errors.length === 1 ? '' : 's'}: ${data.errors.join('; ')})`;
+    recurringImportResult.textContent = msg;
+    loadClients();
+  } catch (err) {
+    recurringImportResult.textContent = "⚠ Couldn't reach URTO's server. Check your connection and try again.";
+  }
+}
+
+recurringImportDropzone.addEventListener('click', () => recurringImportFileInput.click());
+recurringImportDropzone.addEventListener('dragover', e => { e.preventDefault(); recurringImportDropzone.classList.add('drag'); });
+recurringImportDropzone.addEventListener('dragleave', () => recurringImportDropzone.classList.remove('drag'));
+recurringImportDropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  recurringImportDropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) uploadRecurringImport(e.dataTransfer.files[0]);
+});
+recurringImportFileInput.addEventListener('change', () => {
+  if (recurringImportFileInput.files.length) uploadRecurringImport(recurringImportFileInput.files[0]);
+  recurringImportFileInput.value = '';
 });
 
 /* ===================== Calendar ===================== */
