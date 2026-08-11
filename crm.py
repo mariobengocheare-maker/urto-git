@@ -1311,6 +1311,25 @@ def add_list_members(list_id, client_ids) -> dict:
     return get_contact_list(list_id)
 
 
+def remove_list_member(list_id, client_id) -> dict:
+    """Removes a single client from a list without touching anyone else —
+    the counterpart to add_list_members(), for the Manage Members view's
+    per-row Remove button (which shows only current members, not a
+    full-membership checkbox editor — see build order #64)."""
+    conn = get_conn()
+    row = conn.execute("SELECT id FROM contact_lists WHERE id = ?", (list_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute(
+        "DELETE FROM contact_list_members WHERE list_id = ? AND client_id = ?", (list_id, client_id)
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("contact list member removed")
+    return get_contact_list(list_id)
+
+
 def get_client_list_ids(client_id) -> list:
     conn = get_conn()
     rows = conn.execute(

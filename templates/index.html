@@ -1545,15 +1545,22 @@
 <div class="modal-overlay" id="clMembersOverlay">
   <div class="modal">
     <div class="modal-head">
-      <h2 id="clMembersTitle">Manage Members</h2>
+      <h2 id="clMembersTitle">Members</h2>
       <button class="modal-close" id="clMembersCloseBtn">&times;</button>
     </div>
-    <div class="form-group">
-      <input type="text" id="clMembersSearch" placeholder="Search clients by name…">
+    <div id="clMembersCurrentBox" class="cl-member-box"></div>
+    <div class="row" style="margin-top:12px; margin-bottom:0">
+      <button type="button" class="ghost small" id="clMembersAddToggleBtn">+ Add Client to List</button>
     </div>
-    <div class="cl-member-box" id="clMembersBox"></div>
-    <div class="modal-actions">
-      <button type="button" id="clMembersSaveBtn">Save Members</button>
+    <div id="clMembersAddSection" style="display:none; margin-top:12px">
+      <div class="form-group">
+        <input type="text" id="clMembersSearch" placeholder="Search clients by name…">
+      </div>
+      <div class="cl-member-box" id="clMembersBox"></div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="clMembersAddCancelBtn">Cancel</button>
+        <button type="button" id="clMembersAddSaveBtn">Add Selected</button>
+      </div>
     </div>
   </div>
 </div>
@@ -2752,7 +2759,14 @@ async function openClientDetail(id) {
   clientDetailOverlay.classList.add('show');
 }
 
-document.getElementById('clientDetailCloseBtn').addEventListener('click', () => clientDetailOverlay.classList.remove('show'));
+document.getElementById('clientDetailCloseBtn').addEventListener('click', () => {
+  clientDetailOverlay.classList.remove('show');
+  if (clMembersReturnListId !== null) {
+    const listId = clMembersReturnListId;
+    clMembersReturnListId = null;
+    openManageMembers(listId);
+  }
+});
 
 /* ===================== Call History ===================== */
 const callHistoryOverlay = document.getElementById('callHistoryOverlay');
@@ -2815,6 +2829,7 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
   cfAddress.value = c.address || '';
   cfNotesRow.style.display = 'none'; // editing: notes are managed in the detail view
   renderCfListsBox(c.list_ids || []);
+  clMembersReturnListId = null;
   clientDetailOverlay.classList.remove('show');
   clientFormOverlay.classList.add('show');
 });
@@ -2822,6 +2837,7 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
 document.getElementById('cdDeleteBtn').addEventListener('click', async () => {
   if (!confirm('Delete this client and all their notes? This cannot be undone.')) return;
   await fetch(`/api/crm/clients/${currentClientId}`, { method: 'DELETE' });
+  clMembersReturnListId = null;
   clientDetailOverlay.classList.remove('show');
   loadClients();
 });
@@ -2958,50 +2974,95 @@ clForm.addEventListener('submit', async (e) => {
   if (!id) openManageMembers(data.id); // brand-new list: go straight to adding members
 });
 
+const clMembersCurrentBox = document.getElementById('clMembersCurrentBox');
+const clMembersAddSection = document.getElementById('clMembersAddSection');
+let clMembersCurrent = [];
+// Set when a member's name is clicked so the client-detail close button
+// knows to bring Manage Members back up afterward instead of just closing.
+let clMembersReturnListId = null;
+
+function renderClMembersCurrent() {
+  if (clMembersCurrent.length === 0) {
+    clMembersCurrentBox.innerHTML = '<div class="empty-state" style="padding:8px 0">No members yet — use "+ Add Client to List" below.</div>';
+    return;
+  }
+  clMembersCurrentBox.innerHTML = clMembersCurrent.map(m => `
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px">
+      <a href="#" class="cl-member-name-link" data-id="${m.id}" style="color:var(--text)">${escapeHtml(m.name)}${m.phone ? ' · ' + escapeHtml(m.phone) : ''}</a>
+      <button type="button" class="ghost small" data-remove-member="${m.id}">Remove</button>
+    </div>
+  `).join('');
+  clMembersCurrentBox.querySelectorAll('.cl-member-name-link').forEach(a => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      clMembersReturnListId = clMembersListId;
+      clMembersOverlay.classList.remove('show');
+      openClientDetail(Number(a.getAttribute('data-id')));
+    });
+  });
+  clMembersCurrentBox.querySelectorAll('[data-remove-member]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const clientId = Number(btn.getAttribute('data-remove-member'));
+      await fetch(`/api/crm/contact_lists/${clMembersListId}/members/${clientId}`, { method: 'DELETE' });
+      clMembersCurrent = clMembersCurrent.filter(m => m.id !== clientId);
+      renderClMembersCurrent();
+      loadContactLists();
+    });
+  });
+}
+
 function renderClMembersBox(filterText) {
-  const memberIds = new Set(clMembersAllClients.filter(c => c.checked).map(c => c.id));
+  const memberIds = new Set(clMembersCurrent.map(m => m.id));
   const q = (filterText || '').trim().toLowerCase();
-  const visible = clMembersAllClients.filter(c => !q || c.name.toLowerCase().includes(q));
+  const visible = clMembersAllClients.filter(c => !memberIds.has(c.id) && (!q || c.name.toLowerCase().includes(q)));
   if (visible.length === 0) {
     clMembersBox.innerHTML = '<div class="empty-state" style="padding:8px 0">No clients match.</div>';
     return;
   }
   clMembersBox.innerHTML = visible.map(c => `
-    <label><input type="checkbox" value="${c.id}" ${memberIds.has(c.id) ? 'checked' : ''}> ${escapeHtml(c.name)}${c.phone ? ' · ' + escapeHtml(c.phone) : ''}</label>
+    <label><input type="checkbox" value="${c.id}"> ${escapeHtml(c.name)}${c.phone ? ' · ' + escapeHtml(c.phone) : ''}</label>
   `).join('');
-  clMembersBox.querySelectorAll('input[type=checkbox]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const entry = clMembersAllClients.find(c => c.id === Number(cb.value));
-      if (entry) entry.checked = cb.checked;
-    });
-  });
 }
 
 async function openManageMembers(listId) {
   clMembersListId = listId;
-  const [listRes, clientsRes] = await Promise.all([
-    fetch(`/api/crm/contact_lists/${listId}`),
-    fetch('/api/crm/clients'),
-  ]);
-  const list = await listRes.json();
-  const allClients = clientsRes.ok ? await clientsRes.json() : [];
-  const memberIds = new Set(list.members.map(m => m.id));
-  clMembersAllClients = allClients.map(c => ({ id: c.id, name: c.name, phone: c.phone, checked: memberIds.has(c.id) }));
-  clMembersTitle.textContent = `Manage Members — ${list.name}`;
+  const res = await fetch(`/api/crm/contact_lists/${listId}`);
+  const list = await res.json();
+  clMembersCurrent = list.members.map(m => ({ id: m.id, name: m.name, phone: m.phone }));
+  clMembersTitle.textContent = `Members — ${list.name}`;
+  clMembersAddSection.style.display = 'none';
   clMembersSearch.value = '';
-  renderClMembersBox('');
+  renderClMembersCurrent();
   clMembersOverlay.classList.add('show');
 }
 
-clMembersSearch.addEventListener('input', () => renderClMembersBox(clMembersSearch.value));
 document.getElementById('clMembersCloseBtn').addEventListener('click', () => clMembersOverlay.classList.remove('show'));
 
-document.getElementById('clMembersSaveBtn').addEventListener('click', async () => {
-  const clientIds = clMembersAllClients.filter(c => c.checked).map(c => c.id);
-  await fetch(`/api/crm/contact_lists/${clMembersListId}/members`, {
+document.getElementById('clMembersAddToggleBtn').addEventListener('click', async () => {
+  const res = await fetch('/api/crm/clients');
+  clMembersAllClients = res.ok ? await res.json() : [];
+  clMembersSearch.value = '';
+  renderClMembersBox('');
+  clMembersAddSection.style.display = 'block';
+});
+document.getElementById('clMembersAddCancelBtn').addEventListener('click', () => {
+  clMembersAddSection.style.display = 'none';
+});
+clMembersSearch.addEventListener('input', () => renderClMembersBox(clMembersSearch.value));
+
+document.getElementById('clMembersAddSaveBtn').addEventListener('click', async () => {
+  const clientIds = [...clMembersBox.querySelectorAll('input[type=checkbox]:checked')].map(cb => Number(cb.value));
+  if (clientIds.length === 0) {
+    clMembersAddSection.style.display = 'none';
+    return;
+  }
+  const res = await fetch(`/api/crm/contact_lists/${clMembersListId}/members/add`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_ids: clientIds }),
   });
-  clMembersOverlay.classList.remove('show');
+  const list = await res.json();
+  clMembersCurrent = list.members.map(m => ({ id: m.id, name: m.name, phone: m.phone }));
+  clMembersAddSection.style.display = 'none';
+  renderClMembersCurrent();
   loadContactLists();
 });
 

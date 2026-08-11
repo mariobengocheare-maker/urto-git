@@ -36,7 +36,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.8.4"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -565,6 +565,14 @@ def crm_add_list_members(list_id):
     data = request.get_json(force=True)
     client_ids = data.get("client_ids") or []
     contact_list = crm.add_list_members(list_id, client_ids)
+    if not contact_list:
+        abort(404)
+    return jsonify(contact_list)
+
+
+@app.route("/api/crm/contact_lists/<int:list_id>/members/<int:client_id>", methods=["DELETE"])
+def crm_remove_list_member(list_id, client_id):
+    contact_list = crm.remove_list_member(list_id, client_id)
     if not contact_list:
         abort(404)
     return jsonify(contact_list)
