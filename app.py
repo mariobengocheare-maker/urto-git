@@ -36,7 +36,7 @@ app = Flask(__name__)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -437,6 +437,24 @@ def crm_update_client(client_id):
 def crm_delete_client(client_id):
     crm.delete_client(client_id)
     return jsonify({"ok": True})
+
+
+@app.route("/api/crm/duplicates", methods=["GET"])
+def crm_find_duplicates():
+    return jsonify(crm.find_duplicate_clients())
+
+
+@app.route("/api/crm/duplicates/merge", methods=["POST"])
+def crm_merge_duplicates():
+    data = request.get_json(force=True)
+    keep_id = data.get("keep_id")
+    remove_ids = data.get("remove_ids") or []
+    if not keep_id or not remove_ids:
+        return jsonify({"error": "keep_id and remove_ids are required"}), 400
+    result = crm.merge_clients(keep_id, remove_ids)
+    if not result:
+        return jsonify({"error": "Client to keep not found"}), 404
+    return jsonify(result)
 
 
 @app.route("/api/crm/clients/<int:client_id>/notes", methods=["POST"])

@@ -1028,6 +1028,103 @@ def delete_client(client_id):
     on_data_changed("client deleted")
 
 
+def find_duplicate_clients() -> list:
+    """Groups clients that share the exact same name (case/whitespace-
+    insensitive) — the shape of duplicate a phone-less CSV import row
+    produces when it's run before it can match anything yet (see build
+    order #62/#63: a phone-less row that finds no match creates a fresh
+    client every time, so re-importing before that matching existed left
+    real duplicate rows behind). Only returns groups with 2+ members, so
+    a normal single "Eduardo" with no duplicates never shows up. Each
+    member includes its note/call-log counts so the UI (and the default
+    keep-pick below) can tell a fleshed-out record from a bare one."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM clients").fetchall()
+    groups = {}
+    for r in rows:
+        key = (r["name"] or "").strip().lower()
+        if not key:
+            continue
+        groups.setdefault(key, []).append(dict(r))
+
+    result = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        for m in members:
+            m["note_count"] = conn.execute(
+                "SELECT COUNT(*) FROM notes WHERE client_id = ?", (m["id"],)
+            ).fetchone()[0]
+            m["call_count"] = conn.execute(
+                "SELECT COUNT(*) FROM call_log WHERE client_id = ?", (m["id"],)
+            ).fetchone()[0]
+        # Default "keep" pick: whichever member actually has a phone number
+        # wins first (it's the more complete record), then more notes, then
+        # whichever was created first.
+        members.sort(key=lambda m: (m["phone"] is None or m["phone"] == "", -m["note_count"], m["created_at"]))
+        result.append({
+            "name": members[0]["name"],
+            "members": [
+                {
+                    "id": m["id"], "phone": m["phone"], "address": m["address"],
+                    "created_at": m["created_at"], "note_count": m["note_count"],
+                    "call_count": m["call_count"], "frequency_label": m["frequency_label"],
+                }
+                for m in members
+            ],
+        })
+    conn.close()
+    result.sort(key=lambda g: g["name"].lower())
+    return result
+
+
+def merge_clients(keep_id, remove_ids) -> dict:
+    """Merges each client in remove_ids into keep_id: reassigns their
+    notes, call log, calendar events, and Contact List memberships onto
+    keep_id (never lost, just relocated), fills in keep_id's phone/
+    address/schedule only where keep_id doesn't already have one (a
+    duplicate's data never overwrites a real value keep_id already has),
+    then deletes the now-merged-away duplicate rows. Wrapped in
+    _deferred_backup since a big cleanup pass can touch many clients at
+    once, same reasoning as the bulk CSV imports."""
+    with _deferred_backup():
+        conn = get_conn()
+        keep = conn.execute("SELECT * FROM clients WHERE id = ?", (keep_id,)).fetchone()
+        if not keep:
+            conn.close()
+            return None
+        for rid in remove_ids:
+            if rid == keep_id:
+                continue
+            dup = conn.execute("SELECT * FROM clients WHERE id = ?", (rid,)).fetchone()
+            if not dup:
+                continue
+            conn.execute("UPDATE notes SET client_id = ? WHERE client_id = ?", (keep_id, rid))
+            conn.execute("UPDATE call_log SET client_id = ? WHERE client_id = ?", (keep_id, rid))
+            conn.execute("UPDATE events SET client_id = ? WHERE client_id = ?", (keep_id, rid))
+            conn.execute(
+                """INSERT OR IGNORE INTO contact_list_members (list_id, client_id)
+                   SELECT list_id, ? FROM contact_list_members WHERE client_id = ?""",
+                (keep_id, rid),
+            )
+            conn.execute("DELETE FROM contact_list_members WHERE client_id = ?", (rid,))
+            if not keep["phone"] and dup["phone"]:
+                conn.execute("UPDATE clients SET phone = ? WHERE id = ?", (dup["phone"], keep_id))
+            if not keep["address"] and dup["address"]:
+                conn.execute("UPDATE clients SET address = ? WHERE id = ?", (dup["address"], keep_id))
+            if keep["interval_days"] is None and dup["interval_days"] is not None:
+                conn.execute(
+                    "UPDATE clients SET frequency_label = ?, interval_days = ?, next_followup_date = ? WHERE id = ?",
+                    (dup["frequency_label"], dup["interval_days"], dup["next_followup_date"], keep_id),
+                )
+            conn.execute("DELETE FROM clients WHERE id = ?", (rid,))
+            keep = conn.execute("SELECT * FROM clients WHERE id = ?", (keep_id,)).fetchone()
+        conn.commit()
+        row = conn.execute("SELECT * FROM clients WHERE id = ?", (keep_id,)).fetchone()
+        conn.close()
+    return client_to_dict(row)
+
+
 def log_call(client_id) -> dict:
     """Stamps a client as called just now — fired whenever Mario actually
     places a call from the Dialer (there's no reliable way to detect a

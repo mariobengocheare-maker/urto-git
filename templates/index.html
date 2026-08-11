@@ -1068,6 +1068,7 @@
   <div id="crmClientsView">
     <div class="row" style="margin-top:0">
       <button id="addClientBtn">+ Add Client</button>
+      <button class="ghost" id="findDuplicatesBtn">🔍 Find Duplicate Clients</button>
     </div>
 
     <div class="card">
@@ -1620,6 +1621,23 @@
     <div class="modal-actions">
       <button type="button" class="ghost" id="recurImportCancelBtn">Cancel</button>
       <button type="button" id="recurImportConfirmBtn">Import 0 Contacts</button>
+    </div>
+  </div>
+</div>
+
+<!-- Find & merge duplicate clients -->
+<div class="modal-overlay" id="dupOverlay">
+  <div class="modal" style="max-width:660px">
+    <div class="modal-head">
+      <h2>Duplicate Clients</h2>
+      <button class="modal-close" id="dupCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">Each group below is the same name appearing on more than one client record. Pick which one to keep for each group — its notes/call history/schedule/list memberships are kept, and the others' notes and call history are folded into it before being removed. Uncheck a group to leave it alone.</p>
+    <div class="error-box" id="dupError" style="display:none"></div>
+    <div id="dupList" class="cl-member-box" style="max-height:400px"></div>
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="dupCancelBtn">Close</button>
+      <button type="button" id="dupConfirmBtn">Merge 0 Groups</button>
     </div>
   </div>
 </div>
@@ -3170,6 +3188,102 @@ recurringImportDropzone.addEventListener('drop', e => {
 recurringImportFileInput.addEventListener('change', () => {
   if (recurringImportFileInput.files.length) openRecurImportPreview(recurringImportFileInput.files[0]);
   recurringImportFileInput.value = '';
+});
+
+/* ---- Find & merge duplicate clients ---- */
+const dupOverlay = document.getElementById('dupOverlay');
+const dupError = document.getElementById('dupError');
+const dupList = document.getElementById('dupList');
+const dupConfirmBtn = document.getElementById('dupConfirmBtn');
+let dupGroups = [];
+
+function formatDupMember(m) {
+  const bits = [];
+  if (m.phone) bits.push(m.phone);
+  if (m.address) bits.push(m.address);
+  bits.push(`${m.note_count} note${m.note_count === 1 ? '' : 's'}`);
+  if (m.call_count) bits.push(`${m.call_count} call${m.call_count === 1 ? '' : 's'} logged`);
+  if (m.frequency_label) bits.push(m.frequency_label);
+  bits.push(`added ${m.created_at}`);
+  return bits.join(' · ');
+}
+
+async function openDuplicatesModal() {
+  dupError.style.display = 'none';
+  try {
+    const res = await fetch('/api/crm/duplicates');
+    dupGroups = await res.json();
+    if (!res.ok) throw new Error('request failed');
+  } catch (err) {
+    alert("Couldn't reach URTO's server. Check your connection and try again.");
+    return;
+  }
+  if (!dupGroups.length) {
+    alert('No duplicate clients found — every name is unique.');
+    return;
+  }
+  renderDupList();
+  dupOverlay.classList.add('show');
+}
+
+function renderDupList() {
+  dupList.innerHTML = dupGroups.map((g, gi) => `
+    <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid var(--border)">
+      <label style="font-weight:700">
+        <input type="checkbox" class="dup-group-cb" data-gi="${gi}" checked>
+        ${escapeHtml(g.name)} (${g.members.length} copies)
+      </label>
+      <div style="margin-left:24px; margin-top:6px">
+        ${g.members.map((m, mi) => `
+          <label style="font-weight:400; display:block; margin-bottom:4px">
+            <input type="radio" name="dup-keep-${gi}" value="${m.id}" ${mi === 0 ? 'checked' : ''}>
+            Keep this one — <span style="color:var(--text-secondary)">${formatDupMember(m) || 'no other details'}</span>
+          </label>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+  dupList.querySelectorAll('.dup-group-cb').forEach(cb => cb.addEventListener('change', updateDupConfirmCount));
+  updateDupConfirmCount();
+}
+
+function updateDupConfirmCount() {
+  const n = dupList.querySelectorAll('.dup-group-cb:checked').length;
+  dupConfirmBtn.textContent = `Merge ${n} Group${n === 1 ? '' : 's'}`;
+  dupConfirmBtn.disabled = n === 0;
+}
+
+document.getElementById('findDuplicatesBtn').addEventListener('click', openDuplicatesModal);
+document.getElementById('dupCloseBtn').addEventListener('click', () => dupOverlay.classList.remove('show'));
+document.getElementById('dupCancelBtn').addEventListener('click', () => dupOverlay.classList.remove('show'));
+
+dupConfirmBtn.addEventListener('click', async () => {
+  dupError.style.display = 'none';
+  dupConfirmBtn.disabled = true;
+  const checkedGis = [...dupList.querySelectorAll('.dup-group-cb:checked')].map(cb => parseInt(cb.dataset.gi, 10));
+  try {
+    for (const gi of checkedGis) {
+      const g = dupGroups[gi];
+      const keepId = parseInt(dupList.querySelector(`input[name="dup-keep-${gi}"]:checked`).value, 10);
+      const removeIds = g.members.map(m => m.id).filter(id => id !== keepId);
+      const res = await fetch('/api/crm/duplicates/merge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keep_id: keepId, remove_ids: removeIds }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `Couldn't merge "${g.name}".`);
+      }
+    }
+    dupOverlay.classList.remove('show');
+    loadClients();
+    alert(`Merged ${checkedGis.length} duplicate group${checkedGis.length === 1 ? '' : 's'}.`);
+  } catch (err) {
+    dupError.textContent = err.message || "Couldn't reach URTO's server.";
+    dupError.style.display = 'block';
+  } finally {
+    dupConfirmBtn.disabled = false;
+  }
 });
 
 /* ===================== Calendar ===================== */
