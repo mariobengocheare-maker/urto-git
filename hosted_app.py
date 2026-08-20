@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, make_response, redirect, render_template, request, session, url_for
 from pywebpush import WebPushException, webpush
 
 import crm
@@ -35,7 +35,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.5.0-hosted"
+APP_VERSION = "1.6.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -136,21 +136,37 @@ def logout():
 
 @app.route("/")
 def index():
-    return render_template("index.html", app_version=APP_VERSION, app_version_date=SERVER_STARTED_DISPLAY, hosted=True)
+    # An installed iOS PWA can hold onto a cached copy of this page more
+    # stubbornly than a normal Safari tab -- Mario reported having to
+    # delete and re-"Add to Home Screen" the app after every update just to
+    # see the fix. Forcing the HTML shell itself to always be refetched
+    # (never cached) means every relaunch always sees this deploy's markup,
+    # which in turn references this deploy's exact static asset URLs (see
+    # the ?v={{ app_version }} cache-busting on hosted-app.js below) --
+    # between the two, a fresh deploy is always visible on next open, no
+    # reinstall ever needed again.
+    resp = make_response(render_template("index.html", app_version=APP_VERSION, app_version_date=SERVER_STARTED_DISPLAY, hosted=True))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 @app.route("/manifest.json")
 def manifest():
-    return app.send_static_file("manifest.json")
+    resp = app.send_static_file("manifest.json")
+    resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
 
 
 @app.route("/sw.js")
 def service_worker():
     # Service workers must be served with a JS mimetype and (conventionally)
     # from the root path, not /static/sw.js, so its default scope covers the
-    # whole origin instead of just /static/.
+    # whole origin instead of just /static/. Never cache the service worker
+    # file itself -- the browser's own update-detection for a service
+    # worker relies on actually being able to refetch and diff it.
     resp = app.send_static_file("sw.js")
     resp.headers["Content-Type"] = "application/javascript"
+    resp.headers["Cache-Control"] = "no-cache, must-revalidate"
     return resp
 
 

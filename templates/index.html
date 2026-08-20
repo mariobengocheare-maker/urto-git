@@ -4933,10 +4933,10 @@ txnNewDocName.addEventListener('keydown', (e) => {
 </script>
 
 {% if not hosted %}
-<script type="module" src="/static/urto-space.js"></script>
+<script type="module" src="/static/urto-space.js?v={{ app_version }}"></script>
 {% endif %}
 {% if hosted %}
-<script src="/static/hosted-app.js"></script>
+<script src="/static/hosted-app.js?v={{ app_version }}"></script>
 {% endif %}
 
 </body>
