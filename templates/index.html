@@ -1185,7 +1185,7 @@
           <button class="ghost small" id="calNextBtn">Next &rarr;</button>
         </div>
         <h2 id="calMonthLabel"></h2>
-        <div></div>
+        <button class="small" id="calAddEventBtn">+ Add Event</button>
       </div>
       <div class="calendar-grid" id="calendarGrid"></div>
     </div>
@@ -3496,6 +3496,13 @@ document.getElementById('calTodayBtn').addEventListener('click', () => {
   calYear = t.getFullYear();
   calMonth = t.getMonth() + 1;
   renderCalendar();
+});
+
+// Lets Mario open the Add Event form directly without first clicking a
+// date box -- defaults to today's date, same as every other field (date
+// included) already being freely editable in the form itself.
+document.getElementById('calAddEventBtn').addEventListener('click', () => {
+  openEventForm(new Date().toISOString().slice(0, 10), null);
 });
 
 async function renderCalendar() {

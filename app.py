@@ -95,7 +95,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.5.2"
+APP_VERSION = "2.6.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 

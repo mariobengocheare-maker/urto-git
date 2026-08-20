@@ -35,7 +35,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.9.0-hosted"
+APP_VERSION = "1.10.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -230,23 +230,89 @@ def push_test():
     return jsonify({"ok": True, "sent_to": len(crm.list_push_subscriptions())})
 
 
+def _format_time_12h(hhmm: str) -> str:
+    h, m = (int(x) for x in hhmm.split(":"))
+    period = "PM" if h >= 12 else "AM"
+    h12 = h % 12 or 12
+    return f"{h12}:{m:02d} {period}" if m else f"{h12} {period}"
+
+
 def send_morning_digest():
+    # Only automatic recurring client follow-ups count toward "follow-ups"
+    # -- a manual calendar item (a showing, a personal reminder, anything
+    # Mario adds by hand) is a genuinely different thing and gets counted
+    # separately here, plus its own dedicated reminders (see
+    # _check_event_reminders below) rather than being folded into this
+    # count, which used to conflate the two.
     todays = crm.get_today_followups()
-    count = len(todays)
-    if count == 0:
+    followup_count = len([i for i in todays if i["kind"] == "auto"])
+    manual_items = [i for i in todays if i["kind"] == "manual"]
+
+    if followup_count == 0:
         body = "No follow-ups today."
-    elif count == 1:
+    elif followup_count == 1:
         body = "1 follow-up today."
     else:
-        body = f"{count} follow-ups today."
-    meetings = [i for i in todays if i["kind"] == "manual" and i.get("time") and i.get("address")]
-    if meetings:
-        body += f" {len(meetings)} meeting{'s' if len(meetings) != 1 else ''} with an address."
+        body = f"{followup_count} follow-ups today."
+    if manual_items:
+        body += f" {len(manual_items)} other item{'s' if len(manual_items) != 1 else ''} scheduled."
     # ?briefing=1 is the signal templates/index.html looks for on load to
     # speak the full voice briefing (see build order #75) -- only the
     # morning digest push should trigger that, not every other push (e.g.
     # the "Test" button) or a normal app open.
     _send_push_to_all("URTO — Today's Follow-ups", body, url="/?briefing=1")
+
+
+# ===================== Per-event reminders (1 hour / 15 min before) =====================
+# Mario's explicit ask: an automatic follow-up NEVER gets its own push (a
+# busy 50-follow-up day would be 50 notifications) -- those only ever
+# contribute to the single morning digest's count above. Anything he adds
+# by hand to the calendar with a specific time (a showing, a closing, a
+# personal reminder -- doesn't matter what he calls it) gets two dedicated
+# reminders of its own: one an hour before, one 15 minutes before. An item
+# with NO time only ever shows up in the morning digest's count, nothing
+# more (there's no specific moment to remind him of).
+_sent_event_reminders = set()  # {(date_str, event_id, minutes_before)}
+
+
+def _check_event_reminders():
+    now = datetime.now(ZoneInfo("America/New_York"))
+    today_str = now.date().isoformat()
+    now_hm = now.strftime("%H:%M")
+
+    # Drop anything not from today so this set never grows unbounded across
+    # however long the server process stays up between deploys.
+    for key in list(_sent_event_reminders):
+        if key[0] != today_str:
+            _sent_event_reminders.discard(key)
+
+    for item in crm.get_today_followups():
+        if item["kind"] != "manual" or not item.get("time") or not item.get("event_id"):
+            continue
+        try:
+            event_time = datetime.strptime(item["time"], "%H:%M").time()
+        except ValueError:
+            continue
+        event_dt = datetime.combine(now.date(), event_time, tzinfo=ZoneInfo("America/New_York"))
+        for minutes_before, phrase in ((60, "in 1 hour"), (15, "in 15 minutes")):
+            key = (today_str, item["event_id"], minutes_before)
+            trigger_hm = (event_dt - timedelta(minutes=minutes_before)).strftime("%H:%M")
+            if now_hm == trigger_hm and key not in _sent_event_reminders:
+                _sent_event_reminders.add(key)
+                body = f"{item['title']} at {_format_time_12h(item['time'])} ({phrase})"
+                _send_push_to_all("URTO — Upcoming", body, url="/")
+
+
+def _event_reminder_watcher():
+    while True:
+        time.sleep(60)
+        try:
+            _check_event_reminders()
+        except Exception:
+            pass  # never let a push failure kill the watcher thread
+
+
+threading.Thread(target=_event_reminder_watcher, daemon=True).start()
 
 
 _last_alert_date = {"date": None}
