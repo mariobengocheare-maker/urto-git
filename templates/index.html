@@ -3586,6 +3586,14 @@ const efDeleteBtn = document.getElementById('efDeleteBtn');
 async function openEventForm(dateStr, existing) {
   eventFormError.style.display = 'none';
   eventForm.reset();
+  // A previous save that got stuck (e.g. a slow connection) leaves the
+  // submit button disabled and reading "Saving…" -- without resetting it
+  // here, reopening this same modal (even for an unrelated new event)
+  // inherits that stuck state and looks broken from the very first click,
+  // with nothing the user did wrong.
+  eventFormSubmitting = false;
+  efSubmitBtn.disabled = false;
+  efSubmitBtn.textContent = 'Save Event';
 
   const [clientsRes, listsRes] = await Promise.all([
     fetch('/api/crm/clients'),

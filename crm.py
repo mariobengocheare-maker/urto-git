@@ -744,14 +744,31 @@ class _deferred_backup:
 
 def on_data_changed(reason="save"):
     """Called after any CRM mutation: mirror everywhere right away, and flag
-    the DB so the slow watcher also lays down a timestamped history snapshot."""
+    the DB so the slow watcher also lays down a timestamped history
+    snapshot. The mirror itself runs on a background thread rather than
+    blocking the request that triggered it -- on the hosted deployment,
+    backup_instant() includes a REAL synchronous Google Drive API round-
+    trip (token refresh + folder lookup + file uploads, see
+    _google_drive_api_push), and a slow/degraded connection there was
+    stretching an ordinary save (e.g. adding one calendar event) long
+    enough to hit Render's own request timeout -- which looks to Mario
+    like "Saving..." forever, then "Couldn't reach URTO's server," even
+    though the actual database write had already succeeded instantly.
+    _write_backup()'s own _backup_lock already serializes concurrent
+    mirror passes, so firing this off in a new thread per call is safe --
+    it just queues behind the lock rather than racing anything."""
     mark_dirty()
-    try:
-        backup_instant(reason)
-    except Exception:
-        # A backup failure (e.g. a cloud folder briefly locked) must never
-        # break the actual save — the dirty flag means the watcher retries.
-        pass
+
+    def _run_backup():
+        try:
+            backup_instant(reason)
+        except Exception:
+            # A backup failure (e.g. a cloud folder briefly locked) must
+            # never break the actual save — the dirty flag means the
+            # watcher retries.
+            pass
+
+    threading.Thread(target=_run_backup, daemon=True).start()
 
 
 def backup_if_dirty():
