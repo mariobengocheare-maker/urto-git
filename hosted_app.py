@@ -21,10 +21,10 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify, render_template, request, Response
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from pywebpush import WebPushException, webpush
 
 import crm
@@ -58,30 +58,67 @@ threading.Thread(target=_backup_watcher, daemon=True).start()
 
 # ===================== Access control =====================
 # This server holds real client PII and is reachable from the open internet
-# (unlike the desktop app, which only ever listens on 127.0.0.1) -- every
-# route requires HTTP Basic Auth against HOSTED_USERNAME/HOSTED_PASSWORD
-# (set as Render environment variables, never committed to the repo).
-# Safari (including an installed PWA) prompts once and remembers it for the
-# session/Keychain, so this is a one-time bit of friction per device.
+# (unlike the desktop app, which only ever listens on 127.0.0.1). Originally
+# gated with HTTP Basic Auth, but that turned out to be a bad fit for an
+# installed iOS PWA: standalone (Add to Home Screen) web apps run in an
+# isolated WebKit context that does NOT reliably keep the credentials a
+# Basic Auth prompt captured in a regular Safari tab, so Mario kept landing
+# on a blank "Authentication required" page when reopening the app icon --
+# there's no way to pre-fill/remember HTTP Basic Auth in that context on
+# iOS. Replaced with a real login page backed by a signed session cookie
+# (Flask's `session`, HttpOnly + SameSite=Lax) -- an ordinary cookie, which
+# standalone PWAs persist completely normally, same as any other website.
 HOSTED_USERNAME = os.environ.get("HOSTED_USERNAME", "")
 HOSTED_PASSWORD = os.environ.get("HOSTED_PASSWORD", "")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# "Save the password once" -- Mario explicitly asked not to have to log in
+# every time. A long-lived permanent session (90 days, refreshed on every
+# visit) means he only re-enters the password if he's genuinely inactive
+# for three months straight, not on every relaunch of the Home Screen icon.
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=90)
 
+_AUTH_CONFIGURED = bool(HOSTED_USERNAME and HOSTED_PASSWORD and app.secret_key)
 
-def _check_auth(auth) -> bool:
-    if not HOSTED_USERNAME or not HOSTED_PASSWORD:
-        # Fail closed: if the env vars weren't set, refuse everything rather
-        # than accidentally serving real client data with no password at all.
-        return False
-    return auth is not None and auth.username == HOSTED_USERNAME and auth.password == HOSTED_PASSWORD
+# Routes reachable without a session -- just the login page itself and the
+# handful of static PWA files a not-yet-logged-in browser/service worker
+# needs to even function. None of these expose any real client data.
+_PUBLIC_ENDPOINTS = {"login", "manifest", "service_worker", "static"}
 
 
 @app.before_request
 def _require_auth():
-    if not _check_auth(request.authorization):
-        return Response(
-            "Authentication required.", 401,
-            {"WWW-Authenticate": 'Basic realm="URTO"'},
-        )
+    if not _AUTH_CONFIGURED:
+        # Fail closed: if the env vars weren't set, refuse everything rather
+        # than accidentally serving real client data with no password at all.
+        return "Server isn't configured yet (missing HOSTED_USERNAME/HOSTED_PASSWORD/FLASK_SECRET_KEY).", 503
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    if not session.get("authed"):
+        return redirect(url_for("login", next=request.path))
+    return None
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        if request.form.get("username") == HOSTED_USERNAME and request.form.get("password") == HOSTED_PASSWORD:
+            session.permanent = True
+            session["authed"] = True
+            next_url = request.form.get("next") or url_for("index")
+            if not next_url.startswith("/"):
+                next_url = url_for("index")
+            return redirect(next_url)
+        error = "Wrong username or password."
+    return render_template("login.html", error=error, next=request.args.get("next", ""))
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 # ===================== Pages =====================

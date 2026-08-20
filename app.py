@@ -37,7 +37,7 @@ app.register_blueprint(crm_bp)
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.8.9"
+APP_VERSION = "1.9.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 

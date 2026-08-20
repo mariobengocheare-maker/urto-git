@@ -16,6 +16,7 @@ import threading
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from werkzeug.utils import secure_filename
 
@@ -27,6 +28,32 @@ GITHUB_REPO_URL = "https://github.com/mariobengocheare-maker/urto-git"
 GITHUB_ZIP_URL = "https://codeload.github.com/mariobengocheare-maker/urto-git/zip/refs/heads/claude/context-window-dgen3k"
 
 _PROJECT_DIR = Path(__file__).parent
+
+_MIAMI_TZ = ZoneInfo("America/New_York")
+
+
+def _now() -> datetime:
+    """The current moment, in Mario's own Miami-Dade timezone (EST/EDT, real
+    IANA DST rules) — a NAIVE datetime (no tzinfo attached), so every stored
+    timestamp keeps the exact same "YYYY-MM-DD HH:MM:SS" shape the frontend's
+    formatters already parse (formatNoteTime/formatLastCalled etc. in
+    templates/index.html). On desktop, `datetime.now()` already happened to
+    equal this since Mario's own PC clock IS Miami time — but the hosted
+    deployment's server clock (Render, UTC) does NOT match his timezone, so
+    every "now" in this file must go through here rather than the bare
+    stdlib call, or timestamps/follow-up dates silently drift by hours
+    depending on which deployment wrote them. Use this everywhere a moment
+    in time is being recorded or a duration is being measured against "now"."""
+    return datetime.now(_MIAMI_TZ).replace(tzinfo=None)
+
+
+def _today() -> date:
+    """Today's date in Miami time — see _now() above for why this can't be
+    the bare `date.today()`. Matters most right around midnight: a server
+    running in UTC crosses into "tomorrow" 4-5 hours before Miami does, which
+    would have silently made follow-ups/notes/events land on the wrong day
+    for a chunk of every evening on the hosted deployment."""
+    return _now().date()
 
 
 def _resolve_data_dir() -> Path:
@@ -355,7 +382,7 @@ def _write_full_data_export(backup_dir: Path):
             "It describes every client, note, follow-up, contact list, calendar "
             "event, and transaction currently in the app."
         ),
-        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "exported_at": _now().isoformat(timespec="seconds"),
         "clients": [dict(r) for r in conn.execute("SELECT * FROM clients ORDER BY id").fetchall()],
         "notes": [dict(r) for r in conn.execute("SELECT * FROM notes ORDER BY id").fetchall()],
         "call_log": [dict(r) for r in conn.execute("SELECT * FROM call_log ORDER BY id").fetchall()],
@@ -508,7 +535,7 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
                 dest_path = mirror
 
                 if snapshot:
-                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    stamp = _now().strftime("%Y%m%d_%H%M%S")
                     dest_path = backup_dir / f"urto_crm_{stamp}.db"
                     shutil.copy2(DB_PATH, dest_path)
                     snaps = sorted(backup_dir.glob("urto_crm_[0-9]*.db"))
@@ -538,7 +565,7 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
                 continue
 
         _dirty = False
-        _last_backup = {"at": datetime.now().isoformat(timespec="seconds"), "destinations": results, "reason": reason}
+        _last_backup = {"at": _now().isoformat(timespec="seconds"), "destinations": results, "reason": reason}
         return _last_backup
 
 
@@ -896,7 +923,7 @@ def _seed_document_types(conn):
     ).fetchone()
     if already:
         return
-    now = datetime.now().isoformat(timespec="seconds")
+    now = _now().isoformat(timespec="seconds")
     for txn_type, names in DEFAULT_DOCUMENT_TYPES.items():
         for i, name in enumerate(names):
             conn.execute(
@@ -915,7 +942,7 @@ def get_weekly_lookup_count() -> dict:
     """Current Monday-to-Sunday week's lookup count. Keyed by that Monday's
     date, so the count "resets" naturally when the week rolls over — no
     explicit reset needed, a new week just hasn't got a row yet."""
-    week_start = _monday_of(date.today())
+    week_start = _monday_of(_today())
     week_end = week_start + timedelta(days=6)
     conn = get_conn()
     row = conn.execute("SELECT count FROM lookup_stats WHERE week_start = ?", (week_start.isoformat(),)).fetchone()
@@ -930,7 +957,7 @@ def get_weekly_lookup_count() -> dict:
 def increment_weekly_lookup_count(n: int = 1):
     """Called once per actual FOREWARN search attempt (not for rows that
     were skipped before ever reaching FOREWARN) — see lookup_engine.py."""
-    week_start = _monday_of(date.today()).isoformat()
+    week_start = _monday_of(_today()).isoformat()
     conn = get_conn()
     conn.execute(
         """INSERT INTO lookup_stats (week_start, count) VALUES (?, ?)
@@ -999,7 +1026,7 @@ def find_client_by_phone(phone: str, exclude_id=None):
 
 def client_to_dict(row) -> dict:
     d = dict(row)
-    today = date.today()
+    today = _today()
     if d.get("next_followup_date"):
         due = date.fromisoformat(d["next_followup_date"])
         d["followup_status"] = "overdue" if due < today else ("due_today" if due == today else "upcoming")
@@ -1013,13 +1040,13 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
     if dup:
         raise DuplicatePhoneError(dup["name"])
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
-    created_at = date.today().isoformat()
+    created_at = _today().isoformat()
     next_followup_date = None
     if interval_days:
         # start_date lets a caller anchor the schedule to an explicit date
         # (e.g. "follow up every 4 weeks starting next Monday" from the
         # voice-add-client feature) instead of the default today+interval.
-        next_followup_date = start_date if start_date else (date.today() + timedelta(days=interval_days)).isoformat()
+        next_followup_date = start_date if start_date else (_today() + timedelta(days=interval_days)).isoformat()
 
     conn = get_conn()
     cur = conn.execute(
@@ -1101,7 +1128,7 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
     if existing["interval_days"] == interval_days and existing["frequency_label"] == label:
         next_followup_date = existing["next_followup_date"]
     elif interval_days:
-        next_followup_date = (date.today() + timedelta(days=interval_days)).isoformat()
+        next_followup_date = (_today() + timedelta(days=interval_days)).isoformat()
     else:
         next_followup_date = None
 
@@ -1250,12 +1277,12 @@ def log_call(client_id) -> dict:
     if not row:
         conn.close()
         return None
-    now = datetime.now().isoformat(timespec="seconds")
+    now = _now().isoformat(timespec="seconds")
     conn.execute("UPDATE clients SET last_called_at = ? WHERE id = ?", (now, client_id))
     conn.execute("INSERT INTO call_log (client_id, called_at) VALUES (?, ?)", (client_id, now))
     if row["interval_days"] and row["next_followup_date"]:
         current_due = date.fromisoformat(row["next_followup_date"])
-        today = date.today()
+        today = _today()
         if current_due <= today:
             # Catch the schedule all the way up to the next date that isn't
             # itself already in the past -- a single +interval hop (what the
@@ -1329,7 +1356,7 @@ def _list_call_status(next_call_date) -> str:
     if not next_call_date:
         return None
     due = date.fromisoformat(next_call_date)
-    today = date.today()
+    today = _today()
     return "overdue" if due < today else ("due_today" if due == today else "upcoming")
 
 
@@ -1353,11 +1380,11 @@ def list_contact_lists() -> list:
 
 def create_contact_list(name, frequency_key, custom_amount, custom_unit) -> dict:
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
-    next_call_date = (date.today() + timedelta(days=interval_days)).isoformat() if interval_days else None
+    next_call_date = (_today() + timedelta(days=interval_days)).isoformat() if interval_days else None
     conn = get_conn()
     cur = conn.execute(
         "INSERT INTO contact_lists (name, frequency_label, interval_days, next_call_date, created_at) VALUES (?, ?, ?, ?, ?)",
-        (name, label, interval_days, next_call_date, date.today().isoformat()),
+        (name, label, interval_days, next_call_date, _today().isoformat()),
     )
     conn.commit()
     list_id = cur.lastrowid
@@ -1397,7 +1424,7 @@ def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit
     if existing["interval_days"] == interval_days and existing["frequency_label"] == label:
         next_call_date = existing["next_call_date"]
     elif interval_days:
-        next_call_date = (date.today() + timedelta(days=interval_days)).isoformat()
+        next_call_date = (_today() + timedelta(days=interval_days)).isoformat()
     else:
         next_call_date = None
     conn.execute(
@@ -1777,7 +1804,7 @@ def import_recurring_followups_csv(raw_text: str, selected_indices=None) -> dict
 
 def add_note(client_id, text) -> dict:
     conn = get_conn()
-    created_at = date.today().isoformat() + " " + _now_time()
+    created_at = _today().isoformat() + " " + _now_time()
     cur = conn.execute(
         "INSERT INTO notes (client_id, text, created_at) VALUES (?, ?, ?)",
         (client_id, text, created_at),
@@ -1799,8 +1826,7 @@ def list_notes(client_id) -> list:
 
 
 def _now_time():
-    from datetime import datetime
-    return datetime.now().strftime("%H:%M")
+    return _now().strftime("%H:%M")
 
 
 EVENT_JOIN_SELECT = """
@@ -1823,7 +1849,7 @@ def create_event(client_id, title, date_str, time_str, notes, list_id=None) -> d
     cur = conn.execute(
         "INSERT INTO events (client_id, list_id, title, date, time, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (client_id or None, list_id or None, title, date_str, time_str or None, notes or "",
-         datetime.now().isoformat(timespec="seconds")),
+         _now().isoformat(timespec="seconds")),
     )
     conn.commit()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (cur.lastrowid,)).fetchone()
@@ -1887,7 +1913,7 @@ def get_today_followups() -> list:
     who's also automatically due) only appears once, with the manual
     event's title/time/notes taking precedence since it's the more specific
     entry."""
-    today_str = date.today().isoformat()
+    today_str = _today().isoformat()
 
     items_by_client = {}
     standalone = []
@@ -1928,7 +1954,7 @@ def get_calendar_events(year: int, month: int) -> list:
     month_start = date(year, month, 1)
     last_day = calendar.monthrange(year, month)[1]
     month_end = date(year, month, last_day)
-    today = date.today()
+    today = _today()
 
     conn = get_conn()
     clients = conn.execute(
@@ -2090,7 +2116,7 @@ def add_document_type(transaction_type: str, name: str) -> dict:
         "SELECT COALESCE(MAX(sort_order), -1) AS m FROM document_types WHERE transaction_type = ?",
         (transaction_type,),
     ).fetchone()["m"]
-    now = datetime.now().isoformat(timespec="seconds")
+    now = _now().isoformat(timespec="seconds")
     cur = conn.execute(
         "INSERT INTO document_types (transaction_type, name, sort_order, created_at) VALUES (?, ?, ?, ?)",
         (transaction_type, name, max_order + 1, now),
@@ -2218,7 +2244,7 @@ def create_transaction(transaction_type: str, title: str) -> dict:
     created transaction, so an uploaded signed document is never orphaned
     by someone editing the shared template afterward."""
     conn = get_conn()
-    now = datetime.now().isoformat(timespec="seconds")
+    now = _now().isoformat(timespec="seconds")
     cur = conn.execute(
         "INSERT INTO transactions (transaction_type, title, status, created_at) VALUES (?, ?, 'active', ?)",
         (transaction_type, title, now),
@@ -2332,7 +2358,7 @@ def upload_signed_document(transaction_document_id: int, file_storage) -> dict:
         return None
     _delete_stored_file(SIGNED_DIR, row["signed_filename"])
     stored, original = _store_upload(file_storage, SIGNED_DIR)
-    now = datetime.now().isoformat(timespec="seconds")
+    now = _now().isoformat(timespec="seconds")
     conn.execute(
         "UPDATE transaction_documents SET signed_filename = ?, signed_original_name = ?, signed_at = ? WHERE id = ?",
         (stored, original, now, transaction_document_id),
@@ -2388,7 +2414,7 @@ def list_text_presets() -> list:
 def add_text_preset(text: str) -> dict:
     conn = get_conn()
     max_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS m FROM text_presets").fetchone()["m"]
-    now = datetime.now().isoformat(timespec="seconds")
+    now = _now().isoformat(timespec="seconds")
     cur = conn.execute(
         "INSERT INTO text_presets (text, sort_order, created_at) VALUES (?, ?, ?)",
         (text, max_order + 1, now),
@@ -2415,7 +2441,7 @@ def save_push_subscription(endpoint: str, p256dh: str, auth: str):
     conn = get_conn()
     conn.execute(
         "INSERT OR REPLACE INTO push_subscriptions (endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?)",
-        (endpoint, p256dh, auth, datetime.now().isoformat()),
+        (endpoint, p256dh, auth, _now().isoformat()),
     )
     conn.commit()
     conn.close()
