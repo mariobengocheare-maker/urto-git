@@ -1,0 +1,9 @@
+# Dependencies for URTO's HOSTED deployment (hosted_app.py), run on Render.
+# Deliberately does NOT include playwright/tzdata's desktop-only friends --
+# the hosted server never runs Owner Lookup/Skip Trace (no headed Chromium
+# window on a server), so it doesn't need Playwright at all. See the local
+# requirements.txt for the desktop app's own dependency list.
+flask>=3.0
+gunicorn>=22.0
+pywebpush>=2.0
+tzdata>=2024.1

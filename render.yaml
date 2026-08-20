@@ -1,0 +1,41 @@
+# Render Blueprint for URTO's hosted deployment (CRM/Dialer/Transactions/
+# Calendar on Mario's phone). Deploy: on render.com, New -> Blueprint,
+# point it at this repo/branch, and Render reads this file automatically.
+#
+# A persistent disk is REQUIRED here -- without it, every deploy would wipe
+# the CRM database. That means the "Starter" plan or above (the free plan
+# doesn't support disks and also sleeps after inactivity, which would break
+# the always-on morning push notification).
+#
+# After the Blueprint creates the service, fill in the env vars marked
+# "sync: false" below by hand in the Render dashboard (Environment tab) --
+# see CLAUDE.md's "Hosted deployment" section for the values and full
+# numbered deploy steps.
+
+services:
+  - type: web
+    name: urto-hosted
+    env: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements-hosted.txt
+    startCommand: gunicorn hosted_app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    disk:
+      name: urto-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: URTO_DATA_DIR
+        value: /var/data/urto
+      - key: HOSTED_USERNAME
+        sync: false
+      - key: HOSTED_PASSWORD
+        sync: false
+      - key: VAPID_PRIVATE_KEY_PEM
+        sync: false
+      - key: VAPID_PUBLIC_KEY_B64
+        sync: false
+      - key: VAPID_CLAIM_EMAIL
+        sync: false
+      - key: MORNING_ALERT_HOUR
+        value: "7"

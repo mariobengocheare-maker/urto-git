@@ -17,16 +17,14 @@ Local testing:
     python hosted_app.py
 """
 
-import base64
 import json
 import os
 import threading
 import time
 from datetime import datetime
-from functools import wraps
 from zoneinfo import ZoneInfo
 
-from flask import Flask, abort, jsonify, render_template, request, Response
+from flask import Flask, jsonify, render_template, request, Response
 from pywebpush import WebPushException, webpush
 
 import crm
@@ -36,6 +34,14 @@ app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
 APP_VERSION = "1.0.0-hosted"
+
+# Render redeploys automatically on every git push -- there's no per-PC
+# "updater" moment to read back the way the desktop app's
+# _get_last_updated_display() does (see app.py), so the closest honest
+# equivalent is "when this server process last started" (i.e. the last
+# deploy/restart), computed once at import time. Same display format/
+# timezone convention as the desktop footer for consistency.
+SERVER_STARTED_DISPLAY = datetime.now(ZoneInfo("America/New_York")).strftime("%b %d, %Y %I:%M %p %Z (Miami Time)")
 
 crm.init_db()
 crm.backup_now("startup")
@@ -82,7 +88,7 @@ def _require_auth():
 
 @app.route("/")
 def index():
-    return render_template("index.html", app_version=APP_VERSION, app_version_date="", hosted=True)
+    return render_template("index.html", app_version=APP_VERSION, app_version_date=SERVER_STARTED_DISPLAY, hosted=True)
 
 
 @app.route("/manifest.json")

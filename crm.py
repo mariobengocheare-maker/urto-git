@@ -169,7 +169,20 @@ def resolve_backup_dirs() -> list:
         p = gdrive / "URTO Backups"
         p.mkdir(parents=True, exist_ok=True)
         dests.append({"label": "Google Drive", "path": p})
-    local = _PROJECT_DIR / "backups"
+    # "Local" normally lives next to the code (_PROJECT_DIR) -- fine on
+    # desktop, where the URTO Updater explicitly protects backups/ from
+    # being wiped by an update (see its NEVER_TOUCH set). On the hosted
+    # deployment there IS no updater and no protected folder: Render
+    # rebuilds the whole code checkout from git on every deploy, so
+    # anything written next to hosted_app.py/crm.py is gone on the next
+    # push. `URTO_DATA_DIR` being explicitly set only ever happens for the
+    # hosted deployment (see _resolve_data_dir()) -- when it's set, put
+    # "Local" on the same persistent disk as the live DB instead, so
+    # snapshots actually survive a redeploy. Desktop's LOCALAPPDATA-based
+    # DATA_DIR is untouched by this check and keeps its existing behavior
+    # exactly as before.
+    local_base = DATA_DIR if os.environ.get("URTO_DATA_DIR") else _PROJECT_DIR
+    local = local_base / "backups"
     local.mkdir(parents=True, exist_ok=True)
     dests.append({"label": "Local", "path": local})
     return dests
