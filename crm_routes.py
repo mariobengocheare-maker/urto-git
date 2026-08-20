@@ -304,6 +304,7 @@ def crm_create_event():
     event = crm.create_event(
         client_id=client_id, list_id=list_id, title=title, date_str=date_str,
         time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
+        address=(data.get("address") or "").strip(),
     )
     return jsonify(event)
 
@@ -324,6 +325,7 @@ def crm_update_event(event_id):
     event = crm.update_event(
         event_id, client_id=client_id, list_id=list_id, title=title, date_str=date_str,
         time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
+        address=(data.get("address") or "").strip(),
     )
     if not event:
         abort(404)

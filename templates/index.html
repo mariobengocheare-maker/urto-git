@@ -1527,6 +1527,11 @@
         </select>
       </div>
       <div class="form-group">
+        <label for="efAddress">Meeting address (optional)</label>
+        <input type="text" id="efAddress" placeholder="e.g. 123 Ocean Boulevard, Miami Beach">
+        <div class="sub" style="margin-top:4px">If this is at a specific property (a showing, a listing), enter it here — separate from the client's own address on file. Setting a time and an address here is what makes it read aloud in your morning voice briefing.</div>
+      </div>
+      <div class="form-group">
         <label for="efNotes">Notes</label>
         <textarea id="efNotes" rows="3"></textarea>
       </div>
@@ -3521,6 +3526,7 @@ const efTitle = document.getElementById('efTitle');
 const efDate = document.getElementById('efDate');
 const efTime = document.getElementById('efTime');
 const efClient = document.getElementById('efClient');
+const efAddress = document.getElementById('efAddress');
 const efNotes = document.getElementById('efNotes');
 const efDeleteBtn = document.getElementById('efDeleteBtn');
 
@@ -3545,6 +3551,7 @@ async function openEventForm(dateStr, existing) {
     efDate.value = existing.date;
     efTime.value = existing.time || '';
     efClient.value = existing.list_id ? `list-${existing.list_id}` : existing.client_id ? `client-${existing.client_id}` : '';
+    efAddress.value = existing.address || '';
     efNotes.value = existing.notes || '';
     efDeleteBtn.style.display = 'inline-block';
   } else {
@@ -3579,6 +3586,7 @@ eventForm.addEventListener('submit', async (e) => {
     time: efTime.value,
     client_id: kind === 'client' ? Number(rawId) : null,
     list_id: kind === 'list' ? Number(rawId) : null,
+    address: efAddress.value,
     notes: efNotes.value,
   };
   const id = efId.value;

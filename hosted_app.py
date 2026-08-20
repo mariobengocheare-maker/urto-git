@@ -35,7 +35,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.2.0-hosted"
+APP_VERSION = "1.3.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -223,7 +223,14 @@ def send_morning_digest():
         body = "1 follow-up today."
     else:
         body = f"{count} follow-ups today."
-    _send_push_to_all("URTO — Today's Follow-ups", body, url="/")
+    meetings = [i for i in todays if i["kind"] == "manual" and i.get("time") and i.get("address")]
+    if meetings:
+        body += f" {len(meetings)} meeting{'s' if len(meetings) != 1 else ''} with an address."
+    # ?briefing=1 is the signal templates/index.html looks for on load to
+    # speak the full voice briefing (see build order #75) -- only the
+    # morning digest push should trigger that, not every other push (e.g.
+    # the "Test" button) or a normal app open.
+    _send_push_to_all("URTO — Today's Follow-ups", body, url="/?briefing=1")
 
 
 _last_alert_date = {"date": None}
@@ -242,6 +249,11 @@ def notification_settings_set():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"time": crm.get_notification_time()})
+
+
+@app.route("/api/notifications/briefing_text")
+def notification_briefing_text():
+    return jsonify({"text": crm.get_morning_briefing_text()})
 
 
 def _morning_alert_watcher():

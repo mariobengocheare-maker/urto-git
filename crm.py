@@ -919,6 +919,13 @@ def init_db():
     events_cols = {row["name"] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
     if "list_id" not in events_cols:
         conn.execute("ALTER TABLE events ADD COLUMN list_id INTEGER REFERENCES contact_lists(id) ON DELETE CASCADE")
+    if "address" not in events_cols:
+        # A manual event's own meeting-location address -- deliberately
+        # separate from a linked client's stored CRM address (clients.address),
+        # since a real estate meeting is very often AT A PROPERTY (a listing,
+        # a showing) rather than the client's own home/mailing address. See
+        # build order #75 (the morning voice briefing) for why this exists.
+        conn.execute("ALTER TABLE events ADD COLUMN address TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS contact_lists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1958,11 +1965,11 @@ def _event_to_dict(row) -> dict:
     return d
 
 
-def create_event(client_id, title, date_str, time_str, notes, list_id=None) -> dict:
+def create_event(client_id, title, date_str, time_str, notes, list_id=None, address=None) -> dict:
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO events (client_id, list_id, title, date, time, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (client_id or None, list_id or None, title, date_str, time_str or None, notes or "",
+        "INSERT INTO events (client_id, list_id, title, date, time, notes, address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (client_id or None, list_id or None, title, date_str, time_str or None, notes or "", address or None,
          _now().isoformat(timespec="seconds")),
     )
     conn.commit()
@@ -1972,15 +1979,15 @@ def create_event(client_id, title, date_str, time_str, notes, list_id=None) -> d
     return _event_to_dict(row)
 
 
-def update_event(event_id, client_id, title, date_str, time_str, notes, list_id=None) -> dict:
+def update_event(event_id, client_id, title, date_str, time_str, notes, list_id=None, address=None) -> dict:
     conn = get_conn()
     existing = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
     if not existing:
         conn.close()
         return None
     conn.execute(
-        "UPDATE events SET client_id=?, list_id=?, title=?, date=?, time=?, notes=? WHERE id=?",
-        (client_id or None, list_id or None, title, date_str, time_str or None, notes or "", event_id),
+        "UPDATE events SET client_id=?, list_id=?, title=?, date=?, time=?, notes=?, address=? WHERE id=?",
+        (client_id or None, list_id or None, title, date_str, time_str or None, notes or "", address or None, event_id),
     )
     conn.commit()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (event_id,)).fetchone()
@@ -2044,7 +2051,7 @@ def get_today_followups() -> list:
     for e in list_events_for_date(today_str):
         item = {
             "kind": "manual", "client_id": e["client_id"], "client_name": e.get("client_name"),
-            "phone": e.get("client_phone"), "address": e.get("client_address"),
+            "phone": e.get("client_phone"), "address": e.get("address") or e.get("client_address"),
             "list_id": e["list_id"], "list_name": e.get("list_name"),
             "title": e["title"], "time": e["time"],
             "status": "manual", "notes": e.get("notes") or "", "event_id": e["id"],
@@ -2057,6 +2064,50 @@ def get_today_followups() -> list:
     results = list(items_by_client.values()) + standalone
     results.sort(key=lambda i: (i["time"] or "99:99"))
     return results
+
+
+def _format_time_spoken(hhmm: str) -> str:
+    """"14:30" -> "2:30 PM" -- spoken-friendly, matches the 12-hour
+    convention every other timestamp in this app already uses (see build
+    order #57's formatTime12/formatNoteTime for the JS-side equivalent)."""
+    h, m = (int(x) for x in hhmm.split(":"))
+    period = "PM" if h >= 12 else "AM"
+    h12 = h % 12 or 12
+    return f"{h12}:{m:02d} {period}" if m else f"{h12} {period}"
+
+
+def get_morning_briefing_text() -> str:
+    """Composes the spoken morning briefing (see build order #75) -- read
+    aloud client-side via the browser's own text-to-speech the instant
+    Mario opens the app from the morning push notification. Deliberately
+    plain prose, not SSML/markup: the free browser voices this targets
+    don't reliably support SSML, and a plain sentence reads naturally on
+    its own."""
+    todays = get_today_followups()
+    count = len(todays)
+    if count == 0:
+        followup_part = "you have no follow-ups today"
+    elif count == 1:
+        followup_part = "you have 1 follow-up today"
+    else:
+        followup_part = f"you have {count} follow-ups today"
+
+    meetings = [i for i in todays if i["kind"] == "manual" and i.get("time") and i.get("address")]
+    meetings.sort(key=lambda i: i["time"])
+
+    if not meetings:
+        meeting_part = ""
+    else:
+        phrases = []
+        for m in meetings:
+            who = m.get("client_name") or m.get("list_name") or m["title"]
+            phrases.append(f"at {_format_time_spoken(m['time'])} with {who} at {m['address']}")
+        if len(phrases) == 1:
+            meeting_part = f", and a meeting {phrases[0]}"
+        else:
+            meeting_part = ", and meetings " + "; and ".join(phrases)
+
+    return f"Good morning, Mr. Bengochea. Today, {followup_part}{meeting_part}."
 
 
 def get_calendar_events(year: int, month: int) -> list:

@@ -95,7 +95,62 @@
     });
   }
 
+  // Morning voice briefing (see build order #75). iOS can't autoplay
+  // custom audio from a background push notification, so this is the
+  // realistic version: the notification arrives as normal text, and the
+  // instant Mario taps it and the app opens, it speaks the full briefing
+  // out loud -- ?briefing=1 (set by the push's own click-through URL, see
+  // hosted_app.py's send_morning_digest) is the signal that this open came
+  // from that notification specifically, not just any normal app launch.
+  function pickBestVoice(voices) {
+    if (!voices.length) return null;
+    const enUS = voices.filter((v) => v.lang === "en-US");
+    // iOS exposes real "Enhanced"/"Premium" quality voices once Mario
+    // downloads one for free in Settings -> Accessibility -> Spoken
+    // Content -> Voices -- use one automatically if it's there.
+    const enhanced = enUS.find((v) => /enhanced|premium/i.test(v.name));
+    if (enhanced) return enhanced;
+    const defaultUS = enUS.find((v) => v.default) || enUS[0];
+    if (defaultUS) return defaultUS;
+    const anyEn = voices.find((v) => v.lang && v.lang.startsWith("en"));
+    return anyEn || voices[0];
+  }
+
+  function getVoicesAsync() {
+    return new Promise((resolve) => {
+      const voices = speechSynthesis.getVoices();
+      if (voices.length) { resolve(voices); return; }
+      speechSynthesis.onvoiceschanged = () => resolve(speechSynthesis.getVoices());
+      setTimeout(() => resolve(speechSynthesis.getVoices()), 1000);
+    });
+  }
+
+  async function maybeSpeakMorningBriefing() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("briefing") !== "1") return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("briefing");
+    window.history.replaceState({}, "", url);
+
+    if (!("speechSynthesis" in window)) return;
+    try {
+      const res = await fetch("/api/notifications/briefing_text");
+      const data = await res.json();
+      if (!data.text) return;
+      const voices = await getVoicesAsync();
+      const utter = new SpeechSynthesisUtterance(data.text);
+      const voice = pickBestVoice(voices);
+      if (voice) utter.voice = voice;
+      utter.rate = 0.98;
+      speechSynthesis.speak(utter);
+    } catch (e) {
+      // A failed briefing fetch/speak should never block the app loading.
+    }
+  }
+
   async function setup() {
+    maybeSpeakMorningBriefing();
+
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.register("/sw.js").catch(() => {});
     maybeShowImportPrompt();
