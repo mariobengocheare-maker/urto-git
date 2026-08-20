@@ -35,7 +35,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.10.1-hosted"
+APP_VERSION = "1.11.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -278,7 +278,6 @@ _sent_event_reminders = set()  # {(date_str, event_id, minutes_before)}
 def _check_event_reminders():
     now = datetime.now(ZoneInfo("America/New_York"))
     today_str = now.date().isoformat()
-    now_hm = now.strftime("%H:%M")
 
     # Drop anything not from today so this set never grows unbounded across
     # however long the server process stays up between deploys.
@@ -296,8 +295,17 @@ def _check_event_reminders():
         event_dt = datetime.combine(now.date(), event_time, tzinfo=ZoneInfo("America/New_York"))
         for minutes_before, phrase in ((60, "in 1 hour"), (15, "in 15 minutes")):
             key = (today_str, item["event_id"], minutes_before)
-            trigger_hm = (event_dt - timedelta(minutes=minutes_before)).strftime("%H:%M")
-            if now_hm == trigger_hm and key not in _sent_event_reminders:
+            trigger_dt = event_dt - timedelta(minutes=minutes_before)
+            # Fire once the trigger moment has passed, within a grace
+            # window -- an exact-minute match (the original approach) can
+            # silently miss the window entirely: this watcher only ticks
+            # every 60 real seconds, unsynced to clock boundaries, so a
+            # trigger minute that falls between two ticks (e.g. an event
+            # created only a few minutes out, where T-15 is mere seconds
+            # away) would never get checked at exactly the right minute.
+            # Capped at 3 minutes late so a long server outage doesn't
+            # dump a flood of stale reminders once it's back up.
+            if key not in _sent_event_reminders and trigger_dt <= now <= trigger_dt + timedelta(minutes=3):
                 _sent_event_reminders.add(key)
                 body = f"{item['title']} at {_format_time_12h(item['time'])} ({phrase})"
                 _send_push_to_all("URTO — Upcoming", body, url="/")

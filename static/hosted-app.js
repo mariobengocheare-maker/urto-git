@@ -175,6 +175,32 @@
     btn.className = "ghost small";
     bar.appendChild(btn);
 
+    // A self-serve way to check whether push delivery itself works at
+    // all, independent of any scheduling logic (the morning digest, the
+    // 1hr/15min event reminders) -- if this doesn't arrive, the problem
+    // is the subscription/permission, not the reminder timing.
+    const testBtn = document.createElement("button");
+    testBtn.className = "ghost small";
+    testBtn.textContent = "Send Test";
+    bar.appendChild(testBtn);
+    const testMsg = document.createElement("span");
+    testMsg.style.cssText = "font-size:.8rem;";
+    bar.appendChild(testMsg);
+    testBtn.addEventListener("click", async () => {
+      testBtn.disabled = true;
+      testMsg.textContent = "Sending…";
+      try {
+        const res = await fetch("/api/push/test", { method: "POST" });
+        const data = await res.json();
+        testMsg.textContent = data.sent_to > 0
+          ? `✅ Sent to ${data.sent_to} device${data.sent_to === 1 ? "" : "s"} — check your phone.`
+          : "⚠ No active subscription — tap 🔕 Enable Morning Notifications first.";
+      } catch (e) {
+        testMsg.textContent = "⚠ Couldn't reach the server.";
+      }
+      testBtn.disabled = false;
+    });
+
     // Notification TIMING is a separate, tucked-away control from the
     // on/off toggle above -- a small gear that reveals a plain time input,
     // rather than cluttering the bar with a picker Mario isn't using most
