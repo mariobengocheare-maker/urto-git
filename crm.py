@@ -228,6 +228,20 @@ def save_google_drive_folder_id(folder_id: str):
     _set_setting("google_drive_folder_id", folder_id)
 
 
+def get_notification_time() -> str:
+    """The Miami-time hour:minute the morning follow-up push fires at —
+    "HH:MM" (24-hour), Mario-adjustable in-app (see hosted_app.py's
+    /api/notifications/settings) rather than fixed by an env var that
+    needed a redeploy to change. Defaults to 7am."""
+    return _get_setting("notification_time") or "07:00"
+
+
+def set_notification_time(value: str):
+    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value or ""):
+        raise ValueError("Time must be in HH:MM 24-hour format")
+    _set_setting("notification_time", value)
+
+
 def resolve_backup_dirs() -> list:
     """Every place a backup actually gets written. Always includes the
     local backups/ folder as a guaranteed baseline (never depends on either

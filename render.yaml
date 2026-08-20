@@ -39,8 +39,6 @@ services:
         sync: false
       - key: VAPID_CLAIM_EMAIL
         sync: false
-      - key: MORNING_ALERT_HOUR
-        value: "7"
       - key: GOOGLE_OAUTH_CLIENT_ID
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_SECRET

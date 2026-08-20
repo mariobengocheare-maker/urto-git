@@ -35,7 +35,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.1.0-hosted"
+APP_VERSION = "1.2.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -226,15 +226,35 @@ def send_morning_digest():
     _send_push_to_all("URTO — Today's Follow-ups", body, url="/")
 
 
-MORNING_ALERT_HOUR = int(os.environ.get("MORNING_ALERT_HOUR", "7"))  # 7am Miami time by default
 _last_alert_date = {"date": None}
 
 
+@app.route("/api/notifications/settings", methods=["GET"])
+def notification_settings_get():
+    return jsonify({"time": crm.get_notification_time()})
+
+
+@app.route("/api/notifications/settings", methods=["POST"])
+def notification_settings_set():
+    value = (request.get_json(force=True) or {}).get("time", "")
+    try:
+        crm.set_notification_time(value)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"time": crm.get_notification_time()})
+
+
 def _morning_alert_watcher():
+    # Reads crm.get_notification_time() fresh every tick (rather than a
+    # fixed constant read once at startup) so Mario changing the time
+    # in-app takes effect immediately, no redeploy needed -- this used to
+    # be a MORNING_ALERT_HOUR env var, which meant every time change was a
+    # code-adjacent chore instead of a setting he could just click.
     while True:
         time.sleep(60)
         now = datetime.now(ZoneInfo("America/New_York"))
-        if now.hour == MORNING_ALERT_HOUR and _last_alert_date["date"] != now.date():
+        target = crm.get_notification_time()
+        if now.strftime("%H:%M") == target and _last_alert_date["date"] != now.date():
             _last_alert_date["date"] = now.date()
             try:
                 send_morning_digest()

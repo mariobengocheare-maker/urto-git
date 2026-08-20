@@ -120,6 +120,62 @@
     btn.className = "ghost small";
     bar.appendChild(btn);
 
+    // Notification TIMING is a separate, tucked-away control from the
+    // on/off toggle above -- a small gear that reveals a plain time input,
+    // rather than cluttering the bar with a picker Mario isn't using most
+    // days. Saved server-side (crm.get_notification_time/set_notification_time)
+    // so it takes effect immediately with no redeploy, and applies the same
+    // whether he's on his phone or ever checks it from a browser tab.
+    const gearBtn = document.createElement("button");
+    gearBtn.className = "ghost small";
+    gearBtn.textContent = "⚙";
+    gearBtn.title = "Notification time";
+    bar.appendChild(gearBtn);
+
+    const timeRow = document.createElement("div");
+    timeRow.style.cssText = "display:none; align-items:center; gap:8px; width:100%; justify-content:center; padding-top:8px;";
+    timeRow.innerHTML =
+      '<span>Send the morning follow-up alert at</span>' +
+      '<input type="time" id="urtoNotifyTimeInput">' +
+      '<span>(Miami time)</span>' +
+      '<button class="ghost small" id="urtoNotifyTimeSaveBtn">Save</button>' +
+      '<span id="urtoNotifyTimeMsg"></span>';
+    bar.appendChild(timeRow);
+
+    const timeInput = timeRow.querySelector("#urtoNotifyTimeInput");
+    const timeMsg = timeRow.querySelector("#urtoNotifyTimeMsg");
+
+    gearBtn.addEventListener("click", async () => {
+      const showing = timeRow.style.display === "flex";
+      if (showing) {
+        timeRow.style.display = "none";
+        return;
+      }
+      try {
+        const res = await fetch("/api/notifications/settings");
+        const data = await res.json();
+        timeInput.value = data.time || "07:00";
+      } catch (e) {
+        timeInput.value = "07:00";
+      }
+      timeRow.style.display = "flex";
+    });
+
+    timeRow.querySelector("#urtoNotifyTimeSaveBtn").addEventListener("click", async () => {
+      if (!timeInput.value) return;
+      timeMsg.textContent = "Saving…";
+      try {
+        const res = await fetch("/api/notifications/settings", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ time: timeInput.value }),
+        });
+        const data = await res.json();
+        timeMsg.textContent = res.ok ? `✅ Saved — alerts now at ${data.time}` : "⚠ " + (data.error || "Couldn't save.");
+      } catch (e) {
+        timeMsg.textContent = "⚠ Couldn't reach the server.";
+      }
+    });
+
     async function refresh() {
       const sub = await getSubscription();
       btn.textContent = sub ? "🔔 Notifications On (tap to turn off)" : "🔕 Enable Morning Notifications";

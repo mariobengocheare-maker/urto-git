@@ -920,6 +920,43 @@
     white-space: nowrap;
   }
 
+  /* ---- Mobile layout ---- */
+  @media (max-width: 640px) {
+    .topbar { padding: 14px 16px; }
+    .brand-name { font-size: 1.1rem; }
+    main { padding: 20px 14px; }
+
+    /* The nav tabs wrapped their own labels onto two lines at phone width
+       ("URTO CRM" -> "URTO" / "CRM") since there wasn't room for all of
+       them plus their 22px margins -- scroll horizontally instead, same
+       pattern as any mobile app's tab bar, rather than letting text wrap. */
+    .tabs { padding: 0 10px; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+    .tab-btn { white-space: nowrap; margin-right: 14px; padding: 12px 4px; font-size: .85rem; flex-shrink: 0; }
+
+    /* A client card's flex row (name/meta vs. the follow-up pill) squeezed
+       the name into a narrow column at phone width, wrapping long names
+       onto 3+ awkward lines -- stack the pill below instead of beside. */
+    .client-card { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .client-card .status-pill { align-self: flex-start; }
+
+    /* A 7-column grid at 88px-tall cells makes one month a very long
+       scroll on a phone; still fully usable, just more compact. */
+    .cal-cell { min-height: 58px; padding: 4px; font-size: .7rem; }
+    .cal-chip { font-size: .62rem; padding: 1px 4px; }
+    .calendar-head { flex-wrap: wrap; gap: 8px; }
+    .calendar-head h2 { font-size: .95rem; width: 100%; order: -1; }
+
+    /* Any row of buttons/chips that assumed desktop width (backup bar,
+       dialer source picker, transaction subtabs, etc.) wraps cleanly
+       instead of forcing horizontal scroll on the whole page. */
+    .backup-bar, .source-bar, .crm-subtabs { flex-wrap: wrap; }
+    #gdriveSetupRow, #gdriveApiConnectRow { flex-wrap: wrap; }
+    #gdriveSetupRow input { min-width: 0; width: 100%; }
+
+    .modal { padding: 20px; }
+    .modal-head h2 { font-size: 1rem; }
+  }
+
 </style>
 </head>
 <body class="{{ 'space-mode' if not hosted else '' }}">
@@ -1069,12 +1106,14 @@
     <span class="backup-bar-destinations" id="backupDestinations"></span>
     <button class="ghost small" id="backupNowBtn">Backup Now</button>
     <button class="ghost small" id="openRestoreBtn">Restore from Backup…</button>
+    {% if not hosted %}
     <div id="gdriveSetupRow">
       <span>Google Drive folder not found automatically — paste its full path:</span>
       <input type="text" id="gdriveDirInput" placeholder="e.g. C:\Users\Mario\Google Drive">
       <button class="ghost small" id="gdriveDirSaveBtn">Save</button>
       <span id="gdriveSetupMsg"></span>
     </div>
+    {% endif %}
     <div id="gdriveApiConnectRow" style="display:none">
       <span>Connect your real Google Drive so backups reach it instantly, even from your phone with your desktop off:</span>
       <a href="/admin/google_auth"><button class="ghost small" type="button">Connect Google Drive</button></a>
@@ -2043,42 +2082,44 @@ async function refreshBackupStatus() {
     backupStatusText.innerHTML = `<span class="ok">●</span> Last backup: ${formatBackupTime(s.last_backup_at)}`;
     const chip = (label, on) => `<span class="${on ? 'ok' : 'warn'}">${on ? '●' : '○'} ${label}</span>`;
     backupDestinations.innerHTML = [
-      chip('OneDrive', s.onedrive_detected),
-      chip('Google Drive (local folder)', s.google_drive_detected),
+      HOSTED ? '' : chip('OneDrive', s.onedrive_detected),
+      HOSTED ? '' : chip('Google Drive (local folder)', s.google_drive_detected),
       s.google_drive_api_available ? chip('Google Drive (real)', s.google_drive_api_connected) : '',
       chip('Local', true),
     ].join('');
-    gdriveSetupRow.style.display = s.google_drive_detected ? 'none' : 'flex';
+    if (gdriveSetupRow) gdriveSetupRow.style.display = s.google_drive_detected ? 'none' : 'flex';
     gdriveApiConnectRow.style.display = (s.google_drive_api_available && !s.google_drive_api_connected) ? 'flex' : 'none';
   } catch (e) {
     backupStatusText.textContent = 'Backup status unavailable';
   }
 }
 
-gdriveDirSaveBtn.addEventListener('click', async () => {
-  const path = gdriveDirInput.value.trim();
-  if (!path) return;
-  gdriveDirSaveBtn.disabled = true;
-  gdriveSetupMsg.textContent = 'Saving…';
-  try {
-    const res = await fetch('/api/backup/google_drive_dir', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      gdriveSetupMsg.textContent = data.error || "Couldn't save that folder.";
-    } else {
-      gdriveSetupMsg.textContent = '';
-      gdriveDirInput.value = '';
-      await refreshBackupStatus();
+if (gdriveDirSaveBtn) {
+  gdriveDirSaveBtn.addEventListener('click', async () => {
+    const path = gdriveDirInput.value.trim();
+    if (!path) return;
+    gdriveDirSaveBtn.disabled = true;
+    gdriveSetupMsg.textContent = 'Saving…';
+    try {
+      const res = await fetch('/api/backup/google_drive_dir', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        gdriveSetupMsg.textContent = data.error || "Couldn't save that folder.";
+      } else {
+        gdriveSetupMsg.textContent = '';
+        gdriveDirInput.value = '';
+        await refreshBackupStatus();
+      }
+    } catch (e) {
+      gdriveSetupMsg.textContent = 'Something went wrong saving that.';
+    } finally {
+      gdriveDirSaveBtn.disabled = false;
     }
-  } catch (e) {
-    gdriveSetupMsg.textContent = 'Something went wrong saving that.';
-  } finally {
-    gdriveDirSaveBtn.disabled = false;
-  }
-});
+  });
+}
 
 backupNowBtn.addEventListener('click', async () => {
   backupNowBtn.disabled = true;
