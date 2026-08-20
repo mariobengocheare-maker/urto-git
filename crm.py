@@ -50,6 +50,15 @@ def _resolve_data_dir() -> Path:
 
 
 DATA_DIR = _resolve_data_dir()
+# sqlite3.connect() does NOT create missing parent directories -- on desktop
+# this was always masked by %LOCALAPPDATA%\URTO already existing from a
+# prior run, but a genuinely fresh disk (a brand-new Render persistent disk,
+# or a truly first-ever desktop install) has no such folder yet, and
+# get_conn() would fail outright with "unable to open database file" before
+# _migrate_legacy_data_dir() ever runs (it only creates DATA_DIR when an old
+# legacy DB is found to migrate, which isn't the case here). Ensure it
+# unconditionally up front instead.
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "urto_crm.db"
 
 # Transaction Manager's uploaded document files (blank templates + signed
