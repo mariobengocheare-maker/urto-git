@@ -25,6 +25,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import requests
 from flask import Flask, jsonify, make_response, redirect, render_template, request, session, url_for
 from pywebpush import WebPushException, webpush
 
@@ -35,7 +36,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.11.0-hosted"
+APP_VERSION = "1.11.1-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -215,6 +216,10 @@ def _send_push_to_all(title: str, body: str, url: str = "/"):
                 data=json.dumps({"title": title, "body": body, "url": url}),
                 vapid_private_key=VAPID_PRIVATE_KEY_PEM,
                 vapid_claims={"sub": VAPID_CLAIM_EMAIL},
+                # pywebpush sets no timeout by default -- an unresponsive
+                # push endpoint could otherwise hang the underlying request
+                # indefinitely, tying up whatever thread called this.
+                timeout=15,
             )
         except WebPushException as e:
             status = getattr(e.response, "status_code", None)
@@ -222,12 +227,34 @@ def _send_push_to_all(title: str, body: str, url: str = "/"):
                 # The browser/OS says this subscription is gone for good
                 # (uninstalled, expired) -- stop trying to push to it.
                 crm.remove_push_subscription(sub["endpoint"])
+        except requests.exceptions.RequestException:
+            # pywebpush's webpush() doesn't wrap the underlying requests
+            # call in its own try/except, so a timeout or connection error
+            # (a genuinely unresponsive push endpoint, even with the
+            # timeout= above) surfaces as a raw requests exception, not a
+            # WebPushException -- catch it here too so one bad/slow
+            # subscription can't abort delivery to every other one in this
+            # loop, and never propagates out of this function uncaught.
+            pass
 
 
 @app.route("/api/push/test", methods=["POST"])
 def push_test():
-    _send_push_to_all("URTO", "Test notification — if you see this, it's working.")
-    return jsonify({"ok": True, "sent_to": len(crm.list_push_subscriptions())})
+    # _send_push_to_all() makes a real synchronous outbound HTTPS call
+    # (webpush(), no timeout set) to the push service per subscription --
+    # calling it inline here meant a slow/stuck push delivery could stall
+    # this whole request long enough to look like "Couldn't reach URTO's
+    # server" from the tapped button, the same class of bug fixed for
+    # on_data_changed() in build order #83. The subscriber count is known
+    # synchronously and cheaply from the DB, so respond with that
+    # immediately and let the actual push delivery happen in the
+    # background, not on the request Mario is waiting on.
+    sent_to = len(crm.list_push_subscriptions())
+    threading.Thread(
+        target=lambda: _send_push_to_all("URTO", "Test notification — if you see this, it's working."),
+        daemon=True,
+    ).start()
+    return jsonify({"ok": True, "sent_to": sent_to})
 
 
 def _format_time_12h(hhmm: str) -> str:
