@@ -225,7 +225,11 @@
           body: JSON.stringify({ time: timeInput.value }),
         });
         const data = await res.json();
-        timeMsg.textContent = res.ok ? `✅ Saved — alerts now at ${data.time}` : "⚠ " + (data.error || "Couldn't save.");
+        // formatTime12() (defined in the main inline <script>, same page)
+        // -- data.time is the raw 24-hour "HH:MM" the server stores; every
+        // timestamp shown to Mario must be 12-hour with AM/PM, never bare
+        // 24-hour (see CLAUDE.md's own established rule on this).
+        timeMsg.textContent = res.ok ? `✅ Saved — alerts now at ${formatTime12(data.time)}` : "⚠ " + (data.error || "Couldn't save.");
       } catch (e) {
         timeMsg.textContent = "⚠ Couldn't reach the server.";
       }

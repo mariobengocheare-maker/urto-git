@@ -698,12 +698,23 @@
     background: rgba(10, 16, 30, .5);
     border: 1px solid var(--border);
     border-radius: 10px;
-    height: 108px;
+    height: 128px;
     padding: 6px;
     font-size: .78rem;
     cursor: pointer;
     display: flex;
     flex-direction: column;
+    /* CSS Grid items default to min-width: auto, meaning their minimum
+       size is their CONTENT's unwrapped width -- a single long chip label
+       (e.g. "10:00 AM Event 10-1") was forcing its whole column wider than
+       its fair 1/7 share of the grid, blowing the grid's total width past
+       its container's, with the overflow silently clipped by the card's
+       overflow:hidden -- on mobile this hid 4 of the 7 day-of-week columns
+       entirely. min-width: 0 lets the cell actually shrink to its grid
+       track's share, so the chip's own overflow:hidden/text-overflow:
+       ellipsis (below) can do its job instead of stretching the column. */
+    min-width: 0;
+    overflow: hidden;
     transition: border-color .15s, box-shadow .15s, background .15s, transform .12s;
   }
   .cal-cell:hover:not(.empty) { border-color: var(--gold); background: rgba(16, 24, 44, .6); box-shadow: 0 0 18px rgba(201,162,39,.14); transform: translateY(-1px); }
@@ -716,8 +727,20 @@
      day's chips scroll inside their own cell instead of stretching the
      whole grid row, so the calendar always reads as a clean uniform grid.
      min-height: 0 is required on a flex child for overflow/scroll to
-     actually kick in instead of the child just growing to fit content. */
-  .cal-chip-list { flex: 1; min-height: 0; overflow-y: auto; }
+     actually kick in instead of the child just growing to fit content. A
+     visible (not default-invisible) thin scrollbar is the only cue Mario
+     has that a packed day holds more than what's shown -- without it, the
+     cut-off content just looks like missing data. */
+  .cal-chip-list {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--gold) transparent;
+  }
+  .cal-chip-list::-webkit-scrollbar { width: 5px; }
+  .cal-chip-list::-webkit-scrollbar-thumb { background: var(--gold); border-radius: 3px; }
   .cal-chip {
     display: block;
     background: var(--info-bg);
@@ -950,7 +973,7 @@
 
     /* A 7-column grid at 88px-tall cells makes one month a very long
        scroll on a phone; still fully usable, just more compact. */
-    .cal-cell { height: 72px; padding: 4px; font-size: .7rem; }
+    .cal-cell { height: 88px; padding: 4px; font-size: .7rem; }
     .cal-chip { font-size: .62rem; padding: 1px 4px; }
     .calendar-head { flex-wrap: wrap; gap: 8px; }
     .calendar-head h2 { font-size: .95rem; width: 100%; order: -1; }
