@@ -35,7 +35,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.3.0-hosted"
+APP_VERSION = "1.4.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -95,7 +95,7 @@ _AUTH_CONFIGURED = not _MISSING_AUTH_VARS
 # Routes reachable without a session -- just the login page itself and the
 # handful of static PWA files a not-yet-logged-in browser/service worker
 # needs to even function. None of these expose any real client data.
-_PUBLIC_ENDPOINTS = {"login", "manifest", "service_worker", "static"}
+_PUBLIC_ENDPOINTS = {"login", "manifest", "service_worker", "static", "notification_briefing_public"}
 
 
 @app.before_request
@@ -253,6 +253,34 @@ def notification_settings_set():
 
 @app.route("/api/notifications/briefing_text")
 def notification_briefing_text():
+    return jsonify({"text": crm.get_morning_briefing_text()})
+
+
+# ===================== Unattended "talking alarm" (iOS Shortcuts) =====================
+# The morning push notification can only ever open the app and speak once
+# Mario actually taps it -- iOS will not run page JS in the background from a
+# push, full stop (see build order #75/CLAUDE.md). The closest thing to a
+# real hands-free alarm is an iOS Shortcuts "Time of Day" Personal
+# Automation that fetches this endpoint and speaks the result with no tap
+# needed -- but Shortcuts can't do the normal session-cookie login flow, so
+# this one endpoint is reachable with a long random token instead of a
+# session (see crm.get_briefing_token()). It only ever returns the one
+# spoken sentence -- nothing else in the CRM is reachable this way.
+
+@app.route("/api/notifications/briefing_token")
+def notification_briefing_token():
+    return jsonify({"token": crm.get_briefing_token()})
+
+
+@app.route("/api/notifications/briefing_token/regenerate", methods=["POST"])
+def notification_briefing_token_regenerate():
+    return jsonify({"token": crm.regenerate_briefing_token()})
+
+
+@app.route("/api/notifications/briefing_public")
+def notification_briefing_public():
+    if not secrets.compare_digest(request.args.get("token", ""), crm.get_briefing_token()):
+        return jsonify({"error": "Invalid or missing token"}), 403
     return jsonify({"text": crm.get_morning_briefing_text()})
 
 

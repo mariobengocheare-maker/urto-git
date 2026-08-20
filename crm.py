@@ -9,6 +9,7 @@ import csv
 import json
 import os
 import re
+import secrets
 import shutil
 import string
 import sqlite3
@@ -240,6 +241,28 @@ def set_notification_time(value: str):
     if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value or ""):
         raise ValueError("Time must be in HH:MM 24-hour format")
     _set_setting("notification_time", value)
+
+
+def get_briefing_token() -> str:
+    """A long random token that lets an unattended automation (iOS Shortcuts,
+    see build order #76) fetch the spoken morning briefing text WITHOUT a
+    logged-in session -- Shortcuts can't do the normal username/password
+    login flow. Generated once on first use and stored in app_settings, same
+    pattern as every other single-value setting in this file. Anyone holding
+    this token can only ever read that one sentence of text (today's
+    follow-up count + meeting time/address) -- nothing else in the CRM is
+    reachable with it."""
+    token = _get_setting("briefing_api_token")
+    if not token:
+        token = secrets.token_urlsafe(24)
+        _set_setting("briefing_api_token", token)
+    return token
+
+
+def regenerate_briefing_token() -> str:
+    token = secrets.token_urlsafe(24)
+    _set_setting("briefing_api_token", token)
+    return token
 
 
 def resolve_backup_dirs() -> list:

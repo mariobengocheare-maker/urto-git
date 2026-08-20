@@ -231,6 +231,78 @@
       }
     });
 
+    // The real "talking alarm" (see build order #76): iOS still can't speak
+    // from a background push, but an iOS Shortcuts "Time of Day" automation
+    // CAN fetch a URL and speak the result completely unattended. This is a
+    // tucked-away link (Mario's own "tucked away" phrasing, matching the
+    // notification-time gear above) that shows the exact URL to paste into
+    // that Shortcut, built client-side from window.location.origin so it's
+    // always correct for wherever this page is actually being served from.
+    const alarmBtn = document.createElement("button");
+    alarmBtn.className = "ghost small";
+    alarmBtn.textContent = "⏰";
+    alarmBtn.title = "Alarm Shortcut link";
+    bar.appendChild(alarmBtn);
+
+    const alarmRow = document.createElement("div");
+    alarmRow.style.cssText = "display:none; flex-direction:column; align-items:center; gap:6px; width:100%; padding-top:8px;";
+    alarmRow.innerHTML =
+      '<span>Paste this URL into an iOS Shortcuts "Get Contents of URL" step, then "Speak Text" — set it to run on a Time of Day automation for a hands-free spoken alarm:</span>' +
+      '<input type="text" id="urtoAlarmUrlInput" readonly style="width:100%; max-width:520px; font-size:.78rem;">' +
+      '<div style="display:flex; gap:8px;">' +
+      '<button class="ghost small" id="urtoAlarmCopyBtn">Copy</button>' +
+      '<button class="ghost small" id="urtoAlarmRegenBtn">Regenerate link</button>' +
+      '</div>' +
+      '<span id="urtoAlarmMsg"></span>';
+    bar.appendChild(alarmRow);
+
+    const alarmUrlInput = alarmRow.querySelector("#urtoAlarmUrlInput");
+    const alarmMsg = alarmRow.querySelector("#urtoAlarmMsg");
+
+    function buildAlarmUrl(token) {
+      return `${window.location.origin}/api/notifications/briefing_public?token=${token}`;
+    }
+
+    alarmBtn.addEventListener("click", async () => {
+      const showing = alarmRow.style.display === "flex";
+      if (showing) {
+        alarmRow.style.display = "none";
+        return;
+      }
+      alarmMsg.textContent = "";
+      try {
+        const res = await fetch("/api/notifications/briefing_token");
+        const data = await res.json();
+        alarmUrlInput.value = buildAlarmUrl(data.token);
+      } catch (e) {
+        alarmMsg.textContent = "⚠ Couldn't reach the server.";
+      }
+      alarmRow.style.display = "flex";
+    });
+
+    alarmRow.querySelector("#urtoAlarmCopyBtn").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(alarmUrlInput.value);
+        alarmMsg.textContent = "✅ Copied.";
+      } catch (e) {
+        alarmUrlInput.select();
+        alarmMsg.textContent = "Select and copy manually.";
+      }
+    });
+
+    alarmRow.querySelector("#urtoAlarmRegenBtn").addEventListener("click", async () => {
+      if (!confirm("This invalidates the current alarm link — any Shortcut already using it will stop working until you update it with the new one. Continue?")) return;
+      alarmMsg.textContent = "Regenerating…";
+      try {
+        const res = await fetch("/api/notifications/briefing_token/regenerate", { method: "POST" });
+        const data = await res.json();
+        alarmUrlInput.value = buildAlarmUrl(data.token);
+        alarmMsg.textContent = "✅ New link generated — update your Shortcut with this one.";
+      } catch (e) {
+        alarmMsg.textContent = "⚠ Couldn't reach the server.";
+      }
+    });
+
     async function refresh() {
       const sub = await getSubscription();
       btn.textContent = sub ? "🔔 Notifications On (tap to turn off)" : "🔕 Enable Morning Notifications";
