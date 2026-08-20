@@ -48,7 +48,7 @@
   function injectBar() {
     const bar = document.createElement("div");
     bar.id = "urtoPushBar";
-    bar.style.cssText = "display:flex; align-items:center; justify-content:center; gap:10px; padding:8px 16px; font-size:.82rem; color:var(--text-secondary); background:rgba(6,11,22,.5); border-bottom:1px solid var(--border)";
+    bar.style.cssText = "display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:10px; padding:8px 16px; font-size:.82rem; color:var(--text-secondary); background:rgba(6,11,22,.5); border-bottom:1px solid var(--border)";
     const main = document.querySelector("main");
     main.parentNode.insertBefore(bar, main);
     return bar;

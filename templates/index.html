@@ -698,17 +698,26 @@
     background: rgba(10, 16, 30, .5);
     border: 1px solid var(--border);
     border-radius: 10px;
-    min-height: 88px;
+    height: 108px;
     padding: 6px;
     font-size: .78rem;
     cursor: pointer;
+    display: flex;
+    flex-direction: column;
     transition: border-color .15s, box-shadow .15s, background .15s, transform .12s;
   }
   .cal-cell:hover:not(.empty) { border-color: var(--gold); background: rgba(16, 24, 44, .6); box-shadow: 0 0 18px rgba(201,162,39,.14); transform: translateY(-1px); }
   .cal-cell.empty { background: transparent; border: none; cursor: default; }
   .cal-cell.today { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold), 0 0 20px rgba(201,162,39,.18); }
-  .cal-daynum { font-weight: 700; margin-bottom: 4px; color: var(--text-secondary); }
+  .cal-daynum { font-weight: 700; margin-bottom: 4px; color: var(--text-secondary); flex-shrink: 0; }
   .cal-cell.today .cal-daynum { color: var(--gold); }
+  /* Every cell is a fixed height regardless of how many chips it holds (see
+     build order re: "packed vs empty days look super weird") -- a busy
+     day's chips scroll inside their own cell instead of stretching the
+     whole grid row, so the calendar always reads as a clean uniform grid.
+     min-height: 0 is required on a flex child for overflow/scroll to
+     actually kick in instead of the child just growing to fit content. */
+  .cal-chip-list { flex: 1; min-height: 0; overflow-y: auto; }
   .cal-chip {
     display: block;
     background: var(--info-bg);
@@ -941,7 +950,7 @@
 
     /* A 7-column grid at 88px-tall cells makes one month a very long
        scroll on a phone; still fully usable, just more compact. */
-    .cal-cell { min-height: 58px; padding: 4px; font-size: .7rem; }
+    .cal-cell { height: 72px; padding: 4px; font-size: .7rem; }
     .cal-chip { font-size: .62rem; padding: 1px 4px; }
     .calendar-head { flex-wrap: wrap; gap: 8px; }
     .calendar-head h2 { font-size: .95rem; width: 100%; order: -1; }
@@ -1538,7 +1547,7 @@
       <div class="modal-actions">
         <button type="button" class="danger small" id="efDeleteBtn" style="display:none; background:var(--danger-fg); margin-right:auto">Delete</button>
         <button type="button" class="ghost" id="eventFormCancelBtn">Cancel</button>
-        <button type="submit">Save Event</button>
+        <button type="submit" id="efSubmitBtn">Save Event</button>
       </div>
     </form>
   </div>
@@ -2148,7 +2157,15 @@ async function checkDataHealth() {
   try {
     const res = await fetch('/api/backup/health');
     const h = await res.json();
-    if (!h.ok) {
+    if (h.error) {
+      // A proxy/connection hiccup (desktop only -- see hosted_sync.py),
+      // not a real data-health verdict: h.current_count/best_known_count
+      // don't exist on this shape, so don't ever interpolate them as
+      // "undefined" -- that's confusing and looks like data loss when it's
+      // really just "couldn't check right now."
+      dataHealthWarningText.textContent = `⚠ Couldn't check backup health: ${h.error}`;
+      dataHealthWarning.style.display = 'flex';
+    } else if (!h.ok) {
       dataHealthWarningText.textContent =
         `⚠ Your CRM shows ${h.current_count} client${h.current_count === 1 ? '' : 's'}, but a recent backup ` +
         `has ${h.best_known_count} — some data may be missing.`;
@@ -3494,6 +3511,12 @@ async function renderCalendar() {
     dayNum.className = 'cal-daynum';
     dayNum.textContent = day;
     cell.appendChild(dayNum);
+    // Chips live in their own scrollable strip inside the (fixed-height)
+    // cell -- a packed day scrolls in place instead of growing the cell
+    // and dragging the whole grid row out of alignment with its neighbors.
+    const chipList = document.createElement('div');
+    chipList.className = 'cal-chip-list';
+    cell.appendChild(chipList);
     for (const e of (eventsByDay[dateStr] || [])) {
       const chip = document.createElement('div');
       const label = e.kind === 'manual' ? (e.list_name ? `💰 ${e.time ? formatTime12(e.time) + ' ' : ''}${e.title}` : `${e.time ? formatTime12(e.time) + ' ' : ''}${e.title}`)
@@ -3509,7 +3532,7 @@ async function renderCalendar() {
         else if (e.kind === 'list') { showCrmTab(crmTabListsBtn, crmListsView); loadContactLists(); }
         else openClientDetail(e.client_id);
       });
-      cell.appendChild(chip);
+      chipList.appendChild(chip);
     }
     cell.addEventListener('click', () => openEventForm(dateStr, null));
     calendarGrid.appendChild(cell);
@@ -3576,9 +3599,25 @@ efClient.addEventListener('change', () => {
   }
 });
 
+const efSubmitBtn = document.getElementById('efSubmitBtn');
+let eventFormSubmitting = false;
+
 eventForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  // A slow save (the hosted server mirrors to every backup destination,
+  // including a real Google Drive API round-trip, before responding) used
+  // to give zero visual feedback here, so a normal tap-again-because-
+  // nothing-seemed-to-happen reaction fired a real duplicate POST every
+  // time — Mario hit this for real (10 copies of one event). Disabling the
+  // button + showing "Saving…" for the duration of the request, and
+  // ignoring any submit that arrives while one is already in flight, is
+  // the actual fix — not just cosmetic.
+  if (eventFormSubmitting) return;
+  eventFormSubmitting = true;
   eventFormError.style.display = 'none';
+  efSubmitBtn.disabled = true;
+  const originalBtnText = efSubmitBtn.textContent;
+  efSubmitBtn.textContent = 'Saving…';
   const [kind, rawId] = efClient.value ? efClient.value.split('-') : [null, null];
   const payload = {
     title: efTitle.value,
@@ -3599,13 +3638,22 @@ eventForm.addEventListener('submit', async (e) => {
   } catch (err) {
     eventFormError.textContent = "Couldn't reach URTO's server — try again.";
     eventFormError.style.display = 'block';
+    eventFormSubmitting = false;
+    efSubmitBtn.disabled = false;
+    efSubmitBtn.textContent = originalBtnText;
     return;
   }
   if (!res.ok) {
     eventFormError.textContent = data.error || 'Could not save event.';
     eventFormError.style.display = 'block';
+    eventFormSubmitting = false;
+    efSubmitBtn.disabled = false;
+    efSubmitBtn.textContent = originalBtnText;
     return;
   }
+  eventFormSubmitting = false;
+  efSubmitBtn.disabled = false;
+  efSubmitBtn.textContent = originalBtnText;
   eventFormOverlay.classList.remove('show');
   renderCalendar();
 });

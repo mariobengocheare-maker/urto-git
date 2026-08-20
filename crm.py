@@ -2099,24 +2099,49 @@ def _format_time_spoken(hhmm: str) -> str:
     return f"{h12}:{m:02d} {period}" if m else f"{h12} {period}"
 
 
+def _ordinal(n: int) -> str:
+    if 11 <= (n % 100) <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+# Free browser TTS engines (including iOS's built-in voices) default to
+# English pronunciation rules on an unfamiliar surname and reliably get
+# "Bengochea" wrong -- Mario confirmed the real pronunciation is
+# "Ben-GO-CHE-Ah". The Web Speech API doesn't support SSML/phoneme markup
+# (plain text only), so the standard portable fix is a phonetic respelling
+# with hyphens, which nudges the engine to read it syllable-by-syllable
+# instead of applying English spelling rules to the whole word at once.
+# This is spoken-text only -- never used anywhere the name is displayed.
+_SPOKEN_LAST_NAME = "Ben-GO-cheh-ah"
+
+
 def get_morning_briefing_text() -> str:
     """Composes the spoken morning briefing (see build order #75) -- read
     aloud client-side via the browser's own text-to-speech the instant
     Mario opens the app from the morning push notification. Deliberately
     plain prose, not SSML/markup: the free browser voices this targets
     don't reliably support SSML, and a plain sentence reads naturally on
-    its own."""
+    its own. Always states the day/date first, then the follow-up/meeting
+    counts (Mario's explicit ordering request) -- one unified template
+    covers both a quiet day (0 follow-ups, 0 meetings) and a busy one."""
     todays = get_today_followups()
     count = len(todays)
-    if count == 0:
-        followup_part = "you have no follow-ups today"
-    elif count == 1:
-        followup_part = "you have 1 follow-up today"
-    else:
-        followup_part = f"you have {count} follow-ups today"
 
     meetings = [i for i in todays if i["kind"] == "manual" and i.get("time") and i.get("address")]
     meetings.sort(key=lambda i: i["time"])
+
+    now = _now()
+    date_part = f"{now.strftime('%A')}, {now.strftime('%B')} {_ordinal(now.day)}"
+
+    if count == 0:
+        followup_part = "you have no follow-ups"
+    elif count == 1:
+        followup_part = "you have 1 follow-up"
+    else:
+        followup_part = f"you have {count} follow-ups"
 
     if not meetings:
         meeting_part = ""
@@ -2130,7 +2155,7 @@ def get_morning_briefing_text() -> str:
         else:
             meeting_part = ", and meetings " + "; and ".join(phrases)
 
-    return f"Good morning, Mr. Bengochea. Today, {followup_part}{meeting_part}."
+    return f"Good morning, Mr. {_SPOKEN_LAST_NAME}. It's {date_part}. Today, {followup_part}{meeting_part}."
 
 
 def get_calendar_events(year: int, month: int) -> list:

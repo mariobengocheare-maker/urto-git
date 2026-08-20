@@ -23,6 +23,7 @@ CRM-shaped goes over the network to Render from here on.
 
 import json
 import mimetypes
+import threading
 
 import requests
 
@@ -37,6 +38,21 @@ PROXY_PREFIXES = ("/api/crm", "/api/backup", "/api/txn", "/api/text_presets")
 
 _session = requests.Session()
 _logged_in_url = None  # the base_url _session currently holds a valid cookie for
+# app.py runs the desktop Flask server with threaded=True, so a single page
+# load can fire several /api/... requests concurrently (clients, calendar,
+# backup status, ...), each landing in a different thread. requests.Session
+# is explicitly documented as NOT thread-safe -- concurrent threads reading/
+# mutating the same Session's cookie jar (both the login check and the
+# proxied request itself) can race, intermittently sending a request out
+# with a corrupted or missing session cookie. That request then gets
+# redirected to /login instead of returning real data, which looked to
+# Mario like "sometimes it opens normally, sometimes none of my contacts
+# show up at all" -- entirely non-deterministic, since it depends on how
+# the OS happens to schedule that particular burst of threads. Serializing
+# every use of _session (login + the actual proxied request + any retry)
+# behind one lock removes the race outright; a solo desktop user proxying
+# to one hosted backend never needs true request-level concurrency here.
+_session_lock = threading.Lock()
 
 
 def load_config():
@@ -126,7 +142,6 @@ def proxy_request(flask_request, subpath_with_prefix: str):
         )
 
     try:
-        _ensure_logged_in(config)
         url = config["base_url"] + subpath_with_prefix
         kwargs = {"timeout": 30, "allow_redirects": False}
         if flask_request.query_string:
@@ -144,16 +159,23 @@ def proxy_request(flask_request, subpath_with_prefix: str):
             if flask_request.content_type:
                 kwargs["headers"] = {"Content-Type": flask_request.content_type}
 
-        res = _session.request(flask_request.method, url, **kwargs)
-
-        # The session cookie may have expired server-side (long idle
-        # period) -- a stale-session redirect to /login looks like this.
-        # Re-login once and retry the exact same request before giving up.
-        if res.status_code in (302, 303) and "/login" in res.headers.get("Location", ""):
-            global _logged_in_url
-            _logged_in_url = None
+        # Every use of _session -- the login check, the real request, and
+        # any stale-session retry -- happens under one lock (see the note
+        # by _session_lock's definition above). Without this, two requests
+        # from the same page load could race on the same Session's cookie
+        # jar and intermittently go out unauthenticated.
+        with _session_lock:
             _ensure_logged_in(config)
             res = _session.request(flask_request.method, url, **kwargs)
+
+            # The session cookie may have expired server-side (long idle
+            # period) -- a stale-session redirect to /login looks like this.
+            # Re-login once and retry the exact same request before giving up.
+            if res.status_code in (302, 303) and "/login" in res.headers.get("Location", ""):
+                global _logged_in_url
+                _logged_in_url = None
+                _ensure_logged_in(config)
+                res = _session.request(flask_request.method, url, **kwargs)
 
     except HostedUnreachableError as e:
         return json.dumps({"error": str(e)}).encode(), 502, {"Content-Type": "application/json"}
