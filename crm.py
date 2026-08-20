@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 from werkzeug.utils import secure_filename
 
+import google_drive_api
+
 # Keep this in sync with urto_updater.pyw's REPO_ZIP_URL — same repo/branch,
 # just also surfaced as a plain link inside the backups themselves so the
 # code is recoverable even starting from nothing but a Google Drive/OneDrive
@@ -185,6 +187,45 @@ def set_google_drive_dir(path_str: str):
     )
     conn.commit()
     conn.close()
+
+
+def _get_setting(key: str):
+    conn = get_conn()
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else None
+
+
+def _set_setting(key: str, value: str):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_google_oauth_refresh_token():
+    """Set once via the hosted server's /admin/google_auth one-time consent
+    flow (see google_drive_api.py) — None means Mario hasn't connected his
+    real Google Drive yet (the local-synced-folder trick, get_google_drive_dir()
+    above, is a completely separate desktop-only mechanism)."""
+    return _get_setting("google_oauth_refresh_token")
+
+
+def save_google_oauth_refresh_token(token: str):
+    _set_setting("google_oauth_refresh_token", token)
+
+
+def get_google_drive_folder_id():
+    """Cached id of the "URTO Backups" folder in Mario's real Google Drive,
+    so every backup doesn't have to re-search for it by name."""
+    return _get_setting("google_drive_folder_id")
+
+
+def save_google_drive_folder_id(folder_id: str):
+    _set_setting("google_drive_folder_id", folder_id)
 
 
 def resolve_backup_dirs() -> list:
@@ -512,6 +553,53 @@ def _instant_document_mirror():
             pass
 
 
+def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
+    """Pushes the same files just written to the "Local" destination up to
+    Mario's REAL Google Drive over the API (see google_drive_api.py) —
+    the only way a hosted deployment (no filesystem access to a locally-
+    synced Drive folder, unlike desktop) can reach Google Drive at all.
+    Reuses the bytes already written locally rather than regenerating them
+    a second time. Returns True on success; any failure here must never
+    break the rest of the backup, so this is always called from inside a
+    try/except by the caller."""
+    refresh_token = get_google_oauth_refresh_token()
+    if not refresh_token or not google_drive_api.is_configured():
+        return False
+
+    access_token = google_drive_api.refresh_access_token(refresh_token)
+    folder_id = get_google_drive_folder_id()
+    if not folder_id:
+        folder_id = google_drive_api.find_or_create_folder(access_token, "URTO Backups")
+        save_google_drive_folder_id(folder_id)
+
+    db_bytes = (local_dir / LATEST_NAME).read_bytes()
+    google_drive_api.upload_or_update_file(access_token, LATEST_NAME, db_bytes, "application/x-sqlite3", folder_id)
+
+    json_path = local_dir / "URTO_Full_Data_Export.json"
+    if json_path.exists():
+        google_drive_api.upload_or_update_file(
+            access_token, json_path.name, json_path.read_bytes(), "application/json", folder_id,
+        )
+
+    contacts_dir = local_dir / "CRM Contacts"
+    if contacts_dir.exists():
+        contacts_folder_id = google_drive_api.find_or_create_folder(access_token, "CRM Contacts", folder_id)
+        for txt_file in contacts_dir.glob("*.txt"):
+            google_drive_api.upload_or_update_file(
+                access_token, txt_file.name, txt_file.read_bytes(), "text/plain", contacts_folder_id,
+            )
+
+    if snapshot:
+        snaps = sorted(local_dir.glob("urto_crm_[0-9]*.db"))
+        if snaps:
+            newest = snaps[-1]
+            google_drive_api.upload_or_update_file(
+                access_token, newest.name, newest.read_bytes(), "application/x-sqlite3", folder_id,
+            )
+
+    return True
+
+
 def _write_backup(reason, snapshot: bool, keep=30) -> dict:
     """Copy the live DB to every backup destination (OneDrive/Google
     Drive/Local — see resolve_backup_dirs()). Always refreshes the live
@@ -527,8 +615,11 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
         if not DB_PATH.exists():
             return _last_backup
         results = []
+        local_dir = None
         for dest_info in resolve_backup_dirs():
             backup_dir = dest_info["path"]
+            if dest_info["label"] == "Local":
+                local_dir = backup_dir
             try:
                 mirror = backup_dir / LATEST_NAME
                 shutil.copy2(DB_PATH, mirror)
@@ -563,6 +654,13 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
                 results.append({"label": dest_info["label"], "path": str(dest_path)})
             except Exception:
                 continue
+
+        if local_dir is not None:
+            try:
+                if _google_drive_api_push(local_dir, snapshot):
+                    results.append({"label": "Google Drive (real)", "path": "Google Drive"})
+            except Exception:
+                pass  # a Google API hiccup must never break the rest of the backup
 
         _dirty = False
         _last_backup = {"at": _now().isoformat(timespec="seconds"), "destinations": results, "reason": reason}
@@ -634,6 +732,8 @@ def get_backup_status() -> dict:
         "google_drive_dir": str(gdrive) if gdrive else None,
         "last_backup_at": _last_backup["at"],
         "last_backup_destinations": _last_backup.get("destinations"),
+        "google_drive_api_available": google_drive_api.is_configured(),
+        "google_drive_api_connected": bool(get_google_oauth_refresh_token()),
     }
 
 

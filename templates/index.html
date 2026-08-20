@@ -464,6 +464,10 @@
     border-radius: 6px; padding: 5px 9px; color: var(--text-secondary); font-size: .8rem;
   }
   #gdriveSetupMsg { font-size: .78rem; }
+  #gdriveApiConnectRow {
+    display: none; align-items: center; gap: 8px; width: 100%;
+    padding-top: 8px; border-top: 1px solid rgba(201,162,39,.12); font-size: .8rem;
+  }
 
   /* ---- Owner Lookup: weekly count badge ---- */
   .weekly-count-bar {
@@ -1070,6 +1074,10 @@
       <input type="text" id="gdriveDirInput" placeholder="e.g. C:\Users\Mario\Google Drive">
       <button class="ghost small" id="gdriveDirSaveBtn">Save</button>
       <span id="gdriveSetupMsg"></span>
+    </div>
+    <div id="gdriveApiConnectRow" style="display:none">
+      <span>Connect your real Google Drive so backups reach it instantly, even from your phone with your desktop off:</span>
+      <a href="/admin/google_auth"><button class="ghost small" type="button">Connect Google Drive</button></a>
     </div>
   </div>
 
@@ -2017,6 +2025,7 @@ const gdriveSetupRow = document.getElementById('gdriveSetupRow');
 const gdriveDirInput = document.getElementById('gdriveDirInput');
 const gdriveDirSaveBtn = document.getElementById('gdriveDirSaveBtn');
 const gdriveSetupMsg = document.getElementById('gdriveSetupMsg');
+const gdriveApiConnectRow = document.getElementById('gdriveApiConnectRow');
 
 function formatBackupTime(iso) {
   if (!iso) return 'never';
@@ -2035,10 +2044,12 @@ async function refreshBackupStatus() {
     const chip = (label, on) => `<span class="${on ? 'ok' : 'warn'}">${on ? '●' : '○'} ${label}</span>`;
     backupDestinations.innerHTML = [
       chip('OneDrive', s.onedrive_detected),
-      chip('Google Drive', s.google_drive_detected),
+      chip('Google Drive (local folder)', s.google_drive_detected),
+      s.google_drive_api_available ? chip('Google Drive (real)', s.google_drive_api_connected) : '',
       chip('Local', true),
     ].join('');
     gdriveSetupRow.style.display = s.google_drive_detected ? 'none' : 'flex';
+    gdriveApiConnectRow.style.display = (s.google_drive_api_available && !s.google_drive_api_connected) ? 'flex' : 'none';
   } catch (e) {
     backupStatusText.textContent = 'Backup status unavailable';
   }

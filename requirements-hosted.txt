@@ -7,3 +7,4 @@ flask>=3.0
 gunicorn>=22.0
 pywebpush>=2.0
 tzdata>=2024.1
+requests>=2.31

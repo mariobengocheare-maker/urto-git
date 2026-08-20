@@ -19,6 +19,7 @@ Local testing:
 
 import json
 import os
+import secrets
 import threading
 import time
 from datetime import datetime, timedelta
@@ -28,12 +29,13 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from pywebpush import WebPushException, webpush
 
 import crm
+import google_drive_api
 from crm_routes import crm_bp
 
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.0.0-hosted"
+APP_VERSION = "1.1.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -73,11 +75,13 @@ HOSTED_PASSWORD = os.environ.get("HOSTED_PASSWORD", "")
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "")
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-# "Save the password once" -- Mario explicitly asked not to have to log in
-# every time. A long-lived permanent session (90 days, refreshed on every
-# visit) means he only re-enters the password if he's genuinely inactive
-# for three months straight, not on every relaunch of the Home Screen icon.
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=90)
+# "Save the password once" -- Mario explicitly asked for once a year, not
+# just "a while." A long-lived permanent session, refreshed on every visit
+# (Flask's default SESSION_REFRESH_EACH_REQUEST re-issues the cookie with a
+# fresh expiry on every request), means he only re-enters the password if
+# he's genuinely inactive for a full year straight, not on every relaunch
+# of the Home Screen icon.
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=365)
 
 _AUTH_CONFIGURED = bool(HOSTED_USERNAME and HOSTED_PASSWORD and app.secret_key)
 
@@ -251,6 +255,69 @@ def admin_import_backup_json():
         return jsonify({"error": "That doesn't look like a valid URTO_Full_Data_Export.json file."}), 400
     result = crm.import_full_data_export(data)
     return jsonify(result)
+
+
+# ===================== Real Google Drive backup (OAuth) =====================
+# Render has no filesystem access to a locally-synced Google Drive folder
+# (that's a desktop-only trick -- Google Drive for Desktop). This is the
+# real Google Drive API instead, so a change made from the phone backs up
+# to Mario's actual Google Drive even when his desktop PC is off. One-time
+# consent flow: visiting /admin/google_auth (a normal link, reachable only
+# while logged in like everything else) sends Mario to Google's own
+# consent screen; Google redirects back to the callback below with a code,
+# which gets exchanged for a refresh token and stored (crm.py's
+# app_settings, same pattern as the desktop-only google_drive_dir setting)
+# -- from then on, every backup silently also pushes to Google Drive with
+# no further action from Mario. See CLAUDE.md for the Google Cloud setup
+# steps this required Mario to do once on his end.
+
+def _google_auth_redirect_uri():
+    # Must exactly match the "Authorized redirect URI" configured on the
+    # Google Cloud OAuth client, including scheme -- request.url_root
+    # already reflects Render's own https:// front door correctly.
+    return url_for("google_auth_callback", _external=True)
+
+
+@app.route("/admin/google_auth")
+def google_auth_start():
+    if not google_drive_api.is_configured():
+        return "Google Drive API isn't configured on this server yet (missing GOOGLE_OAUTH_CLIENT_ID/SECRET).", 503
+    state = secrets.token_urlsafe(16)
+    session["google_auth_state"] = state
+    return redirect(google_drive_api.build_auth_url(_google_auth_redirect_uri(), state))
+
+
+@app.route("/admin/google_auth/callback")
+def google_auth_callback():
+    error = request.args.get("error")
+    if error:
+        return f"Google Drive connection was cancelled ({error}). <a href='/'>Back to URTO</a>", 400
+    if request.args.get("state") != session.pop("google_auth_state", None):
+        return "That authorization link expired or was already used. Try connecting again from URTO CRM.", 400
+    code = request.args.get("code")
+    if not code:
+        return "Missing authorization code from Google.", 400
+    try:
+        tokens = google_drive_api.exchange_code(_google_auth_redirect_uri(), code)
+    except Exception as e:
+        return f"Couldn't finish connecting to Google Drive: {e}", 502
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        # Google only hands back a refresh_token on the FIRST consent for a
+        # given account+scope -- if Mario had previously authorized this
+        # exact app without revoking it, a re-auth can come back without
+        # one. prompt=consent (see build_auth_url) is meant to prevent
+        # this, but if it still happens the fix is revoking URTO's access
+        # at https://myaccount.google.com/permissions and trying again.
+        return (
+            "Google didn't return a long-lived connection this time. If you've connected URTO to "
+            "Google Drive before, remove its access at "
+            "<a href='https://myaccount.google.com/permissions' target='_blank'>myaccount.google.com/permissions</a> "
+            "and then try connecting again.",
+            502,
+        )
+    crm.save_google_oauth_refresh_token(refresh_token)
+    return redirect(url_for("index"))
 
 
 if __name__ == "__main__":
