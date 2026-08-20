@@ -35,8 +35,14 @@ def _resolve_data_dir() -> Path:
     Wardrobe app's db.py) — every update (the URTO Updater OR a manual
     ZIP-and-replace) installs into/over the project folder, so real client
     data living inside it was never actually safe from an update wiping it
-    out. Falls back to living alongside this file when there's no
-    LOCALAPPDATA (e.g. this sandbox, non-Windows)."""
+    out. `URTO_DATA_DIR`, when set, wins over everything else — this is how
+    the hosted deployment (hosted_app.py, see CLAUDE.md "Hosted CRM/Dialer")
+    points storage at Render's persistent disk instead of guessing from
+    LOCALAPPDATA, which doesn't exist on a Linux host. Falls back to living
+    alongside this file when neither is set (e.g. this sandbox)."""
+    explicit = os.environ.get("URTO_DATA_DIR")
+    if explicit:
+        return Path(explicit)
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "URTO"
@@ -349,6 +355,71 @@ def _write_full_data_export(backup_dir: Path):
         )
     except OSError:
         pass
+
+
+def _insert_export_rows(conn, table: str, rows: list) -> int:
+    """Inserts rows exactly as exported, using whichever columns are
+    actually present in each row dict (the export is literally `dict(r)`
+    off a `SELECT *`, so the keys always match the real column names —
+    safer than hand-typing a column list here that could silently drift
+    out of sync with the schema)."""
+    if not rows:
+        return 0
+    columns = list(rows[0].keys())
+    placeholders = ", ".join("?" for _ in columns)
+    sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
+    for row in rows:
+        conn.execute(sql, [row.get(c) for c in columns])
+    return len(rows)
+
+
+def import_full_data_export(data: dict) -> dict:
+    """One-time bulk import of the URTO_Full_Data_Export.json backup format
+    (see _write_full_data_export above) into a fresh database — used by the
+    hosted deployment (hosted_app.py) to bring Mario's real existing CRM
+    data over instead of starting empty. Preserves every original row id
+    exactly, since notes/events/contact_list_members/transaction_documents
+    all reference each other by id — remapping ids would mean rewriting
+    every cross-reference in the export. Refuses to run at all if the
+    database already has any clients, so this can only ever seed a
+    genuinely empty database, never silently merge into or duplicate real
+    data that's already there. Insert order respects every foreign key
+    (clients before notes/events, contact_lists before its members,
+    document_types/transactions before transaction_documents)."""
+    conn = get_conn()
+    existing = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+    if existing > 0:
+        conn.close()
+        return {
+            "imported": False,
+            "error": "This database already has clients — import only runs on an empty database, to avoid id collisions or duplicating data.",
+        }
+
+    table_order = [
+        "clients", "notes", "call_log", "contact_lists", "contact_list_members",
+        "events", "document_types", "transactions", "transaction_documents",
+        "lookup_stats", "text_presets",
+    ]
+    counts = {}
+    try:
+        # init_db() auto-seeds document_types with the four default
+        # Transaction Manager checklists (see DEFAULT_DOCUMENT_TYPES) even on
+        # a database with zero clients, so a "genuinely fresh" DB still has
+        # rows here whose ids collide with the exported ones. This import is
+        # a full takeover of a fresh instance, so the seeded placeholders are
+        # exactly what's meant to be replaced by Mario's real (possibly
+        # customized) checklist from the export.
+        conn.execute("DELETE FROM document_types")
+        for table in table_order:
+            counts[table] = _insert_export_rows(conn, table, data.get(table) or [])
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {"imported": False, "error": str(e)}
+    conn.close()
+    on_data_changed("full data import")
+    return {"imported": True, "counts": counts}
 
 
 def _write_code_download_link(backup_dir: Path):
@@ -759,6 +830,19 @@ def init_db():
             value TEXT
         )
     """)
+    # Web Push subscriptions -- only ever written/read by the hosted phone
+    # app (hosted_app.py); the desktop app has no service worker and never
+    # touches this table. Lives here anyway so it rides along with the same
+    # single-file SQLite backup as everything else.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS text_presets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1131,20 +1215,62 @@ def log_call(client_id) -> dict:
     tel: link's call was answered/completed, so 'clicked to call' is the
     same approximation the rest of the Dialer already uses). Every call is
     also appended to call_log (full history), not just the latest
-    timestamp — see list_call_history()."""
+    timestamp — see list_call_history().
+
+    If the client's automatic follow-up was overdue or due today at the
+    moment of the call, this also advances next_followup_date the same way
+    complete_followup() does — this is what makes a client drop off the
+    Dialer's "Missed Follow-ups"/"Today's Follow-ups" sources the instant
+    Mario actually calls them, instead of staying listed until he separately
+    opens the client card and hits "Mark Follow-up Complete"."""
     conn = get_conn()
-    existing = conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,)).fetchone()
-    if not existing:
+    row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row:
         conn.close()
         return None
     now = datetime.now().isoformat(timespec="seconds")
     conn.execute("UPDATE clients SET last_called_at = ? WHERE id = ?", (now, client_id))
     conn.execute("INSERT INTO call_log (client_id, called_at) VALUES (?, ?)", (client_id, now))
+    if row["interval_days"] and row["next_followup_date"]:
+        current_due = date.fromisoformat(row["next_followup_date"])
+        today = date.today()
+        if current_due <= today:
+            # Catch the schedule all the way up to the next date that isn't
+            # itself already in the past -- a single +interval hop (what the
+            # client-detail "Mark Follow-up Complete" button does) isn't
+            # enough here: a client missed for several stacked intervals
+            # would still show up overdue by less than one interval and
+            # never actually leave the Dialer's "Missed Follow-ups" list.
+            # Calling them must always clear the overdue status outright.
+            new_due = current_due
+            while new_due <= today:
+                new_due += timedelta(days=row["interval_days"])
+            conn.execute("UPDATE clients SET next_followup_date = ? WHERE id = ?", (new_due.isoformat(), client_id))
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
     on_data_changed("call logged")
     return client_to_dict(row)
+
+
+def get_missed_followups() -> list:
+    """Automatic follow-ups that are past their due date and still haven't
+    been called — the Dialer's "Missed Follow-ups" source. A client stays
+    listed here, showing the ORIGINAL date it was due, for every day it goes
+    uncalled (next_followup_date only ever moves once log_call() actually
+    fires — see above), sorted oldest-missed-first. Calling a client via the
+    Dialer removes them from this list automatically (log_call() advances
+    their schedule); it is never a separate step."""
+    results = []
+    for c in list_clients():
+        if c["followup_status"] == "overdue":
+            results.append({
+                "client_id": c["id"], "client_name": c["name"],
+                "phone": c["phone"], "address": c["address"],
+                "missed_date": c["next_followup_date"],
+            })
+    results.sort(key=lambda i: i["missed_date"])
+    return results
 
 
 def list_call_history(client_id) -> list:
@@ -2258,3 +2384,30 @@ def delete_text_preset(preset_id: int):
     conn.commit()
     conn.close()
     on_data_changed("text preset removed")
+
+
+def save_push_subscription(endpoint: str, p256dh: str, auth: str):
+    """INSERT OR REPLACE on endpoint (unique) -- re-subscribing the same
+    device (e.g. after the browser rotates its push endpoint) just updates
+    the existing row instead of accumulating stale duplicates."""
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO push_subscriptions (endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?)",
+        (endpoint, p256dh, auth, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_push_subscriptions() -> list:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM push_subscriptions").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def remove_push_subscription(endpoint: str):
+    conn = get_conn()
+    conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+    conn.commit()
+    conn.close()

@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <title>URTO — Ultimate Realtor Tool</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2316233c'/%3E%3Cpath d='M16 6 L27 15 H23 V26 H9 V15 H5 Z' fill='%23d4af37'/%3E%3Crect x='13' y='18' width='6' height='8' fill='%2316233c'/%3E%3C/svg%3E">
+{% if hosted %}
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="URTO">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/static/urto_icon_180.png">
+{% endif %}
 <script type="importmap">
 {
   "imports": {
@@ -908,7 +916,7 @@
 
 </style>
 </head>
-<body class="space-mode">
+<body class="{{ 'space-mode' if not hosted else '' }}">
 
 <div class="space-bg"></div>
 
@@ -927,15 +935,18 @@
 </div>
 
 <div class="tabs">
+  {% if not hosted %}
   <button class="tab-btn active" id="tabHomeBtn">Home</button>
   <button class="tab-btn" id="tabLookupBtn">Owner Lookup</button>
-  <button class="tab-btn" id="tabCrmBtn">URTO CRM</button>
+  {% endif %}
+  <button class="tab-btn {{ 'active' if hosted else '' }}" id="tabCrmBtn">URTO CRM</button>
   <button class="tab-btn" id="tabDialerBtn">URTO Dialer</button>
   <button class="tab-btn" id="tabTxnBtn">Transactions</button>
 </div>
 
 <main>
 
+{% if not hosted %}
 <section id="homeSection">
   <div id="spaceStage"></div>
   <div id="spaceOverlay">
@@ -1036,8 +1047,9 @@
     </div>
   </div>
 </section>
+{% endif %}
 
-<section id="crmSection" style="display:none">
+<section id="crmSection" style="display:{{ 'block' if hosted else 'none' }}">
   <h1>URTO CRM</h1>
   <p class="sub">Manage client relationships and automatic follow-up scheduling.</p>
 
@@ -1124,6 +1136,7 @@
     <button id="dialerSourceCrmBtn">From CRM Clients</button>
     <button id="dialerSourceLookupBtn">From Last Lookup Results</button>
     <button id="dialerSourceTodayBtn">Today's Follow-ups</button>
+    <button id="dialerSourceMissedBtn">Missed Follow-ups</button>
     <button id="dialerSourceListBtn">From Contact List</button>
   </div>
 
@@ -1891,20 +1904,23 @@ function escapeHtml(s) {
 }
 
 /* ===================== Tabs ===================== */
-const tabHomeBtn = document.getElementById('tabHomeBtn');
-const tabLookupBtn = document.getElementById('tabLookupBtn');
+const HOSTED = {{ 'true' if hosted else 'false' }};
 const tabCrmBtn = document.getElementById('tabCrmBtn');
 const tabDialerBtn = document.getElementById('tabDialerBtn');
 const tabTxnBtn = document.getElementById('tabTxnBtn');
-const homeSection = document.getElementById('homeSection');
-const lookupSection = document.getElementById('lookupSection');
+const homeSection = HOSTED ? null : document.getElementById('homeSection');
+const lookupSection = HOSTED ? null : document.getElementById('lookupSection');
 const crmSection = document.getElementById('crmSection');
 const dialerSection = document.getElementById('dialerSection');
 const txnSection = document.getElementById('txnSection');
 
-const TOP_TABS = [
-  { key: 'home', btn: tabHomeBtn, section: homeSection, onShow: null },
-  { key: 'lookup', btn: tabLookupBtn, section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
+const TOP_TABS = HOSTED ? [
+  { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
+  { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
+  { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
+] : [
+  { key: 'home', btn: document.getElementById('tabHomeBtn'), section: homeSection, onShow: null },
+  { key: 'lookup', btn: document.getElementById('tabLookupBtn'), section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
@@ -1916,7 +1932,7 @@ function showTopTab(target) {
     t.btn.classList.toggle('active', active);
     t.section.style.display = active ? 'block' : 'none';
   }
-  const isHome = target.key === 'home';
+  const isHome = !HOSTED && target.key === 'home';
   document.body.classList.toggle('space-mode', isHome);
   if (window.URTO_SPACE) {
     if (isHome) window.URTO_SPACE.start(); else window.URTO_SPACE.stop();
@@ -1936,13 +1952,11 @@ function showTopTabByKey(key) {
   if (target) showTopTab(target);
 }
 
-tabHomeBtn.addEventListener('click', () => showTopTab(TOP_TABS[0]));
-tabLookupBtn.addEventListener('click', () => showTopTab(TOP_TABS[1]));
-tabCrmBtn.addEventListener('click', () => showTopTab(TOP_TABS[2]));
-tabDialerBtn.addEventListener('click', () => showTopTab(TOP_TABS[3]));
-tabTxnBtn.addEventListener('click', () => showTopTab(TOP_TABS[4]));
+for (const t of TOP_TABS) {
+  t.btn.addEventListener('click', () => showTopTab(t));
+}
 
-/* Bridges for the WebGL scene (module script) */
+/* Bridges for the WebGL scene (module script) — hosted mode never loads it */
 window.__urtoEnterSection = (key) => showTopTabByKey(key);
 window.__urtoSpaceFailed = () => {
   // WebGL unavailable: fall back to classic tab navigation.
@@ -1950,7 +1964,7 @@ window.__urtoSpaceFailed = () => {
   showTopTabByKey('lookup');
 };
 setTimeout(() => {
-  if (!window.URTO_SPACE_READY && document.body.classList.contains('space-mode')) {
+  if (!HOSTED && !window.URTO_SPACE_READY && document.body.classList.contains('space-mode')) {
     window.__urtoSpaceFailed();
   }
 }, 5000);
@@ -1963,24 +1977,30 @@ setTimeout(() => {
 // genuinely in use (this happened for real: closing/reloading one tab fired
 // a global shutdown that killed the server out from under a second tab,
 // which then failed with "couldn't reach the server" on its next click).
-const URTO_TAB_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-function sendHeartbeat() {
-  fetch('/api/heartbeat', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tab_id: URTO_TAB_ID }),
-  }).catch(() => {});
+// The desktop app auto-closes itself when no tab is open (see app.py); the
+// hosted deployment is a real always-on server that must never self-exit
+// just because your phone's browser tab closed, so none of this heartbeat/
+// shutdown machinery applies there.
+if (!HOSTED) {
+  const URTO_TAB_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  const sendHeartbeat = () => {
+    fetch('/api/heartbeat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tab_id: URTO_TAB_ID }),
+    }).catch(() => {});
+  };
+  // Fire one immediately on load, not just on the first 5s interval tick — a
+  // freshly-opened tab (e.g. right after the URTO Updater launches a new one)
+  // needs to register itself in _active_tabs FAST. Mario hit the race this
+  // closes: he closed the old tab the instant the new one opened, before its
+  // first heartbeat had gone out, so the server briefly saw zero active tabs
+  // and shut itself down on the tab he was about to use.
+  sendHeartbeat();
+  setInterval(sendHeartbeat, 5000);
+  window.addEventListener('pagehide', () => {
+    navigator.sendBeacon('/api/shutdown', new Blob([JSON.stringify({ tab_id: URTO_TAB_ID })], { type: 'application/json' }));
+  });
 }
-// Fire one immediately on load, not just on the first 5s interval tick — a
-// freshly-opened tab (e.g. right after the URTO Updater launches a new one)
-// needs to register itself in _active_tabs FAST. Mario hit the race this
-// closes: he closed the old tab the instant the new one opened, before its
-// first heartbeat had gone out, so the server briefly saw zero active tabs
-// and shut itself down on the tab he was about to use.
-sendHeartbeat();
-setInterval(sendHeartbeat, 5000);
-window.addEventListener('pagehide', () => {
-  navigator.sendBeacon('/api/shutdown', new Blob([JSON.stringify({ tab_id: URTO_TAB_ID })], { type: 'application/json' }));
-});
 
 const backupStatusText = document.getElementById('backupStatusText');
 const backupDestinations = document.getElementById('backupDestinations');
@@ -3548,6 +3568,7 @@ const dialerListEl = document.getElementById('dialerListEl');
 const dialerAddCrmBtn = document.getElementById('dialerAddCrmBtn');
 
 const dialerSourceTodayBtn = document.getElementById('dialerSourceTodayBtn');
+const dialerSourceMissedBtn = document.getElementById('dialerSourceMissedBtn');
 const dialerSourceListBtn = document.getElementById('dialerSourceListBtn');
 const dialerListBox = document.getElementById('dialerListBox');
 const dialerListSelect = document.getElementById('dialerListSelect');
@@ -3556,7 +3577,7 @@ const dialerListDueHint = document.getElementById('dialerListDueHint');
 let dialerContactLists = [];
 let dialerCurrentListId = null;
 
-const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn, dialerSourceTodayBtn, dialerSourceListBtn];
+const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn, dialerSourceTodayBtn, dialerSourceMissedBtn, dialerSourceListBtn];
 function setDialerSourceActive(btn) {
   for (const b of DIALER_SOURCE_BTNS) b.classList.toggle('active', b === btn);
   dialerPasteBox.style.display = btn === dialerSourcePasteBtn ? 'block' : 'none';
@@ -3615,6 +3636,26 @@ dialerSourceTodayBtn.addEventListener('click', async () => {
   loadDialerList(withPhones.map(i => ({
     name: i.client_name || i.title, phone: i.phone, clientId: i.client_id,
     meta: [i.time ? formatTime12(i.time) : '', i.title, i.status === 'overdue' ? 'OVERDUE' : ''].filter(Boolean).join(' · '),
+  })));
+});
+
+function formatMissedDate(iso) {
+  if (!iso) return '';
+  return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+dialerSourceMissedBtn.addEventListener('click', async () => {
+  setDialerSourceActive(dialerSourceMissedBtn);
+  const res = await fetch('/api/crm/followups/missed');
+  const items = res.ok ? await res.json() : [];
+  const withPhones = items.filter(i => i.phone && i.phone.trim());
+  if (withPhones.length === 0) {
+    alert('No missed follow-ups with a phone number on file — nice, you\'re caught up.');
+    return;
+  }
+  loadDialerList(withPhones.map(i => ({
+    name: i.client_name, phone: i.phone, clientId: i.client_id,
+    meta: [i.address, `MISSED — was due ${formatMissedDate(i.missed_date)}`].filter(Boolean).join(' · '),
   })));
 });
 
@@ -4756,7 +4797,12 @@ txnNewDocName.addEventListener('keydown', (e) => {
 
 </script>
 
+{% if not hosted %}
 <script type="module" src="/static/urto-space.js"></script>
+{% endif %}
+{% if hosted %}
+<script src="/static/hosted-app.js"></script>
+{% endif %}
 
 </body>
 </html>
