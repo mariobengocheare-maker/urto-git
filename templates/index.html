@@ -1741,8 +1741,10 @@
 </div>
 
 <script>
+let jobId = null; // referenced by the Dialer's "From Last Lookup Results" source even in hosted mode, so this stays outside the not-hosted guard below -- everything else on this page is Owner Lookup-only and doesn't exist in hosted mode's markup at all.
+
+{% if not hosted %}
 let selectedFile = null;
-let jobId = null;
 let pollTimer = null;
 
 const dropzone = document.getElementById('dropzone');
@@ -1899,6 +1901,7 @@ function renderRows(rows) {
     resultsBody.appendChild(tr);
   }
 }
+{% endif %}
 
 function escapeHtml(s) {
   const div = document.createElement('div');
