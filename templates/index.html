@@ -827,6 +827,8 @@
   .dialer-list-row:hover { background: var(--bg); }
   .dialer-list-row.current { background: var(--warn-bg); font-weight: 700; }
   .dialer-empty { color: var(--text-secondary); font-size: .9rem; text-align: center; padding: 30px; }
+  #dialerNoPhoneNote { padding: 12px 16px; }
+  .dialer-no-phone-link { color: var(--gold-bright); text-decoration: underline; cursor: pointer; }
 
   /* ---- Space home (WebGL) ---- */
   body.space-mode { overflow: hidden; background: #04060d; }
@@ -1166,6 +1168,7 @@
   </div>
 
   <div id="dialerEmpty" class="dialer-empty">No list loaded yet.</div>
+  <div id="dialerNoPhoneNote" class="dialer-empty" style="display:none; color:var(--gold); text-align:left"></div>
 
   <div id="dialerCardWrap" style="display:none">
     <div class="dialer-card">
@@ -3559,6 +3562,7 @@ const dialerSourceCrmBtn = document.getElementById('dialerSourceCrmBtn');
 const dialerSourceLookupBtn = document.getElementById('dialerSourceLookupBtn');
 const dialerPasteBox = document.getElementById('dialerPasteBox');
 const dialerEmpty = document.getElementById('dialerEmpty');
+const dialerNoPhoneNote = document.getElementById('dialerNoPhoneNote');
 const dialerCardWrap = document.getElementById('dialerCardWrap');
 const dialerProgress = document.getElementById('dialerProgress');
 const dialerNameEl = document.getElementById('dialerName');
@@ -3582,6 +3586,8 @@ function setDialerSourceActive(btn) {
   for (const b of DIALER_SOURCE_BTNS) b.classList.toggle('active', b === btn);
   dialerPasteBox.style.display = btn === dialerSourcePasteBtn ? 'block' : 'none';
   dialerListBox.style.display = btn === dialerSourceListBtn ? 'block' : 'none';
+  dialerNoPhoneNote.style.display = 'none';
+  dialerNoPhoneNote.innerHTML = '';
 }
 
 dialerSourcePasteBtn.addEventListener('click', () => setDialerSourceActive(dialerSourcePasteBtn));
@@ -3649,8 +3655,24 @@ dialerSourceMissedBtn.addEventListener('click', async () => {
   const res = await fetch('/api/crm/followups/missed');
   const items = res.ok ? await res.json() : [];
   const withPhones = items.filter(i => i.phone && i.phone.trim());
+  const noPhone = items.filter(i => !i.phone || !i.phone.trim());
+
+  // Missed clients with no phone on file can't be dialed, but they must never
+  // just silently vanish from this list -- that's exactly what happened
+  // before this note existed (Mario spotted a client overdue on the Calendar
+  // that wasn't showing up here). Surface them separately, click-through to
+  // their client card so a phone number can be added.
+  if (noPhone.length > 0) {
+    dialerNoPhoneNote.innerHTML = `⚠ ${noPhone.length} more missed follow-up${noPhone.length > 1 ? 's have' : ' has'} no phone number on file, so ${noPhone.length > 1 ? "they can't" : "it can't"} be dialed from here — add a number to call: ` +
+      noPhone.map(i => `<a href="#" class="dialer-no-phone-link" data-id="${i.client_id}">${escapeHtml(i.client_name)} (was due ${formatMissedDate(i.missed_date)})</a>`).join(', ');
+    dialerNoPhoneNote.style.display = 'block';
+    dialerNoPhoneNote.querySelectorAll('.dialer-no-phone-link').forEach(a => {
+      a.addEventListener('click', (e) => { e.preventDefault(); openClientDetail(Number(a.getAttribute('data-id'))); });
+    });
+  }
+
   if (withPhones.length === 0) {
-    alert('No missed follow-ups with a phone number on file — nice, you\'re caught up.');
+    if (noPhone.length === 0) alert('No missed follow-ups — nice, you\'re caught up.');
     return;
   }
   loadDialerList(withPhones.map(i => ({
