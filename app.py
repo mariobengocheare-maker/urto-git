@@ -21,23 +21,81 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from flask import Flask, abort, jsonify, render_template, request, send_file
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_file, url_for
 from playwright.sync_api import sync_playwright
 
 import crm
-from crm_routes import crm_bp
+import hosted_sync
 from input_parser import OUTPUT_FIELDS, build_output_row, load_rows
 from lookup_engine import FOREWARN_SEARCH_URL, process_row
 
 app = Flask(__name__)
-app.register_blueprint(crm_bp)
+
+# ===================== "One cloud" — hosted sync =====================
+# Every CRM/Dialer/Transactions/Calendar route is forwarded to the same
+# hosted database the phone app uses (see hosted_sync.py) instead of being
+# handled locally — there is only ever one real copy of the data. Skip
+# Trace/Owner Lookup routes below are unaffected (they're desktop-only,
+# can't run on a server, and aren't registered through this proxy).
+
+
+def _hosted_proxy_view(subpath=""):
+    prefix = request.url_rule.rule.split("/<path:subpath>")[0].rstrip("/")
+    full_path = f"{prefix}/{subpath}" if subpath else prefix
+    body, status, headers = hosted_sync.proxy_request(request, full_path)
+    return Response(body, status=status, headers=headers)
+
+
+for _prefix in hosted_sync.PROXY_PREFIXES:
+    app.add_url_rule(_prefix, endpoint=f"proxy{_prefix}", view_func=_hosted_proxy_view,
+                      methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    app.add_url_rule(f"{_prefix}/<path:subpath>", endpoint=f"proxy{_prefix}_sub", view_func=_hosted_proxy_view,
+                      methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+
+
+@app.route("/hosted_setup", methods=["GET", "POST"])
+def hosted_setup():
+    existing = hosted_sync.load_config() or {}
+    error = None
+    if request.method == "POST":
+        base_url = request.form.get("base_url", "").strip()
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        error = hosted_sync.test_login(base_url, username, password)
+        if not error:
+            hosted_sync.save_config(base_url, username, password)
+            return redirect(url_for("index"))
+    return render_template(
+        "hosted_setup.html", error=error,
+        base_url=request.form.get("base_url", existing.get("base_url", "")),
+        username=request.form.get("username", existing.get("username", "")),
+        already_configured=bool(existing),
+    )
+
+
+_UNGATED_ENDPOINTS = {"hosted_setup", "static", "heartbeat", "shutdown", "api_version"}
+
+
+@app.before_request
+def _require_hosted_setup():
+    # Every page needs URTO Cloud connected before it's useful (CRM/Dialer/
+    # Transactions all proxy there now) -- force the one-time setup form
+    # first rather than letting Mario land on a broken-looking CRM tab.
+    # Skip Trace's own infrastructure routes (heartbeat/shutdown/version)
+    # are desktop-only plumbing unrelated to hosted sync and must keep
+    # working regardless of setup status.
+    if request.endpoint in _UNGATED_ENDPOINTS or (request.endpoint or "").startswith("proxy"):
+        return None
+    if not hosted_sync.is_configured():
+        return redirect(url_for("hosted_setup"))
+    return None
 
 # Bump this by hand whenever a change is shipped, so Mario can tell at a
 # glance (bottom of every page) which build he's actually running. The DATE
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "1.9.0"
+APP_VERSION = "2.0.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 

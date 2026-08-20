@@ -1270,6 +1270,7 @@
 
 <footer class="site-footer">
   URTO — Ultimate Realtor Tool · Created by Mario Bengochea · v{{ app_version }} (updated {{ app_version_date }})
+  {% if not hosted %} · <a href="/hosted_setup" style="color:var(--text-secondary)">Sync Settings</a>{% endif %}
 </footer>
 
 <!-- Restore from Backup modal -->
