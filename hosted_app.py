@@ -83,7 +83,14 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 # of the Home Screen icon.
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=365)
 
-_AUTH_CONFIGURED = bool(HOSTED_USERNAME and HOSTED_PASSWORD and app.secret_key)
+_MISSING_AUTH_VARS = [
+    name for name, val in (
+        ("HOSTED_USERNAME", HOSTED_USERNAME),
+        ("HOSTED_PASSWORD", HOSTED_PASSWORD),
+        ("FLASK_SECRET_KEY", app.secret_key),
+    ) if not val
+]
+_AUTH_CONFIGURED = not _MISSING_AUTH_VARS
 
 # Routes reachable without a session -- just the login page itself and the
 # handful of static PWA files a not-yet-logged-in browser/service worker
@@ -96,7 +103,7 @@ def _require_auth():
     if not _AUTH_CONFIGURED:
         # Fail closed: if the env vars weren't set, refuse everything rather
         # than accidentally serving real client data with no password at all.
-        return "Server isn't configured yet (missing HOSTED_USERNAME/HOSTED_PASSWORD/FLASK_SECRET_KEY).", 503
+        return f"Server isn't configured yet (missing {', '.join(_MISSING_AUTH_VARS)}).", 503
     if request.endpoint in _PUBLIC_ENDPOINTS:
         return None
     if not session.get("authed"):
