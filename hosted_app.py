@@ -35,7 +35,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.7.0-hosted"
+APP_VERSION = "1.8.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -269,13 +269,7 @@ def notification_settings_set():
 
 @app.route("/api/notifications/briefing_text")
 def notification_briefing_text():
-    # "text" is the flat sentence (kept for the Shortcuts automation and
-    # any other plain-text consumer); "before"/"name"/"name_lang"/"after"
-    # (see build order #79) let the in-app player route the surname
-    # through a real Spanish voice instead of guessing at an English
-    # phonetic respelling.
-    parts = crm.get_morning_briefing_parts()
-    return jsonify({**parts, "text": crm.get_morning_briefing_text()})
+    return jsonify({"text": crm.get_morning_briefing_text()})
 
 
 # ===================== Unattended "talking alarm" (iOS Shortcuts) =====================
@@ -303,10 +297,9 @@ def notification_briefing_token_regenerate():
 def notification_briefing_public():
     if not secrets.compare_digest(request.args.get("token", ""), crm.get_briefing_token()):
         return jsonify({"error": "Invalid or missing token"}), 403
-    # Keep this to just "text" -- Shortcuts' "Get Dictionary Value" step is
-    # already configured against that one key on Mario's real automation
-    # (see build order #76); the split-voice fields are for the in-app
-    # player only, which always uses the session-authed route above.
+    # Shortcuts' "Get Dictionary Value" step is configured against this
+    # exact "text" key on Mario's real automation (see build order #76) --
+    # keep the response shape stable.
     return jsonify({"text": crm.get_morning_briefing_text()})
 
 

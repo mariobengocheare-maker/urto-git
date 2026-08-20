@@ -116,21 +116,6 @@
     return anyEn || voices[0];
   }
 
-  // A Spanish name read by an English voice, even with a hyphenated
-  // phonetic respelling, was confirmed NOT reliably correct across real
-  // device voices (the Web Speech API takes plain text only -- no SSML/
-  // phoneme markup -- so different engines interpret an invented spelling
-  // differently). Routing just the surname through an actual Spanish
-  // voice sidesteps that entirely, since it's a real Spanish/Basque name
-  // read natively correctly (see build order #79).
-  function pickVoiceForLang(voices, lang) {
-    if (!lang) return null;
-    const exact = voices.find((v) => v.lang === lang);
-    if (exact) return exact;
-    const prefix = lang.slice(0, 2).toLowerCase();
-    return voices.find((v) => v.lang && v.lang.toLowerCase().startsWith(prefix)) || null;
-  }
-
   function getVoicesAsync() {
     return new Promise((resolve) => {
       const voices = speechSynthesis.getVoices();
@@ -138,14 +123,6 @@
       speechSynthesis.onvoiceschanged = () => resolve(speechSynthesis.getVoices());
       setTimeout(() => resolve(speechSynthesis.getVoices()), 1000);
     });
-  }
-
-  function speakPart(text, voice, rate) {
-    if (!text) return;
-    const utter = new SpeechSynthesisUtterance(text);
-    if (voice) utter.voice = voice;
-    utter.rate = rate || 0.98;
-    speechSynthesis.speak(utter);
   }
 
   async function maybeSpeakMorningBriefing() {
@@ -161,22 +138,11 @@
       const data = await res.json();
       if (!data.text) return;
       const voices = await getVoicesAsync();
-      const englishVoice = pickBestVoice(voices);
-      const spanishVoice = pickVoiceForLang(voices, data.name_lang);
-
-      if (data.before && data.name && data.after && spanishVoice) {
-        // speechSynthesis.speak() queues utterances -- calling it several
-        // times in a row plays them back-to-back in order, so this reads
-        // as one continuous sentence with the surname correctly voiced.
-        speakPart(data.before, englishVoice);
-        speakPart(data.name, spanishVoice, 0.85);
-        speakPart(data.after, englishVoice);
-      } else {
-        // No Spanish voice available on this device (rare on iOS, but
-        // possible) -- fall back to the plain flat sentence in English
-        // rather than not speaking at all.
-        speakPart(data.text, englishVoice);
-      }
+      const utter = new SpeechSynthesisUtterance(data.text);
+      const voice = pickBestVoice(voices);
+      if (voice) utter.voice = voice;
+      utter.rate = 0.98;
+      speechSynthesis.speak(utter);
     } catch (e) {
       // A failed briefing fetch/speak should never block the app loading.
     }

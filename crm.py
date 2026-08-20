@@ -2107,21 +2107,17 @@ def _ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
-def get_morning_briefing_parts() -> dict:
-    """Composes the spoken morning briefing (see build order #75), split
-    around the surname so the client can speak it through a real SPANISH
-    voice while the rest plays through the normal English one (see build
-    order #79). A hyphenated English phonetic respelling ("Ben-GO-cheh-ah")
-    was tried first and confirmed NOT reliable -- real device voices still
-    got it wrong, since the Web Speech API takes plain text only (no SSML/
-    phoneme markup) and different engines apply English letter-to-sound
-    rules to an invented spelling in different, unpredictable ways. Almost
-    every iOS device ships at least one built-in Spanish voice for free
-    (no download needed), and a Spanish voice reads "Bengochea" correctly
-    natively since it's a real Spanish/Basque name -- that sidesteps
-    guessing at a respelling entirely. `name` is deliberately the correctly
-    spelled name, not a respelling -- respelling only made sense when the
-    fallback was an English voice."""
+def get_morning_briefing_text() -> str:
+    """Composes the spoken morning briefing (see build order #75) -- read
+    aloud client-side via the browser's own text-to-speech the instant
+    Mario opens the app from the morning push notification. Plain English,
+    first name only ("Mario," not "Mr. Bengochea") -- both the hyphenated
+    phonetic respelling (build order #75) and routing the surname through
+    a real Spanish voice (build order #79) were tried and neither reliably
+    pronounced it right across Mario's actual devices/voices, so per his
+    explicit ask this drops the surname entirely rather than keep guessing.
+    States time, then day, then month/date, then the follow-up/meeting
+    counts, in that exact order (Mario's explicit ordering request)."""
     todays = get_today_followups()
     count = len(todays)
 
@@ -2129,6 +2125,7 @@ def get_morning_briefing_parts() -> dict:
     meetings.sort(key=lambda i: i["time"])
 
     now = _now()
+    time_part = _format_time_spoken(now.strftime("%H:%M"))
     date_part = f"{now.strftime('%A')}, {now.strftime('%B')} {_ordinal(now.day)}"
 
     if count == 0:
@@ -2150,21 +2147,7 @@ def get_morning_briefing_parts() -> dict:
         else:
             meeting_part = ", and meetings " + "; and ".join(phrases)
 
-    return {
-        "before": "Good morning, Mr.",
-        "name": "Bengochea",
-        "name_lang": "es-ES",
-        "after": f". It's {date_part}. Today, {followup_part}{meeting_part}.",
-    }
-
-
-def get_morning_briefing_text() -> str:
-    """Flat-string convenience over get_morning_briefing_parts() -- used
-    wherever the split-voice playback doesn't apply (e.g. a plain-text
-    consumer). Client-side voice playback should call the parts version
-    instead so the surname can be routed through a Spanish voice."""
-    p = get_morning_briefing_parts()
-    return f"{p['before']} {p['name']}{p['after']}"
+    return f"Good morning, Mario. It's {time_part}, {date_part}. Today, {followup_part}{meeting_part}."
 
 
 def get_calendar_events(year: int, month: int) -> list:
