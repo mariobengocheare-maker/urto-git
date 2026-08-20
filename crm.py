@@ -2107,26 +2107,21 @@ def _ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
-# Free browser TTS engines (including iOS's built-in voices) default to
-# English pronunciation rules on an unfamiliar surname and reliably get
-# "Bengochea" wrong -- Mario confirmed the real pronunciation is
-# "Ben-GO-CHE-Ah". The Web Speech API doesn't support SSML/phoneme markup
-# (plain text only), so the standard portable fix is a phonetic respelling
-# with hyphens, which nudges the engine to read it syllable-by-syllable
-# instead of applying English spelling rules to the whole word at once.
-# This is spoken-text only -- never used anywhere the name is displayed.
-_SPOKEN_LAST_NAME = "Ben-GO-cheh-ah"
-
-
-def get_morning_briefing_text() -> str:
-    """Composes the spoken morning briefing (see build order #75) -- read
-    aloud client-side via the browser's own text-to-speech the instant
-    Mario opens the app from the morning push notification. Deliberately
-    plain prose, not SSML/markup: the free browser voices this targets
-    don't reliably support SSML, and a plain sentence reads naturally on
-    its own. Always states the day/date first, then the follow-up/meeting
-    counts (Mario's explicit ordering request) -- one unified template
-    covers both a quiet day (0 follow-ups, 0 meetings) and a busy one."""
+def get_morning_briefing_parts() -> dict:
+    """Composes the spoken morning briefing (see build order #75), split
+    around the surname so the client can speak it through a real SPANISH
+    voice while the rest plays through the normal English one (see build
+    order #79). A hyphenated English phonetic respelling ("Ben-GO-cheh-ah")
+    was tried first and confirmed NOT reliable -- real device voices still
+    got it wrong, since the Web Speech API takes plain text only (no SSML/
+    phoneme markup) and different engines apply English letter-to-sound
+    rules to an invented spelling in different, unpredictable ways. Almost
+    every iOS device ships at least one built-in Spanish voice for free
+    (no download needed), and a Spanish voice reads "Bengochea" correctly
+    natively since it's a real Spanish/Basque name -- that sidesteps
+    guessing at a respelling entirely. `name` is deliberately the correctly
+    spelled name, not a respelling -- respelling only made sense when the
+    fallback was an English voice."""
     todays = get_today_followups()
     count = len(todays)
 
@@ -2155,7 +2150,21 @@ def get_morning_briefing_text() -> str:
         else:
             meeting_part = ", and meetings " + "; and ".join(phrases)
 
-    return f"Good morning, Mr. {_SPOKEN_LAST_NAME}. It's {date_part}. Today, {followup_part}{meeting_part}."
+    return {
+        "before": "Good morning, Mr.",
+        "name": "Bengochea",
+        "name_lang": "es-ES",
+        "after": f". It's {date_part}. Today, {followup_part}{meeting_part}.",
+    }
+
+
+def get_morning_briefing_text() -> str:
+    """Flat-string convenience over get_morning_briefing_parts() -- used
+    wherever the split-voice playback doesn't apply (e.g. a plain-text
+    consumer). Client-side voice playback should call the parts version
+    instead so the surname can be routed through a Spanish voice."""
+    p = get_morning_briefing_parts()
+    return f"{p['before']} {p['name']}{p['after']}"
 
 
 def get_calendar_events(year: int, month: int) -> list:
