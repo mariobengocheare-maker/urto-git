@@ -36,7 +36,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.11.3-hosted"
+APP_VERSION = "1.11.4-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -175,7 +175,20 @@ def service_worker():
 
 VAPID_PRIVATE_KEY_PEM = os.environ.get("VAPID_PRIVATE_KEY_PEM", "")
 VAPID_PUBLIC_KEY_B64 = os.environ.get("VAPID_PUBLIC_KEY_B64", "")
-VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:mariobengochea@gmail.com")
+
+# os.environ.get(key, default) only falls back to `default` when the key is
+# completely absent -- an env var that EXISTS but is set to an empty string
+# (e.g. left blank in Render's Blueprint setup wizard) still wins, silently
+# producing "" here instead of the intended default. That's exactly what
+# happened live: py_vapid's _check_sub() rejected the blank "sub" claim on
+# every single push attempt with "Missing 'sub' from claims." Normalizing
+# here (treat blank as unset, auto-add a missing "mailto:" prefix if Mario
+# ever pastes just the bare address) makes this robust regardless of
+# exactly what ends up in the env var.
+_raw_claim_email = (os.environ.get("VAPID_CLAIM_EMAIL") or "").strip()
+if _raw_claim_email and not _raw_claim_email.lower().startswith("mailto:"):
+    _raw_claim_email = f"mailto:{_raw_claim_email}"
+VAPID_CLAIM_EMAIL = _raw_claim_email or "mailto:mariobengocheare@gmail.com"
 
 
 @app.route("/api/push/vapid_public_key")
