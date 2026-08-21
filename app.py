@@ -95,7 +95,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.7.1"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -319,7 +319,20 @@ def run_job_safe(job_id, rows):
 
 @app.route("/")
 def index():
-    return render_template("index.html", app_version=APP_VERSION, app_version_date=_get_last_updated_display())
+    # /admin/google_auth and /admin/microsoft_auth only exist on the HOSTED
+    # server (hosted_app.py) -- they're not among hosted_sync's proxied
+    # prefixes, so a plain relative link to them from desktop's own page
+    # resolves against 127.0.0.1:5000 and 404s there (hit for real: Mario
+    # clicked "Connect Microsoft (Teams)" from the desktop app and got a
+    # 404). Passing the real hosted base_url lets the template build an
+    # absolute link on desktop while staying a normal relative link on the
+    # hosted deployment itself (see templates/index.html).
+    config = hosted_sync.load_config()
+    hosted_base_url = config["base_url"] if config else ""
+    return render_template(
+        "index.html", app_version=APP_VERSION, app_version_date=_get_last_updated_display(),
+        hosted_base_url=hosted_base_url,
+    )
 
 
 @app.route("/api/version")

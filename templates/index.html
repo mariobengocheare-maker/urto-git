@@ -1149,7 +1149,7 @@
     {% endif %}
     <div id="gdriveApiConnectRow" style="display:none">
       <span>Connect your real Google Drive so backups reach it instantly, even from your phone with your desktop off:</span>
-      <a href="/admin/google_auth"><button class="ghost small" type="button">Connect Google Drive</button></a>
+      <a href="{{ hosted_base_url|default('', true) }}/admin/google_auth"><button class="ghost small" type="button">Connect Google Drive</button></a>
     </div>
   </div>
 
@@ -1182,10 +1182,10 @@
       <span>Virtual meetings:</span>
       <span class="backup-bar-destinations" id="meetingProvidersStatus"></span>
       <div id="connectGoogleMeetRow" style="display:none">
-        <a href="/admin/google_auth"><button class="ghost small" type="button">Connect Google (Meet)</button></a>
+        <a href="{{ hosted_base_url|default('', true) }}/admin/google_auth"><button class="ghost small" type="button">Connect Google (Meet)</button></a>
       </div>
       <div id="connectTeamsRow" style="display:none">
-        <a href="/admin/microsoft_auth"><button class="ghost small" type="button">Connect Microsoft (Teams)</button></a>
+        <a href="{{ hosted_base_url|default('', true) }}/admin/microsoft_auth"><button class="ghost small" type="button">Connect Microsoft (Teams)</button></a>
       </div>
     </div>
     <div class="card">
