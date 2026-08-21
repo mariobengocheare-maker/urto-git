@@ -1,18 +1,27 @@
 """
-Real Google Drive API access for the HOSTED deployment only. Render has no
-filesystem access to a locally-synced Google Drive folder the way desktop
-does (that's Google Drive for Desktop, a Windows app), so "instant Google
-Drive backup" for changes made from the phone needs the real API instead.
+Real Google API access for the HOSTED deployment only.
+
+Two unrelated uses share this one OAuth connection:
+  1. Google Drive backup (drive.file scope) -- Render has no filesystem
+     access to a locally-synced Google Drive folder the way desktop does
+     (that's Google Drive for Desktop, a Windows app), so "instant Google
+     Drive backup" for changes made from the phone needs the real API.
+  2. Google Calendar event creation with a Meet link (calendar.events
+     scope), for URTO's Virtual Meeting feature (see build order #89) --
+     creating an event with conferenceData gets a real Meet link back, and
+     adding the client as an attendee makes Google send them the invite
+     email automatically, no separate email-sending code needed.
 
 Deliberately implemented with plain `requests` calls to Google's REST
 endpoints rather than the official google-api-python-client SDK — the
-actual surface used here (OAuth token exchange/refresh, list/create/update
-a handful of files) is small, and this keeps requirements-hosted.txt free
-of a large dependency tree for something this narrow.
+actual surface used here is small, and this keeps requirements-hosted.txt
+free of a large dependency tree.
 
-Scope used is drive.file (not full Drive access) — the app can only see/
-touch files IT created, which is the least-privilege choice for a backup
-writer and keeps the OAuth consent screen simple.
+Both scopes are requested together in ONE consent flow/refresh token --
+asking Mario to connect Google twice (once per scope) would be needless
+friction. Each scope is still least-privilege for what it's used for:
+drive.file only sees files this app created; calendar.events only touches
+events, never the rest of Calendar settings/other calendars.
 """
 
 import io
@@ -24,7 +33,8 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
-SCOPE = "https://www.googleapis.com/auth/drive.file"
+CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/calendar.events"
 
 CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
@@ -133,5 +143,41 @@ def upload_or_update_file(access_token: str, name: str, content: bytes, mimetype
             headers={**_headers(access_token), "Content-Type": f"multipart/related; boundary={boundary}"},
             data=body, timeout=60,
         )
+    res.raise_for_status()
+    return res.json()
+
+
+def create_meet_event(access_token: str, summary: str, start_iso: str, end_iso: str, timezone: str,
+                       attendee_email: str = None, description: str = "") -> dict:
+    """Creates a real event on Mario's primary Google Calendar with a Google
+    Meet link attached, and (if attendee_email is given) invites the
+    client -- Google sends that invite email automatically once the event
+    is created with an attendee, so no separate email-sending code is
+    needed here. Returns the raw Calendar API event dict; the Meet link is
+    at event["hangoutLink"] (also present as one of the entryPoints in
+    event["conferenceData"])."""
+    body = {
+        "summary": summary,
+        "description": description,
+        "start": {"dateTime": start_iso, "timeZone": timezone},
+        "end": {"dateTime": end_iso, "timeZone": timezone},
+        "conferenceData": {
+            "createRequest": {
+                # Must be unique per request -- Google uses it to dedupe
+                # retries, not as a real identifier we need to remember.
+                "requestId": f"urto-{os.urandom(8).hex()}",
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        },
+    }
+    if attendee_email:
+        body["attendees"] = [{"email": attendee_email}]
+    res = requests.post(
+        f"{CALENDAR_API}/calendars/primary/events",
+        headers=_headers(access_token),
+        params={"conferenceDataVersion": 1, "sendUpdates": "all"},
+        json=body,
+        timeout=20,
+    )
     res.raise_for_status()
     return res.json()

@@ -38,6 +38,7 @@ def crm_create_client():
             custom_unit=data.get("custom_unit"),
             list_ids=data.get("list_ids"),
             start_date=(data.get("start_date") or "").strip() or None,
+            email=(data.get("email") or "").strip() or None,
         )
     except crm.DuplicatePhoneError as e:
         return jsonify({"error": str(e)}), 409
@@ -73,6 +74,7 @@ def crm_update_client(client_id):
             custom_amount=data.get("custom_amount"),
             custom_unit=data.get("custom_unit"),
             list_ids=data.get("list_ids"),
+            email=(data.get("email") or "").strip() or None,
         )
     except crm.DuplicatePhoneError as e:
         return jsonify({"error": str(e)}), 409
@@ -301,11 +303,20 @@ def crm_create_event():
     list_id = data.get("list_id") or None
     if list_id and not crm.get_contact_list(list_id):
         return jsonify({"error": "Contact list not found"}), 404
-    event = crm.create_event(
-        client_id=client_id, list_id=list_id, title=title, date_str=date_str,
-        time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
-        address=(data.get("address") or "").strip(),
-    )
+    try:
+        event = crm.create_event(
+            client_id=client_id, list_id=list_id, title=title, date_str=date_str,
+            time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
+            address=(data.get("address") or "").strip(),
+            meeting_type=(data.get("meeting_type") or "physical").strip(),
+            meeting_provider=(data.get("meeting_provider") or "").strip() or None,
+            attendee_email=(data.get("attendee_email") or "").strip() or None,
+        )
+    except RuntimeError as e:
+        # create_virtual_meeting() raises this for anything meeting-
+        # creation-specific (not connected, a real provider API failure)
+        # -- nothing was written, so this is safe to just report back.
+        return jsonify({"error": str(e)}), 502
     return jsonify(event)
 
 
@@ -322,11 +333,17 @@ def crm_update_event(event_id):
     list_id = data.get("list_id") or None
     if list_id and not crm.get_contact_list(list_id):
         return jsonify({"error": "Contact list not found"}), 404
-    event = crm.update_event(
-        event_id, client_id=client_id, list_id=list_id, title=title, date_str=date_str,
-        time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
-        address=(data.get("address") or "").strip(),
-    )
+    try:
+        event = crm.update_event(
+            event_id, client_id=client_id, list_id=list_id, title=title, date_str=date_str,
+            time_str=(data.get("time") or "").strip(), notes=(data.get("notes") or "").strip(),
+            address=(data.get("address") or "").strip(),
+            meeting_type=(data.get("meeting_type") or "physical").strip(),
+            meeting_provider=(data.get("meeting_provider") or "").strip() or None,
+            attendee_email=(data.get("attendee_email") or "").strip() or None,
+        )
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 502
     if not event:
         abort(404)
     return jsonify(event)
@@ -351,6 +368,11 @@ def crm_followups_missed():
 @crm_bp.route("/api/backup/status")
 def backup_status():
     return jsonify(crm.get_backup_status())
+
+
+@crm_bp.route("/api/crm/meeting_providers/status")
+def meeting_providers_status():
+    return jsonify(crm.get_meeting_provider_status())
 
 
 @crm_bp.route("/api/backup/run", methods=["POST"])

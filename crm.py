@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from werkzeug.utils import secure_filename
 
 import google_drive_api
+import microsoft_graph_api
 
 # Keep this in sync with urto_updater.pyw's REPO_ZIP_URL — same repo/branch,
 # just also surfaced as a plain link inside the backups themselves so the
@@ -227,6 +228,81 @@ def get_google_drive_folder_id():
 
 def save_google_drive_folder_id(folder_id: str):
     _set_setting("google_drive_folder_id", folder_id)
+
+
+def get_microsoft_oauth_refresh_token():
+    """Set once via the hosted server's /admin/microsoft_auth one-time
+    consent flow (see microsoft_graph_api.py) -- None means Mario hasn't
+    connected Outlook yet. A completely separate connection from Google's
+    (see get_google_oauth_refresh_token above); Microsoft and Google don't
+    share credentials or scopes."""
+    return _get_setting("microsoft_oauth_refresh_token")
+
+
+def save_microsoft_oauth_refresh_token(token: str):
+    _set_setting("microsoft_oauth_refresh_token", token)
+
+
+# Real meetings default to 30 minutes -- Mario didn't specify a duration,
+# and this is a reasonable default for a call/showing-style meeting
+# without adding a whole new "duration" field to the event form for now.
+_VIRTUAL_MEETING_MINUTES = 30
+
+
+def create_virtual_meeting(provider: str, title: str, date_str: str, time_str: str,
+                            attendee_email: str = None, notes: str = "") -> str:
+    """Creates a REAL meeting on Mario's actual Google Calendar (Meet) or
+    Outlook calendar (Teams) via the connected provider's API, and returns
+    the join link -- called from create_event/update_event when Mario
+    picks a Virtual meeting (see build order #89). Raises RuntimeError
+    with a clear, user-facing message on any failure (not connected, a
+    real API error) so the caller can surface it and refuse to save a
+    "virtual" event with no actual link, rather than saving a broken one
+    silently."""
+    if not time_str:
+        raise RuntimeError("A virtual meeting needs a specific time.")
+
+    start_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+    end_dt = start_dt + timedelta(minutes=_VIRTUAL_MEETING_MINUTES)
+    start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    end_iso = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    timezone = "America/New_York"
+
+    if provider == "google_meet":
+        refresh_token = get_google_oauth_refresh_token()
+        if not refresh_token:
+            raise RuntimeError("Google isn't connected yet — connect it from the CRM backup bar first.")
+        try:
+            access_token = google_drive_api.refresh_access_token(refresh_token)
+            event = google_drive_api.create_meet_event(
+                access_token, summary=title, start_iso=start_iso, end_iso=end_iso,
+                timezone=timezone, attendee_email=attendee_email, description=notes or "",
+            )
+        except Exception as e:
+            raise RuntimeError(f"Couldn't create the Google Meet event: {e}")
+        link = event.get("hangoutLink")
+        if not link:
+            raise RuntimeError("Google created the event but didn't return a Meet link.")
+        return link
+
+    if provider == "teams":
+        refresh_token = get_microsoft_oauth_refresh_token()
+        if not refresh_token:
+            raise RuntimeError("Outlook isn't connected yet — connect it from the CRM backup bar first.")
+        try:
+            access_token = microsoft_graph_api.refresh_access_token(refresh_token)
+            event = microsoft_graph_api.create_teams_event(
+                access_token, subject=title, start_iso=start_iso, end_iso=end_iso,
+                timezone=timezone, attendee_email=attendee_email, body_html=notes or "",
+            )
+        except Exception as e:
+            raise RuntimeError(f"Couldn't create the Teams event: {e}")
+        link = (event.get("onlineMeeting") or {}).get("joinUrl")
+        if not link:
+            raise RuntimeError("Outlook created the event but didn't return a Teams link.")
+        return link
+
+    raise RuntimeError(f"Unknown meeting provider: {provider}")
 
 
 def get_notification_time() -> str:
@@ -791,6 +867,23 @@ def get_backup_status() -> dict:
     }
 
 
+def get_meeting_provider_status() -> dict:
+    """Whether each Virtual Meeting provider (build order #89) is set up
+    on the server (CLIENT_ID/SECRET env vars present) and actually
+    connected (Mario has completed its one-time OAuth consent). Google
+    Meet shares its OAuth connection with Google Drive backup (see
+    google_drive_api.py) -- same refresh token, broader scope -- so
+    "connected" here is the exact same check as backup status's
+    google_drive_api_connected, just surfaced under the name that makes
+    sense for the meeting-creation UI."""
+    return {
+        "google_meet_available": google_drive_api.is_configured(),
+        "google_meet_connected": bool(get_google_oauth_refresh_token()),
+        "teams_available": microsoft_graph_api.is_configured(),
+        "teams_connected": bool(get_microsoft_oauth_refresh_token()),
+    }
+
+
 def _count_clients_in_db(db_path: Path):
     """Read-only client count from an arbitrary sqlite file — used to judge
     backup snapshots without ever risking a write to them. Returns None if
@@ -925,6 +1018,11 @@ def init_db():
     clients_cols = {row["name"] for row in conn.execute("PRAGMA table_info(clients)").fetchall()}
     if "last_called_at" not in clients_cols:
         conn.execute("ALTER TABLE clients ADD COLUMN last_called_at TEXT")
+    if "email" not in clients_cols:
+        # Needed so a Virtual meeting (Google Meet/Teams) can auto-fill the
+        # attendee address instead of Mario typing it in by hand every time
+        # -- see build order #89.
+        conn.execute("ALTER TABLE clients ADD COLUMN email TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -966,6 +1064,14 @@ def init_db():
         # a showing) rather than the client's own home/mailing address. See
         # build order #75 (the morning voice briefing) for why this exists.
         conn.execute("ALTER TABLE events ADD COLUMN address TEXT")
+    if "meeting_type" not in events_cols:
+        # 'physical' (default) or 'virtual' -- see build order #89. A
+        # virtual event also gets meeting_provider ('google_meet'/'teams')
+        # and meeting_link (the real join URL, filled in once the actual
+        # Google Calendar/Outlook event is created via the provider API).
+        conn.execute("ALTER TABLE events ADD COLUMN meeting_type TEXT NOT NULL DEFAULT 'physical'")
+        conn.execute("ALTER TABLE events ADD COLUMN meeting_provider TEXT")
+        conn.execute("ALTER TABLE events ADD COLUMN meeting_link TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS contact_lists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1196,7 +1302,7 @@ def client_to_dict(row) -> dict:
     return d
 
 
-def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None, start_date=None) -> dict:
+def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None, start_date=None, email=None) -> dict:
     dup = find_client_by_phone(phone)
     if dup:
         raise DuplicatePhoneError(dup["name"])
@@ -1212,9 +1318,9 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
     conn = get_conn()
     cur = conn.execute(
         """INSERT INTO clients
-           (name, phone, contact_info, address, created_at, frequency_label, interval_days, next_followup_date)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (name, phone, contact_info, address, created_at, label, interval_days, next_followup_date),
+           (name, phone, contact_info, address, created_at, frequency_label, interval_days, next_followup_date, email)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, phone, contact_info, address, created_at, label, interval_days, next_followup_date, email or None),
     )
     client_id = cur.lastrowid
     if list_ids is not None:
@@ -1273,7 +1379,7 @@ def get_client(client_id) -> dict:
     return client
 
 
-def update_client(client_id, name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None) -> dict:
+def update_client(client_id, name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None, email=None) -> dict:
     dup = find_client_by_phone(phone, exclude_id=client_id)
     if dup:
         raise DuplicatePhoneError(dup["name"])
@@ -1295,8 +1401,8 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
 
     conn.execute(
         """UPDATE clients SET name=?, phone=?, contact_info=?, address=?,
-           frequency_label=?, interval_days=?, next_followup_date=? WHERE id=?""",
-        (name, phone, contact_info, address, label, interval_days, next_followup_date, client_id),
+           frequency_label=?, interval_days=?, next_followup_date=?, email=? WHERE id=?""",
+        (name, phone, contact_info, address, label, interval_days, next_followup_date, email or None, client_id),
     )
     if list_ids is not None:
         conn.execute("DELETE FROM contact_list_members WHERE client_id = ?", (client_id,))
@@ -1992,7 +2098,8 @@ def _now_time():
 
 EVENT_JOIN_SELECT = """
     SELECT events.*, clients.name AS client_name, clients.phone AS client_phone,
-           clients.address AS client_address, contact_lists.name AS list_name
+           clients.address AS client_address, clients.email AS client_email,
+           contact_lists.name AS list_name
     FROM events
     LEFT JOIN clients ON clients.id = events.client_id
     LEFT JOIN contact_lists ON contact_lists.id = events.list_id
@@ -2005,12 +2112,23 @@ def _event_to_dict(row) -> dict:
     return d
 
 
-def create_event(client_id, title, date_str, time_str, notes, list_id=None, address=None) -> dict:
+def create_event(client_id, title, date_str, time_str, notes, list_id=None, address=None,
+                  meeting_type="physical", meeting_provider=None, attendee_email=None) -> dict:
+    # Create the REAL meeting first (see build order #89) -- if this
+    # raises (not connected, a real API failure), nothing gets written at
+    # all, rather than saving a "virtual" event with no actual link.
+    meeting_link = None
+    if meeting_type == "virtual":
+        meeting_link = create_virtual_meeting(meeting_provider, title, date_str, time_str, attendee_email, notes)
+    else:
+        meeting_provider = None
+
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO events (client_id, list_id, title, date, time, notes, address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        """INSERT INTO events (client_id, list_id, title, date, time, notes, address, created_at,
+           meeting_type, meeting_provider, meeting_link) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (client_id or None, list_id or None, title, date_str, time_str or None, notes or "", address or None,
-         _now().isoformat(timespec="seconds")),
+         _now().isoformat(timespec="seconds"), meeting_type, meeting_provider, meeting_link),
     )
     conn.commit()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (cur.lastrowid,)).fetchone()
@@ -2019,15 +2137,39 @@ def create_event(client_id, title, date_str, time_str, notes, list_id=None, addr
     return _event_to_dict(row)
 
 
-def update_event(event_id, client_id, title, date_str, time_str, notes, list_id=None, address=None) -> dict:
+def update_event(event_id, client_id, title, date_str, time_str, notes, list_id=None, address=None,
+                  meeting_type="physical", meeting_provider=None, attendee_email=None) -> dict:
     conn = get_conn()
     existing = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    conn.close()
     if not existing:
-        conn.close()
         return None
+
+    # Only actually create a new real meeting if something meeting-
+    # relevant changed -- re-editing an already-virtual event's notes
+    # shouldn't spam a duplicate Meet/Teams event onto Mario's real
+    # calendar every single save.
+    meeting_link = existing["meeting_link"]
+    if meeting_type == "virtual":
+        needs_new_meeting = (
+            existing["meeting_type"] != "virtual"
+            or existing["meeting_provider"] != meeting_provider
+            or existing["date"] != date_str
+            or existing["time"] != time_str
+            or not existing["meeting_link"]
+        )
+        if needs_new_meeting:
+            meeting_link = create_virtual_meeting(meeting_provider, title, date_str, time_str, attendee_email, notes)
+    else:
+        meeting_provider = None
+        meeting_link = None
+
+    conn = get_conn()
     conn.execute(
-        "UPDATE events SET client_id=?, list_id=?, title=?, date=?, time=?, notes=?, address=? WHERE id=?",
-        (client_id or None, list_id or None, title, date_str, time_str or None, notes or "", address or None, event_id),
+        """UPDATE events SET client_id=?, list_id=?, title=?, date=?, time=?, notes=?, address=?,
+           meeting_type=?, meeting_provider=?, meeting_link=? WHERE id=?""",
+        (client_id or None, list_id or None, title, date_str, time_str or None, notes or "", address or None,
+         meeting_type, meeting_provider, meeting_link, event_id),
     )
     conn.commit()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (event_id,)).fetchone()
@@ -2259,9 +2401,13 @@ def get_calendar_events(year: int, month: int) -> list:
         events.append({
             "kind": "manual", "event_id": e["id"],
             "client_id": e["client_id"], "client_name": e.get("client_name"),
+            "client_email": e.get("client_email"),
             "list_id": e["list_id"], "list_name": e.get("list_name"),
             "date": e["date"], "time": e["time"], "title": e["title"],
             "notes": e.get("notes") or "", "status": "manual",
+            "address": e.get("address"),
+            "meeting_type": e.get("meeting_type"), "meeting_provider": e.get("meeting_provider"),
+            "meeting_link": e.get("meeting_link"),
         })
 
     events.sort(key=lambda e: (e["date"], e.get("time") or ""))

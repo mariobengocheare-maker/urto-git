@@ -31,12 +31,13 @@ from pywebpush import WebPushException, webpush
 
 import crm
 import google_drive_api
+import microsoft_graph_api
 from crm_routes import crm_bp
 
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.11.4-hosted"
+APP_VERSION = "1.12.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -547,6 +548,54 @@ def google_auth_callback():
             502,
         )
     crm.save_google_oauth_refresh_token(refresh_token)
+    return redirect(url_for("index"))
+
+
+# ===================== Microsoft Teams meetings (OAuth) =====================
+# A completely separate connection from Google's above -- Microsoft and
+# Google don't share credentials or consent screens. Mirrors the Google
+# flow exactly (see microsoft_graph_api.py for why). Needed for URTO's
+# Virtual Meeting feature (build order #89): creating an event with
+# isOnlineMeeting=true gets a real Teams join link back from Mario's own
+# Outlook calendar.
+
+def _microsoft_auth_redirect_uri():
+    return url_for("microsoft_auth_callback", _external=True)
+
+
+@app.route("/admin/microsoft_auth")
+def microsoft_auth_start():
+    if not microsoft_graph_api.is_configured():
+        return "Microsoft Teams isn't configured on this server yet (missing MICROSOFT_OAUTH_CLIENT_ID/SECRET).", 503
+    state = secrets.token_urlsafe(16)
+    session["microsoft_auth_state"] = state
+    return redirect(microsoft_graph_api.build_auth_url(_microsoft_auth_redirect_uri(), state))
+
+
+@app.route("/admin/microsoft_auth/callback")
+def microsoft_auth_callback():
+    error = request.args.get("error")
+    if error:
+        return f"Microsoft connection was cancelled ({error}). <a href='/'>Back to URTO</a>", 400
+    if request.args.get("state") != session.pop("microsoft_auth_state", None):
+        return "That authorization link expired or was already used. Try connecting again from URTO CRM.", 400
+    code = request.args.get("code")
+    if not code:
+        return "Missing authorization code from Microsoft.", 400
+    try:
+        tokens = microsoft_graph_api.exchange_code(_microsoft_auth_redirect_uri(), code)
+    except Exception as e:
+        return f"Couldn't finish connecting to Microsoft: {e}", 502
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        return (
+            "Microsoft didn't return a long-lived connection this time. If you've connected URTO to "
+            "Microsoft before, remove its access at "
+            "<a href='https://myaccount.microsoft.com/security-info' target='_blank'>myaccount.microsoft.com</a> "
+            "and then try connecting again.",
+            502,
+        )
+    crm.save_microsoft_oauth_refresh_token(refresh_token)
     return redirect(url_for("index"))
 
 

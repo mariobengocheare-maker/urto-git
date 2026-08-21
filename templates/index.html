@@ -331,6 +331,7 @@
   button.ghost { background: rgba(255,255,255,.02); color: var(--text-secondary); border: 1px solid var(--border); }
   button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--gold); }
   button.small { padding: 6px 12px; font-size: .8rem; }
+  button.provider-selected { background: var(--gold); color: #2a2200; border-color: var(--gold); }
   .call-btn, button.call-btn { border-color: transparent; }
 
   #status { margin-top: 20px; font-size: .95rem; color: var(--text-secondary); }
@@ -1177,6 +1178,16 @@
   </div>
 
   <div id="crmCalendarView" style="display:none">
+    <div class="backup-bar" id="meetingProvidersBar" style="display:none">
+      <span>Virtual meetings:</span>
+      <span class="backup-bar-destinations" id="meetingProvidersStatus"></span>
+      <div id="connectGoogleMeetRow" style="display:none">
+        <a href="/admin/google_auth"><button class="ghost small" type="button">Connect Google (Meet)</button></a>
+      </div>
+      <div id="connectTeamsRow" style="display:none">
+        <a href="/admin/microsoft_auth"><button class="ghost small" type="button">Connect Microsoft (Teams)</button></a>
+      </div>
+    </div>
     <div class="card">
       <div class="calendar-head">
         <div class="calendar-nav">
@@ -1394,7 +1405,12 @@
         <input type="text" id="cfPhone">
       </div>
       <div class="form-group">
-        <label for="cfContact">Contact Info (email, etc.)</label>
+        <label for="cfEmail">Email Address</label>
+        <input type="email" id="cfEmail" placeholder="e.g. jose@example.com">
+        <div class="sub" style="margin-top:4px">Used to auto-fill the invite when you schedule a Virtual meeting with this client.</div>
+      </div>
+      <div class="form-group">
+        <label for="cfContact">Contact Info (other, optional)</label>
         <input type="text" id="cfContact">
       </div>
       <div class="form-group">
@@ -1499,6 +1515,7 @@
     </div>
 
     <div class="contact-line"><span class="lbl">Phone</span><span id="cdPhone">—</span></div>
+    <div class="contact-line"><span class="lbl">Email</span><span id="cdEmail">—</span></div>
     <div class="contact-line"><span class="lbl">Contact</span><span id="cdContact">—</span></div>
     <div class="contact-line"><span class="lbl">Address</span><span id="cdAddress">—</span></div>
     <div class="contact-line"><span class="lbl">Last called (Miami Time)</span><span id="cdLastCalled">—</span> <a href="#" class="call-history-link" id="cdCallHistoryLink">Call History</a></div>
@@ -1559,9 +1576,39 @@
         </select>
       </div>
       <div class="form-group">
+        <label>Meeting Type</label>
+        <div class="row" style="margin-top:6px; gap:18px;">
+          <label style="display:flex; align-items:center; gap:6px; font-weight:normal">
+            <input type="radio" name="efMeetingType" id="efTypePhysical" value="physical" checked> Physical
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-weight:normal">
+            <input type="radio" name="efMeetingType" id="efTypeVirtual" value="virtual"> Virtual
+          </label>
+        </div>
+      </div>
+      <div class="form-group" id="efAddressRow">
         <label for="efAddress">Meeting address (optional)</label>
         <input type="text" id="efAddress" placeholder="e.g. 123 Ocean Boulevard, Miami Beach">
         <div class="sub" style="margin-top:4px">If this is at a specific property (a showing, a listing), enter it here — separate from the client's own address on file. Setting a time and an address here is what makes it read aloud in your morning voice briefing.</div>
+      </div>
+      <div class="form-group" id="efVirtualRow" style="display:none">
+        <label>Meet via</label>
+        <div class="row" style="margin-top:6px; gap:10px;">
+          <button type="button" class="ghost small" id="efProviderGoogleBtn">Google Meet</button>
+          <button type="button" class="ghost small" id="efProviderTeamsBtn">Microsoft Teams</button>
+        </div>
+        <input type="hidden" id="efMeetingProvider">
+        <div class="sub" id="efProviderMsg" style="margin-top:6px"></div>
+        <div class="form-group" style="margin-top:10px">
+          <label for="efAttendeeEmail">Client email (for the invite)</label>
+          <input type="email" id="efAttendeeEmail" placeholder="e.g. jose@example.com">
+          <div class="sub" style="margin-top:4px">Auto-fills from the linked client above if they have an email on file — you can still edit it.</div>
+        </div>
+        <div id="efMeetingLinkRow" style="display:none; margin-top:10px;">
+          <a href="#" id="efMeetingLinkAnchor" target="_blank" rel="noopener">
+            <button type="button" class="small">🔗 Join Meeting</button>
+          </a>
+        </div>
       </div>
       <div class="form-group">
         <label for="efNotes">Notes</label>
@@ -2131,6 +2178,31 @@ async function refreshBackupStatus() {
   }
 }
 
+async function refreshMeetingProvidersStatus() {
+  const bar = document.getElementById('meetingProvidersBar');
+  const statusEl = document.getElementById('meetingProvidersStatus');
+  const connectGoogleRow = document.getElementById('connectGoogleMeetRow');
+  const connectTeamsRow = document.getElementById('connectTeamsRow');
+  try {
+    const res = await fetch('/api/crm/meeting_providers/status');
+    const s = await res.json();
+    if (!s.google_meet_available && !s.teams_available) {
+      bar.style.display = 'none';
+      return;
+    }
+    bar.style.display = 'flex';
+    const chip = (label, on) => `<span class="${on ? 'ok' : 'warn'}">${on ? '●' : '○'} ${label}</span>`;
+    statusEl.innerHTML = [
+      s.google_meet_available ? chip('Google Meet', s.google_meet_connected) : '',
+      s.teams_available ? chip('Microsoft Teams', s.teams_connected) : '',
+    ].join('');
+    connectGoogleRow.style.display = (s.google_meet_available && !s.google_meet_connected) ? 'flex' : 'none';
+    connectTeamsRow.style.display = (s.teams_available && !s.teams_connected) ? 'flex' : 'none';
+  } catch (e) {
+    bar.style.display = 'none';
+  }
+}
+
 if (gdriveDirSaveBtn) {
   gdriveDirSaveBtn.addEventListener('click', async () => {
     const path = gdriveDirInput.value.trim();
@@ -2375,7 +2447,7 @@ function showCrmTab(btn, view) {
   }
 }
 crmTabClientsBtn.addEventListener('click', () => { showCrmTab(crmTabClientsBtn, crmClientsView); loadClients(); });
-crmTabCalendarBtn.addEventListener('click', () => { showCrmTab(crmTabCalendarBtn, crmCalendarView); renderCalendar(); });
+crmTabCalendarBtn.addEventListener('click', () => { showCrmTab(crmTabCalendarBtn, crmCalendarView); renderCalendar(); refreshMeetingProvidersStatus(); });
 crmTabListsBtn.addEventListener('click', () => { showCrmTab(crmTabListsBtn, crmListsView); loadContactLists(); });
 
 /* ===================== Clients ===================== */
@@ -2389,6 +2461,7 @@ const clientFormError = document.getElementById('clientFormError');
 const clientFormId = document.getElementById('clientFormId');
 const cfName = document.getElementById('cfName');
 const cfPhone = document.getElementById('cfPhone');
+const cfEmail = document.getElementById('cfEmail');
 const cfContact = document.getElementById('cfContact');
 const cfAddress = document.getElementById('cfAddress');
 const cfFrequency = document.getElementById('cfFrequency');
@@ -2777,6 +2850,7 @@ clientForm.addEventListener('submit', async (e) => {
   const payload = {
     name: cfName.value,
     phone: cfPhone.value,
+    email: cfEmail.value,
     contact_info: cfContact.value,
     address: cfAddress.value,
     frequency_key: cfFrequency.value,
@@ -2847,6 +2921,7 @@ async function openClientDetail(id) {
 
   document.getElementById('cdName').textContent = c.name;
   document.getElementById('cdPhone').textContent = c.phone || '—';
+  document.getElementById('cdEmail').textContent = c.email || '—';
   document.getElementById('cdContact').textContent = c.contact_info || '—';
   document.getElementById('cdAddress').textContent = c.address || '—';
   document.getElementById('cdLastCalled').textContent = formatLastCalled(c.last_called_at);
@@ -2950,6 +3025,7 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
   clientFormId.value = c.id;
   cfName.value = c.name;
   cfPhone.value = c.phone || '';
+  cfEmail.value = c.email || '';
   cfContact.value = c.contact_info || '';
   cfAddress.value = c.address || '';
   cfNotesRow.style.display = 'none'; // editing: notes are managed in the detail view
@@ -3582,6 +3658,32 @@ const efClient = document.getElementById('efClient');
 const efAddress = document.getElementById('efAddress');
 const efNotes = document.getElementById('efNotes');
 const efDeleteBtn = document.getElementById('efDeleteBtn');
+const efTypePhysical = document.getElementById('efTypePhysical');
+const efTypeVirtual = document.getElementById('efTypeVirtual');
+const efVirtualRow = document.getElementById('efVirtualRow');
+const efProviderGoogleBtn = document.getElementById('efProviderGoogleBtn');
+const efProviderTeamsBtn = document.getElementById('efProviderTeamsBtn');
+const efMeetingProvider = document.getElementById('efMeetingProvider');
+const efProviderMsg = document.getElementById('efProviderMsg');
+const efAttendeeEmail = document.getElementById('efAttendeeEmail');
+const efMeetingLinkRow = document.getElementById('efMeetingLinkRow');
+const efMeetingLinkAnchor = document.getElementById('efMeetingLinkAnchor');
+
+function setMeetingProvider(provider) {
+  efMeetingProvider.value = provider;
+  efProviderGoogleBtn.classList.toggle('provider-selected', provider === 'google_meet');
+  efProviderTeamsBtn.classList.toggle('provider-selected', provider === 'teams');
+}
+
+function updateMeetingTypeUi() {
+  const isVirtual = efTypeVirtual.checked;
+  efVirtualRow.style.display = isVirtual ? 'block' : 'none';
+}
+
+efTypePhysical.addEventListener('change', updateMeetingTypeUi);
+efTypeVirtual.addEventListener('change', updateMeetingTypeUi);
+efProviderGoogleBtn.addEventListener('click', () => setMeetingProvider('google_meet'));
+efProviderTeamsBtn.addEventListener('click', () => setMeetingProvider('teams'));
 
 async function openEventForm(dateStr, existing) {
   eventFormError.style.display = 'none';
@@ -3594,6 +3696,9 @@ async function openEventForm(dateStr, existing) {
   eventFormSubmitting = false;
   efSubmitBtn.disabled = false;
   efSubmitBtn.textContent = 'Save Event';
+  setMeetingProvider('');
+  efMeetingLinkRow.style.display = 'none';
+  efProviderMsg.textContent = '';
 
   const [clientsRes, listsRes] = await Promise.all([
     fetch('/api/crm/clients'),
@@ -3602,7 +3707,7 @@ async function openEventForm(dateStr, existing) {
   const clients = clientsRes.ok ? await clientsRes.json() : [];
   const lists = listsRes.ok ? await listsRes.json() : [];
   efClient.innerHTML = '<option value="">— No client or list —</option>' +
-    (clients.length ? `<optgroup label="Clients">${clients.map(c => `<option value="client-${c.id}" data-name="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('')}</optgroup>` : '') +
+    (clients.length ? `<optgroup label="Clients">${clients.map(c => `<option value="client-${c.id}" data-name="${escapeHtml(c.name)}" data-email="${escapeHtml(c.email || '')}">${escapeHtml(c.name)}</option>`).join('')}</optgroup>` : '') +
     (lists.length ? `<optgroup label="Contact Lists">${lists.map(l => `<option value="list-${l.id}" data-name="${escapeHtml(l.name)}">${escapeHtml(l.name)} (${l.member_count} member${l.member_count === 1 ? '' : 's'})</option>`).join('')}</optgroup>` : '');
 
   if (existing) {
@@ -3615,13 +3720,26 @@ async function openEventForm(dateStr, existing) {
     efAddress.value = existing.address || '';
     efNotes.value = existing.notes || '';
     efDeleteBtn.style.display = 'inline-block';
+    const isVirtual = existing.meeting_type === 'virtual';
+    efTypeVirtual.checked = isVirtual;
+    efTypePhysical.checked = !isVirtual;
+    if (isVirtual) {
+      setMeetingProvider(existing.meeting_provider || '');
+      efAttendeeEmail.value = existing.client_email || '';
+      if (existing.meeting_link) {
+        efMeetingLinkAnchor.href = existing.meeting_link;
+        efMeetingLinkRow.style.display = 'block';
+      }
+    }
   } else {
     eventFormTitle.textContent = 'Add Event';
     efId.value = '';
     efDate.value = dateStr;
     efClient.value = '';
     efDeleteBtn.style.display = 'none';
+    efTypePhysical.checked = true;
   }
+  updateMeetingTypeUi();
   eventFormOverlay.classList.add('show');
 }
 
@@ -3634,6 +3752,12 @@ efClient.addEventListener('change', () => {
     const name = opt.dataset.name || opt.textContent;
     const isList = efClient.value.startsWith('list-');
     efTitle.value = isList ? `Call ${name}` : `Follow up with ${name}`;
+  }
+  // Auto-fill the invite address from the linked client's own email --
+  // never overwrites something Mario already typed in by hand.
+  if (efClient.value.startsWith('client-') && !efAttendeeEmail.value.trim()) {
+    const opt = efClient.options[efClient.selectedIndex];
+    if (opt.dataset.email) efAttendeeEmail.value = opt.dataset.email;
   }
 });
 
@@ -3651,11 +3775,29 @@ eventForm.addEventListener('submit', async (e) => {
   // ignoring any submit that arrives while one is already in flight, is
   // the actual fix — not just cosmetic.
   if (eventFormSubmitting) return;
+
+  const isVirtual = efTypeVirtual.checked;
+  if (isVirtual) {
+    if (!efMeetingProvider.value) {
+      eventFormError.textContent = 'Pick Google Meet or Microsoft Teams for a virtual meeting.';
+      eventFormError.style.display = 'block';
+      return;
+    }
+    if (!efTime.value) {
+      eventFormError.textContent = 'A virtual meeting needs a specific time.';
+      eventFormError.style.display = 'block';
+      return;
+    }
+  }
+
   eventFormSubmitting = true;
   eventFormError.style.display = 'none';
   efSubmitBtn.disabled = true;
   const originalBtnText = efSubmitBtn.textContent;
-  efSubmitBtn.textContent = 'Saving…';
+  // Creating a real Google Meet/Teams event is a genuine outbound API
+  // call, not an instant local save -- say so, since "Saving…" alone
+  // would look stuck for the few extra seconds this can take.
+  efSubmitBtn.textContent = isVirtual ? 'Creating meeting…' : 'Saving…';
   const [kind, rawId] = efClient.value ? efClient.value.split('-') : [null, null];
   const payload = {
     title: efTitle.value,
@@ -3665,6 +3807,9 @@ eventForm.addEventListener('submit', async (e) => {
     list_id: kind === 'list' ? Number(rawId) : null,
     address: efAddress.value,
     notes: efNotes.value,
+    meeting_type: isVirtual ? 'virtual' : 'physical',
+    meeting_provider: isVirtual ? efMeetingProvider.value : '',
+    attendee_email: isVirtual ? efAttendeeEmail.value : '',
   };
   const id = efId.value;
   const url = id ? `/api/crm/events/${id}` : '/api/crm/events';
