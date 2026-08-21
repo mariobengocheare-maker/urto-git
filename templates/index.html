@@ -1539,7 +1539,10 @@
       <textarea id="cdNoteInput" placeholder="Add a note about this client..."></textarea>
       <div class="row">
         <button class="small" id="cdAddNoteBtn">Add Note</button>
+        <button type="button" class="dictate-btn small" id="cdDictateBtn">🎙 Dictate</button>
       </div>
+      <div class="dictate-live" id="cdDictateLive" style="display:none"></div>
+      <div class="dictate-error error-box" id="cdDictateError" style="margin-top:8px; display:none"></div>
       <div id="cdNotesList" style="margin-top:14px"></div>
     </div>
   </div>
@@ -2915,6 +2918,7 @@ let currentClientId = null;
 
 async function openClientDetail(id) {
   currentClientId = id;
+  resetCdDictation();
   const res = await fetch(`/api/crm/clients/${id}`);
   if (!res.ok) return;
   const c = await res.json();
@@ -3010,6 +3014,116 @@ document.getElementById('cdAddNoteBtn').addEventListener('click', async () => {
   });
   openClientDetail(currentClientId);
 });
+
+// Voice-dictated notes, now available on a client's own card in the CRM --
+// not just the Dialer (see build order #14/#56 for the original). Reuses
+// the exact same free Web Speech API continuous-listening pattern (see
+// CLAUDE.md's testing gotcha on this) but transcribes straight into the
+// existing cdNoteInput textarea instead of a separate review panel --
+// Mario reviews/edits there and clicks the normal "Add Note" button,
+// reusing the save path that already exists rather than duplicating it.
+const cdDictateBtn = document.getElementById('cdDictateBtn');
+const cdDictateLive = document.getElementById('cdDictateLive');
+const cdDictateError = document.getElementById('cdDictateError');
+// Computed locally (not reusing the shared `SpeechRec` const) -- that
+// binding isn't declared until further down the script, and referencing a
+// `const` before its own declaration line throws in JS (temporal dead
+// zone), which would kill every line after this one in the same script
+// tag (see CLAUDE.md's "one giant script tag" gotcha).
+const CdSpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let cdRecognition = null;
+let cdRecognizing = false;
+let cdManualStop = false;
+let cdFinalText = '';
+
+if (!CdSpeechRec) {
+  // No fallback message needed here (unlike the Dialer's dictation) --
+  // typing into cdNoteInput is already the obvious default input.
+  cdDictateBtn.style.display = 'none';
+}
+
+function resetCdDictation() {
+  if (cdRecognizing) { cdManualStop = true; try { cdRecognition && cdRecognition.stop(); } catch (e) {} }
+  cdRecognizing = false;
+  cdFinalText = '';
+  if (cdDictateBtn) {
+    cdDictateBtn.classList.remove('recording');
+    cdDictateBtn.textContent = '🎙 Dictate';
+  }
+  if (cdDictateLive) { cdDictateLive.style.display = 'none'; cdDictateLive.textContent = ''; }
+  if (cdDictateError) { cdDictateError.style.display = 'none'; }
+}
+
+function showCdDictateError(msg) {
+  cdDictateError.textContent = msg;
+  cdDictateError.style.display = 'block';
+}
+
+if (cdDictateBtn) {
+  cdDictateBtn.addEventListener('click', () => {
+    cdDictateError.style.display = 'none';
+    if (cdRecognizing) { cdManualStop = true; try { cdRecognition.stop(); } catch (e) {} return; }
+
+    cdFinalText = '';
+    cdManualStop = false;
+    cdRecognition = new CdSpeechRec();
+    cdRecognition.lang = 'en-US';
+    cdRecognition.continuous = true;
+    cdRecognition.interimResults = true;
+
+    cdRecognition.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const chunk = e.results[i][0].transcript;
+        if (e.results[i].isFinal) cdFinalText += chunk + ' ';
+        else interim += chunk;
+      }
+      cdDictateLive.textContent = (cdFinalText + interim).trim() || 'Listening…';
+    };
+
+    cdRecognition.onerror = (e) => {
+      cdRecognizing = false;
+      cdManualStop = true;
+      cdDictateBtn.classList.remove('recording');
+      cdDictateBtn.textContent = '🎙 Dictate';
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        showCdDictateError('Microphone access was blocked. Allow the mic for this page and try again.');
+      } else if (e.error === 'no-speech') {
+        showCdDictateError("Didn't catch any speech — try again and speak after clicking.");
+      } else {
+        showCdDictateError('Voice capture error. You can type the note instead.');
+      }
+    };
+
+    cdRecognition.onend = () => {
+      // Chrome ends the session on pauses; keep listening until the user stops.
+      if (cdRecognizing && !cdManualStop) { try { cdRecognition.start(); return; } catch (e) {} }
+      cdRecognizing = false;
+      cdDictateBtn.classList.remove('recording');
+      cdDictateBtn.textContent = '🎙 Dictate';
+      cdDictateLive.style.display = 'none';
+      const text = cdFinalText.trim();
+      if (text) {
+        const input = document.getElementById('cdNoteInput');
+        input.value = input.value.trim() ? `${input.value.trim()} ${text}` : text;
+        input.focus();
+      } else if (!cdDictateError.textContent) {
+        showCdDictateError("Didn't catch anything — click and speak your note.");
+      }
+    };
+
+    try {
+      cdRecognition.start();
+      cdRecognizing = true;
+      cdDictateBtn.classList.add('recording');
+      cdDictateBtn.textContent = '⏹ Stop';
+      cdDictateLive.style.display = 'block';
+      cdDictateLive.textContent = 'Listening…';
+    } catch (e) {
+      showCdDictateError('Could not start voice capture. You can type the note instead.');
+    }
+  });
+}
 
 document.getElementById('cdCompleteFollowupBtn').addEventListener('click', async () => {
   await fetch(`/api/crm/clients/${currentClientId}/complete_followup`, { method: 'POST' });
