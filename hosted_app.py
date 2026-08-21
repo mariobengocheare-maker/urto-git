@@ -36,7 +36,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.11.1-hosted"
+APP_VERSION = "1.11.2-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -227,7 +227,19 @@ def _send_push_to_all(title: str, body: str, url: str = "/"):
                 # The browser/OS says this subscription is gone for good
                 # (uninstalled, expired) -- stop trying to push to it.
                 crm.remove_push_subscription(sub["endpoint"])
-        except requests.exceptions.RequestException:
+            else:
+                # Anything else (e.g. a 400 from a VAPID key mismatch, a
+                # malformed subscription) used to be silently swallowed
+                # here with zero trace anywhere -- "sent to N devices"
+                # from push_test() only ever meant "N subscriptions exist
+                # in the DB," never "delivery actually succeeded," so a
+                # real failure here looked identical to success from
+                # Mario's side. Printed so it shows up in Render's own
+                # Logs tab -- the only way to actually diagnose this
+                # without guessing.
+                body_preview = getattr(e.response, "text", "")[:300] if e.response is not None else ""
+                print(f"[push] WebPushException (status={status}) for {sub['endpoint'][:70]}: {e} | {body_preview}")
+        except requests.exceptions.RequestException as e:
             # pywebpush's webpush() doesn't wrap the underlying requests
             # call in its own try/except, so a timeout or connection error
             # (a genuinely unresponsive push endpoint, even with the
@@ -235,7 +247,7 @@ def _send_push_to_all(title: str, body: str, url: str = "/"):
             # WebPushException -- catch it here too so one bad/slow
             # subscription can't abort delivery to every other one in this
             # loop, and never propagates out of this function uncaught.
-            pass
+            print(f"[push] RequestException for {sub['endpoint'][:70]}: {e}")
 
 
 @app.route("/api/push/test", methods=["POST"])
@@ -249,6 +261,13 @@ def push_test():
     # synchronously and cheaply from the DB, so respond with that
     # immediately and let the actual push delivery happen in the
     # background, not on the request Mario is waiting on.
+    if not VAPID_PRIVATE_KEY_PEM:
+        # _send_push_to_all() itself just silently no-ops when this isn't
+        # set -- reporting "sent to N devices" based purely on subscriber
+        # count regardless would have claimed success while literally zero
+        # push attempts happened, which is exactly indistinguishable from
+        # a real delivery failure from Mario's side.
+        return jsonify({"ok": False, "sent_to": 0, "error": "Push isn't configured on the server (missing VAPID keys)."})
     sent_to = len(crm.list_push_subscriptions())
     threading.Thread(
         target=lambda: _send_push_to_all("URTO", "Test notification — if you see this, it's working."),

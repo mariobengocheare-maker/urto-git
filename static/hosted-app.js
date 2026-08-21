@@ -192,9 +192,13 @@
       try {
         const res = await fetch("/api/push/test", { method: "POST" });
         const data = await res.json();
-        testMsg.textContent = data.sent_to > 0
-          ? `✅ Sent to ${data.sent_to} device${data.sent_to === 1 ? "" : "s"} — check your phone.`
-          : "⚠ No active subscription — tap 🔕 Enable Morning Notifications first.";
+        if (data.error) {
+          testMsg.textContent = "⚠ " + data.error;
+        } else if (data.sent_to > 0) {
+          testMsg.textContent = `✅ Sent to ${data.sent_to} device${data.sent_to === 1 ? "" : "s"} — check your phone.`;
+        } else {
+          testMsg.textContent = "⚠ No active subscription — tap 🔕 Enable Morning Notifications first.";
+        }
       } catch (e) {
         testMsg.textContent = "⚠ Couldn't reach the server.";
       }
