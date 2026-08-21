@@ -37,7 +37,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.14.0-hosted"
+APP_VERSION = "1.14.1-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -548,6 +548,7 @@ def google_auth_callback():
             502,
         )
     crm.save_google_oauth_refresh_token(refresh_token)
+    crm.save_google_oauth_scope(tokens.get("scope", ""))
     return redirect(url_for("index"))
 
 
@@ -596,6 +597,7 @@ def microsoft_auth_callback():
             502,
         )
     crm.save_microsoft_oauth_refresh_token(refresh_token)
+    crm.save_microsoft_oauth_scope(tokens.get("scope", ""))
     return redirect(url_for("index"))
 
 

@@ -221,6 +221,21 @@ def save_google_oauth_refresh_token(token: str):
     _set_setting("google_oauth_refresh_token", token)
 
 
+def get_google_oauth_scope():
+    """The space-separated scope string Google actually granted at the
+    most recent consent (from the token endpoint's own "scope" field) --
+    used to tell a genuinely fully-connected Google account apart from one
+    connected before Calendar access existed (see build order #89's scope
+    widening) or before this tracking existed at all, in which case this
+    returns None and the connection is correctly treated as needing a
+    fresh consent rather than trusted just because a refresh_token exists."""
+    return _get_setting("google_oauth_scope")
+
+
+def save_google_oauth_scope(scope: str):
+    _set_setting("google_oauth_scope", scope or "")
+
+
 def get_google_drive_folder_id():
     """Cached id of the "URTO Backups" folder in Mario's real Google Drive,
     so every backup doesn't have to re-search for it by name."""
@@ -242,6 +257,18 @@ def get_microsoft_oauth_refresh_token():
 
 def save_microsoft_oauth_refresh_token(token: str):
     _set_setting("microsoft_oauth_refresh_token", token)
+
+
+def get_microsoft_oauth_scope():
+    """Same reasoning as get_google_oauth_scope() above, for the Microsoft
+    side -- None means either never connected or connected before this
+    tracking existed, both of which should show as needing a fresh
+    consent rather than a false "connected"."""
+    return _get_setting("microsoft_oauth_scope")
+
+
+def save_microsoft_oauth_scope(scope: str):
+    _set_setting("microsoft_oauth_scope", scope or "")
 
 
 # Real meetings default to 30 minutes -- Mario didn't specify a duration,
@@ -885,18 +912,29 @@ def get_backup_status() -> dict:
 
 def get_meeting_provider_status() -> dict:
     """Whether each Virtual Meeting provider (build order #89) is set up
-    on the server (CLIENT_ID/SECRET env vars present) and actually
-    connected (Mario has completed its one-time OAuth consent). Google
-    Meet shares its OAuth connection with Google Drive backup (see
-    google_drive_api.py) -- same refresh token, broader scope -- so
-    "connected" here is the exact same check as backup status's
-    google_drive_api_connected, just surfaced under the name that makes
-    sense for the meeting-creation UI."""
+    on the server (CLIENT_ID/SECRET env vars present) and actually usable
+    for CREATING A MEETING right now. This is deliberately a stricter
+    check than backup status's google_drive_api_connected: a refresh token
+    existing only proves Mario connected to SOMETHING at some point, not
+    that the connection actually carries Calendar access. Mario hit this
+    for real -- his Google connection predated Calendar being added to the
+    scope (see build order #89), so a refresh token existed and the old
+    check happily reported "connected" while every real meeting creation
+    403'd with "insufficient authentication scopes." Comparing the actual
+    granted scope (recorded at the OAuth callback, see
+    save_google_oauth_scope/save_microsoft_oauth_scope) against what's
+    needed catches that case -- and also means a FUTURE scope widening
+    will self-heal the same way, without needing another one-off "always
+    show the reconnect button" patch. A connection made before this scope
+    tracking existed at all has no recorded scope and correctly reads as
+    needing reconsent too, rather than being trusted on faith."""
+    google_scope = (get_google_oauth_scope() or "").lower()
+    microsoft_scope = (get_microsoft_oauth_scope() or "").lower()
     return {
         "google_meet_available": google_drive_api.is_configured(),
-        "google_meet_connected": bool(get_google_oauth_refresh_token()),
+        "google_meet_connected": bool(get_google_oauth_refresh_token()) and "calendar" in google_scope,
         "teams_available": microsoft_graph_api.is_configured(),
-        "teams_connected": bool(get_microsoft_oauth_refresh_token()),
+        "teams_connected": bool(get_microsoft_oauth_refresh_token()) and "calendars" in microsoft_scope,
     }
 
 
