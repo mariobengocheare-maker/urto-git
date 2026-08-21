@@ -99,13 +99,25 @@ def _ensure_logged_in(config: dict):
     except requests.RequestException:
         raise HostedUnreachableError("Can't reach URTO Cloud right now — check your internet connection.")
     # A successful login redirects (302) to the app; a wrong password
-    # re-renders the login page (200) with an error instead.
-    if res.status_code not in (302, 303):
+    # re-renders the login page (200) with an error instead. Any OTHER
+    # status (500/502/503/504, or a bare empty response) is NOT evidence of
+    # a wrong password -- it's what a Render deploy-in-progress or a genuine
+    # server-side hiccup looks like, and used to be misreported as "wrong
+    # username/password" (confusing Mario into re-checking credentials that
+    # were actually fine -- see CLAUDE.md).
+    if res.status_code in (302, 303):
+        _logged_in_url = base_url
+        return
+    if res.status_code == 200:
         raise HostedUnreachableError(
             "Couldn't log into the hosted server with the saved username/password. "
             "Check them under Sync Settings."
         )
-    _logged_in_url = base_url
+    raise HostedUnreachableError(
+        f"The hosted server returned an unexpected response (status {res.status_code}) -- "
+        "it may be redeploying or briefly unavailable. This is not necessarily a wrong "
+        "username/password. Wait a minute and try again."
+    )
 
 
 def test_login(base_url: str, username: str, password: str) -> str:
@@ -121,9 +133,14 @@ def test_login(base_url: str, username: str, password: str) -> str:
         )
     except requests.RequestException:
         return f"Couldn't reach {base_url} — double-check the address (it should start with https://) and that the hosted server is running."
-    if res.status_code not in (302, 303):
+    if res.status_code in (302, 303):
+        return None
+    if res.status_code == 200:
         return "Wrong username or password."
-    return None
+    return (
+        f"The hosted server returned an unexpected response (status {res.status_code}) -- "
+        "it may be redeploying or briefly unavailable. Wait a minute and try again."
+    )
 
 
 def proxy_request(flask_request, subpath_with_prefix: str):
