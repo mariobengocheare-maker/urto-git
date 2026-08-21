@@ -36,7 +36,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.11.2-hosted"
+APP_VERSION = "1.11.3-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -248,6 +248,17 @@ def _send_push_to_all(title: str, body: str, url: str = "/"):
             # subscription can't abort delivery to every other one in this
             # loop, and never propagates out of this function uncaught.
             print(f"[push] RequestException for {sub['endpoint'][:70]}: {e}")
+        except ValueError as e:
+            # py_vapid's Vapid.from_string() raises a bare ValueError (not
+            # a WebPushException) if VAPID_PRIVATE_KEY_PEM isn't in the
+            # exact raw base64url-encoded-DER format it expects -- this is
+            # exactly what happened live (Mario had a full PEM block with
+            # -----BEGIN/END----- headers pasted into the Render env var
+            # instead of just the raw key). Previously this crashed the
+            # background thread with an unhandled traceback on every
+            # subscription. Logged the same way as the other failure
+            # modes above rather than left to crash silently.
+            print(f"[push] ValueError (likely a malformed VAPID_PRIVATE_KEY_PEM) for {sub['endpoint'][:70]}: {e}")
 
 
 @app.route("/api/push/test", methods=["POST"])
