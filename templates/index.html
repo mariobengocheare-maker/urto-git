@@ -643,6 +643,17 @@
   .form-group input, .form-group select, .form-group textarea { width: 100%; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
+  .ef-client-dropdown {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+    max-height: 220px; overflow-y: auto; z-index: 5;
+    box-shadow: 0 12px 28px rgba(0,0,0,.45);
+  }
+  .ef-client-dropdown .ef-client-option { padding: 9px 12px; cursor: pointer; font-size: .92rem; }
+  .ef-client-dropdown .ef-client-option:hover { background: rgba(201,162,39,.14); }
+  .ef-client-dropdown .ef-client-none { color: var(--text-secondary); border-bottom: 1px solid var(--border); }
+  .ef-client-dropdown .ef-client-empty { padding: 9px 12px; color: var(--text-secondary); font-size: .88rem; }
+
   .cf-lists-box { max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; background: rgba(6,11,22,.35); }
   .cf-lists-box label { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-weight: 400; }
   .cf-lists-box label:last-child { margin-bottom: 0; }
@@ -1573,8 +1584,12 @@
         </div>
       </div>
       <div class="form-group">
-        <label for="efClient">Link to Client or Contact List (optional — makes this a follow-up)</label>
-        <select id="efClient">
+        <label for="efClientSearch">Link to Client or Contact List (optional — makes this a follow-up)</label>
+        <div style="position:relative">
+          <input type="text" id="efClientSearch" placeholder="Type a client or contact list name…" autocomplete="off">
+          <div id="efClientDropdown" class="ef-client-dropdown" style="display:none"></div>
+        </div>
+        <select id="efClient" style="display:none">
           <option value="">— No client or list —</option>
         </select>
       </div>
@@ -3782,6 +3797,78 @@ const efProviderMsg = document.getElementById('efProviderMsg');
 const efAttendeeEmail = document.getElementById('efAttendeeEmail');
 const efMeetingLinkRow = document.getElementById('efMeetingLinkRow');
 const efMeetingLinkAnchor = document.getElementById('efMeetingLinkAnchor');
+const efClientSearch = document.getElementById('efClientSearch');
+const efClientDropdown = document.getElementById('efClientDropdown');
+
+// A searchable combobox layered on top of the real (now hidden) efClient
+// <select> -- Mario had to scroll through every client to find one on a
+// long list. The <select> itself is kept exactly as-is (still driving
+// every existing dataset.name/dataset.email/change-listener/selectedIndex
+// use below) so none of that logic needed touching; this just gives it a
+// type-to-filter front end.
+let efClientOptionsCache = [];
+
+function rebuildEfClientOptionsCache() {
+  efClientOptionsCache = Array.from(efClient.options)
+    .filter(o => o.value)
+    .map(o => ({ value: o.value, label: o.dataset.name || o.textContent }));
+}
+
+function syncEfClientSearchLabel() {
+  const match = efClientOptionsCache.find(o => o.value === efClient.value);
+  efClientSearch.value = match ? match.label : '';
+}
+
+function selectEfClient(value) {
+  efClient.value = value;
+  syncEfClientSearchLabel();
+  efClientDropdown.style.display = 'none';
+  efClient.dispatchEvent(new Event('change'));
+}
+
+function renderEfClientDropdown(filterText) {
+  const q = filterText.trim().toLowerCase();
+  const matches = q ? efClientOptionsCache.filter(o => o.label.toLowerCase().includes(q)) : efClientOptionsCache;
+  let html = `<div class="ef-client-option ef-client-none" data-value="">— No client or list —</div>`;
+  if (matches.length) {
+    html += matches.slice(0, 50).map(o =>
+      `<div class="ef-client-option" data-value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</div>`
+    ).join('');
+  } else if (q) {
+    html += `<div class="ef-client-empty">No matches</div>`;
+  }
+  efClientDropdown.innerHTML = html;
+  efClientDropdown.style.display = 'block';
+}
+
+efClientSearch.addEventListener('focus', () => renderEfClientDropdown(efClientSearch.value));
+// A selection's mousedown handler calls preventDefault() (see below) so
+// picking a row never blurs the search box -- which means a later click
+// straight back into an already-focused box fires no new 'focus' event.
+// Listen for 'click' too so the dropdown still reopens in that case.
+efClientSearch.addEventListener('click', () => renderEfClientDropdown(efClientSearch.value));
+efClientSearch.addEventListener('input', () => renderEfClientDropdown(efClientSearch.value));
+efClientSearch.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const first = efClientDropdown.querySelector('.ef-client-option');
+    if (first) selectEfClient(first.dataset.value);
+  } else if (e.key === 'Escape') {
+    efClientSearch.blur();
+  }
+});
+// mousedown (not click) fires before the input's blur hides the dropdown.
+efClientDropdown.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const row = e.target.closest('.ef-client-option');
+  if (row) selectEfClient(row.dataset.value);
+});
+efClientSearch.addEventListener('blur', () => {
+  setTimeout(() => {
+    efClientDropdown.style.display = 'none';
+    syncEfClientSearchLabel();
+  }, 120);
+});
 
 function setMeetingProvider(provider) {
   efMeetingProvider.value = provider;
@@ -3823,6 +3910,8 @@ async function openEventForm(dateStr, existing) {
   efClient.innerHTML = '<option value="">— No client or list —</option>' +
     (clients.length ? `<optgroup label="Clients">${clients.map(c => `<option value="client-${c.id}" data-name="${escapeHtml(c.name)}" data-email="${escapeHtml(c.email || '')}">${escapeHtml(c.name)}</option>`).join('')}</optgroup>` : '') +
     (lists.length ? `<optgroup label="Contact Lists">${lists.map(l => `<option value="list-${l.id}" data-name="${escapeHtml(l.name)}">${escapeHtml(l.name)} (${l.member_count} member${l.member_count === 1 ? '' : 's'})</option>`).join('')}</optgroup>` : '');
+  rebuildEfClientOptionsCache();
+  efClientDropdown.style.display = 'none';
 
   if (existing) {
     eventFormTitle.textContent = 'Edit Event';
@@ -3831,6 +3920,7 @@ async function openEventForm(dateStr, existing) {
     efDate.value = existing.date;
     efTime.value = existing.time || '';
     efClient.value = existing.list_id ? `list-${existing.list_id}` : existing.client_id ? `client-${existing.client_id}` : '';
+    syncEfClientSearchLabel();
     efAddress.value = existing.address || '';
     efNotes.value = existing.notes || '';
     efDeleteBtn.style.display = 'inline-block';
@@ -3850,6 +3940,7 @@ async function openEventForm(dateStr, existing) {
     efId.value = '';
     efDate.value = dateStr;
     efClient.value = '';
+    efClientSearch.value = '';
     efDeleteBtn.style.display = 'none';
     efTypePhysical.checked = true;
   }
