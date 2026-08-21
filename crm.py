@@ -9,6 +9,7 @@ import csv
 import json
 import os
 import re
+import requests
 import secrets
 import shutil
 import string
@@ -259,6 +260,21 @@ def create_virtual_meeting(provider: str, title: str, date_str: str, time_str: s
     real API error) so the caller can surface it and refuse to save a
     "virtual" event with no actual link, rather than saving a broken one
     silently."""
+    def _describe_api_error(e: Exception) -> str:
+        # requests.HTTPError's default str(e) is just the generic status
+        # line ("403 Client Error: Forbidden for url: ...") -- the actually
+        # useful detail (e.g. Google's "insufficient authentication
+        # scopes," or "Calendar API has not been used in this project")
+        # lives in the response BODY, which raise_for_status() never
+        # includes. Surfacing it here is the difference between "it
+        # failed" and actually knowing why.
+        response = getattr(e, "response", None)
+        if response is not None:
+            body = (response.text or "").strip()
+            if body:
+                return f"{e} — {body[:400]}"
+        return str(e)
+
     if not time_str:
         raise RuntimeError("A virtual meeting needs a specific time.")
 
@@ -279,7 +295,7 @@ def create_virtual_meeting(provider: str, title: str, date_str: str, time_str: s
                 timezone=timezone, attendee_email=attendee_email, description=notes or "",
             )
         except Exception as e:
-            raise RuntimeError(f"Couldn't create the Google Meet event: {e}")
+            raise RuntimeError(f"Couldn't create the Google Meet event: {_describe_api_error(e)}")
         link = event.get("hangoutLink")
         if not link:
             raise RuntimeError("Google created the event but didn't return a Meet link.")
@@ -296,7 +312,7 @@ def create_virtual_meeting(provider: str, title: str, date_str: str, time_str: s
                 timezone=timezone, attendee_email=attendee_email, body_html=notes or "",
             )
         except Exception as e:
-            raise RuntimeError(f"Couldn't create the Teams event: {e}")
+            raise RuntimeError(f"Couldn't create the Teams event: {_describe_api_error(e)}")
         link = (event.get("onlineMeeting") or {}).get("joinUrl")
         if not link:
             raise RuntimeError("Outlook created the event but didn't return a Teams link.")
