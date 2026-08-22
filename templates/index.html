@@ -771,6 +771,21 @@
   .cal-chip.completed { background: var(--success-bg); color: var(--success-fg); }
   .cal-chip.manual { background: var(--gold); color: #2a2200; }
 
+  .day-view-list { max-height: 60vh; overflow-y: auto; margin: 4px 0 4px; }
+  .day-view-empty { padding: 16px 4px; color: var(--text-secondary); text-align: center; }
+  .day-view-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 8px; border-bottom: 1px solid var(--border);
+    cursor: pointer; border-radius: 6px;
+  }
+  .day-view-row:last-child { border-bottom: none; }
+  .day-view-row:hover { background: rgba(201,162,39,.10); }
+  .day-view-time { flex-shrink: 0; width: 82px; font-weight: 600; color: var(--text-secondary); font-size: .85rem; }
+  .day-view-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .day-view-row.overdue .day-view-time, .day-view-row.due_today .day-view-time { color: var(--danger-fg); }
+  .day-view-row.completed .day-view-time { color: var(--success-fg); }
+  .day-view-row.manual .day-view-time { color: var(--gold); }
+
   /* ---- Dialer ---- */
   .source-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
   .source-bar button { background: rgba(19,28,46,.5); color: var(--text); border: 1px solid var(--border); }
@@ -1638,6 +1653,23 @@
         <button type="submit" id="efSubmitBtn">Save Event</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Day view: click any calendar day to see all of that day's events with
+     their times listed out, instead of having to click the exact tiny chip
+     for the one you want on a packed day. -->
+<div class="modal-overlay" id="dayViewOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="dayViewTitle">Day</h2>
+      <button class="modal-close" id="dayViewCloseBtn">&times;</button>
+    </div>
+    <div class="day-view-list" id="dayViewList"></div>
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="dayViewCloseBtn2">Close</button>
+      <button type="button" id="dayViewAddBtn">+ Add Event</button>
+    </div>
   </div>
 </div>
 
@@ -3747,7 +3779,7 @@ async function renderCalendar() {
     const dateStr = `${calYear}-${String(calMonth).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const cell = document.createElement('div');
     cell.className = 'cal-cell' + (dateStr === todayStr ? ' today' : '');
-    cell.title = 'Click to add an event';
+    cell.title = "Click to see this day's events";
     const dayNum = document.createElement('div');
     dayNum.className = 'cal-daynum';
     dayNum.textContent = day;
@@ -3775,10 +3807,60 @@ async function renderCalendar() {
       });
       chipList.appendChild(chip);
     }
-    cell.addEventListener('click', () => openEventForm(dateStr, null));
+    // A specific chip click (above) still jumps straight to that one item
+    // -- this is the fallback for clicking anywhere else on the day, so
+    // Mario doesn't have to hit the exact tiny chip pixel on a packed day.
+    cell.addEventListener('click', () => openDayView(dateStr, eventsByDay[dateStr] || []));
     calendarGrid.appendChild(cell);
   }
 }
+
+const dayViewOverlay = document.getElementById('dayViewOverlay');
+const dayViewTitle = document.getElementById('dayViewTitle');
+const dayViewList = document.getElementById('dayViewList');
+const dayViewAddBtn = document.getElementById('dayViewAddBtn');
+let dayViewDateStr = null;
+
+function formatDayViewDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function openDayView(dateStr, dayEvents) {
+  dayViewDateStr = dateStr;
+  dayViewTitle.textContent = formatDayViewDate(dateStr);
+  const sorted = [...dayEvents].sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+  if (!sorted.length) {
+    dayViewList.innerHTML = '<div class="day-view-empty">No events today.</div>';
+  } else {
+    dayViewList.innerHTML = '';
+    for (const e of sorted) {
+      const row = document.createElement('div');
+      const statusClass = e.kind === 'manual' ? 'manual' : e.status;
+      row.className = `day-view-row ${statusClass}`;
+      const timeLabel = e.time ? formatTime12(e.time) : 'All day';
+      const titleLabel = e.kind === 'manual' ? e.title
+        : e.kind === 'list' ? `💰 ${e.list_name} — Contact List call round`
+        : `Follow up with ${e.client_name}`;
+      row.innerHTML = `<span class="day-view-time">${escapeHtml(timeLabel)}</span><span class="day-view-label">${escapeHtml(titleLabel)}</span>`;
+      row.addEventListener('click', () => {
+        dayViewOverlay.classList.remove('show');
+        if (e.kind === 'manual') openEventForm(dateStr, e);
+        else if (e.kind === 'list') { showCrmTab(crmTabListsBtn, crmListsView); loadContactLists(); }
+        else openClientDetail(e.client_id);
+      });
+      dayViewList.appendChild(row);
+    }
+  }
+  dayViewOverlay.classList.add('show');
+}
+
+dayViewAddBtn.addEventListener('click', () => {
+  dayViewOverlay.classList.remove('show');
+  openEventForm(dayViewDateStr, null);
+});
+document.getElementById('dayViewCloseBtn').addEventListener('click', () => dayViewOverlay.classList.remove('show'));
+document.getElementById('dayViewCloseBtn2').addEventListener('click', () => dayViewOverlay.classList.remove('show'));
 
 /* ===================== Calendar events (manual, click-to-add) ===================== */
 const eventFormOverlay = document.getElementById('eventFormOverlay');
