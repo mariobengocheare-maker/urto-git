@@ -47,3 +47,5 @@ services:
         sync: false
       - key: MICROSOFT_OAUTH_CLIENT_SECRET
         sync: false
+      - key: ORS_API_KEY
+        sync: false

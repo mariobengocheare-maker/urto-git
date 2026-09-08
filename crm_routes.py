@@ -605,3 +605,98 @@ def txn_download_signed(doc_id):
         as_attachment=True,
         download_name=row["signed_original_name"] or "signed_document",
     )
+
+
+# ===================== ShowingDay (GPS route optimization) =====================
+
+@crm_bp.route("/api/crm/showing_days/ors_status")
+def showing_ors_status():
+    return jsonify(crm.get_ors_status())
+
+
+@crm_bp.route("/api/crm/showing_days", methods=["GET"])
+def showing_list_days():
+    return jsonify(crm.list_showing_days(request.args.get("date") or None))
+
+
+@crm_bp.route("/api/crm/showing_days", methods=["POST"])
+def showing_create_day():
+    data = request.get_json(force=True)
+    date_str = (data.get("date") or "").strip()
+    if not date_str:
+        return jsonify({"error": "A date is required"}), 400
+    day = crm.create_showing_day(
+        date_str=date_str,
+        lunch_enabled=bool(data.get("lunch_enabled", True)),
+        lunch_start_time=(data.get("lunch_start_time") or "12:30").strip(),
+        lunch_minutes=int(data.get("lunch_minutes") or 30),
+    )
+    return jsonify(day)
+
+
+@crm_bp.route("/api/crm/showing_days/<int:day_id>", methods=["GET"])
+def showing_get_day(day_id):
+    day = crm.get_showing_day(day_id)
+    if not day:
+        abort(404)
+    return jsonify(day)
+
+
+@crm_bp.route("/api/crm/showing_days/<int:day_id>", methods=["PUT"])
+def showing_update_day(day_id):
+    data = request.get_json(force=True)
+    day = crm.update_showing_day_settings(
+        day_id,
+        lunch_enabled=bool(data.get("lunch_enabled", True)),
+        lunch_start_time=(data.get("lunch_start_time") or "12:30").strip(),
+        lunch_minutes=int(data.get("lunch_minutes") or 30),
+    )
+    if not day:
+        abort(404)
+    return jsonify(day)
+
+
+@crm_bp.route("/api/crm/showing_days/<int:day_id>", methods=["DELETE"])
+def showing_delete_day(day_id):
+    crm.delete_showing_day(day_id)
+    return jsonify({"ok": True})
+
+
+@crm_bp.route("/api/crm/showing_days/<int:day_id>/stops", methods=["POST"])
+def showing_add_stop(day_id):
+    data = request.get_json(force=True)
+    address = (data.get("address") or "").strip()
+    if not address:
+        return jsonify({"error": "An address is required"}), 400
+    try:
+        stop = crm.add_showing_stop(
+            day_id, address,
+            client_id=data.get("client_id") or None,
+            visit_minutes=int(data.get("visit_minutes") or 30),
+            notes=(data.get("notes") or "").strip(),
+        )
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 502
+    return jsonify(stop)
+
+
+@crm_bp.route("/api/crm/showing_stops/<int:stop_id>", methods=["DELETE"])
+def showing_remove_stop(stop_id):
+    crm.remove_showing_stop(stop_id)
+    return jsonify({"ok": True})
+
+
+@crm_bp.route("/api/crm/showing_days/<int:day_id>/optimize", methods=["POST"])
+def showing_optimize(day_id):
+    data = request.get_json(force=True)
+    try:
+        day = crm.optimize_showing_day(
+            day_id,
+            start_type=data.get("start_type"),
+            start_address=data.get("start_address"),
+            start_lat=data.get("start_lat"),
+            start_lng=data.get("start_lng"),
+        )
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 502
+    return jsonify(day)

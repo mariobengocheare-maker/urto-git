@@ -24,6 +24,7 @@ from werkzeug.utils import secure_filename
 
 import google_drive_api
 import microsoft_graph_api
+import ors_routing
 
 # Keep this in sync with urto_updater.pyw's REPO_ZIP_URL — same repo/branch,
 # just also surfaced as a plain link inside the backups themselves so the
@@ -1218,6 +1219,46 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             text TEXT NOT NULL,
             sort_order INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    # ShowingDay: a real GPS-optimized route/schedule for a day of showings
+    # (see build order re: Mario's request), via OpenRouteService — see
+    # ors_routing.py. One showing_days row per built route; its stops are
+    # added by address (geocoded once, on add — see add_showing_stop) and
+    # only get a real sort_order/eta once optimize_showing_day() actually
+    # runs. Deliberately its own pair of tables, not folded into `events` —
+    # a showing route is a same-day planning tool with real lat/lng and an
+    # optimizer-assigned order, nothing like a calendar reminder.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS showing_days (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            lunch_enabled INTEGER NOT NULL DEFAULT 1,
+            lunch_start_time TEXT NOT NULL DEFAULT '12:30',
+            lunch_minutes INTEGER NOT NULL DEFAULT 30,
+            lunch_eta TEXT,
+            start_type TEXT,
+            start_address TEXT,
+            start_lat REAL,
+            start_lng REAL,
+            optimized_at TEXT,
+            total_drive_minutes INTEGER,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS showing_stops (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            showing_day_id INTEGER NOT NULL REFERENCES showing_days(id) ON DELETE CASCADE,
+            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+            address TEXT NOT NULL,
+            lat REAL NOT NULL,
+            lng REAL NOT NULL,
+            visit_minutes INTEGER NOT NULL DEFAULT 30,
+            notes TEXT,
+            sort_order INTEGER,
+            eta TEXT,
             created_at TEXT NOT NULL
         )
     """)
@@ -2881,3 +2922,206 @@ def remove_push_subscription(endpoint: str):
     conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
     conn.commit()
     conn.close()
+
+
+# ===================== ShowingDay (GPS route optimization) =====================
+# A real driving-route optimizer for a day of showings, via OpenRouteService
+# (ors_routing.py) -- Mario adds stops by address, optionally pins a lunch
+# break (his own preferred time + length), picks a starting point (his live
+# GPS or a typed address) fresh each time he optimizes, and gets back a
+# real optimized visit order with arrival-time estimates. This lives in the
+# shared crm.py/crm_routes.py layer (not app.py/hosted_app.py directly), so
+# it works on both desktop and phone automatically the same way every other
+# CRM feature does -- desktop proxies every /api/crm call to the hosted
+# server (see hosted_sync.py), so the actual OpenRouteService call always
+# runs from Render regardless of which device Mario is using.
+
+def get_ors_status() -> dict:
+    return {"configured": ors_routing.is_configured()}
+
+
+def _showing_day_to_dict(day_row: sqlite3.Row) -> dict:
+    conn = get_conn()
+    stop_rows = conn.execute(
+        "SELECT showing_stops.*, clients.name AS client_name FROM showing_stops "
+        "LEFT JOIN clients ON clients.id = showing_stops.client_id "
+        "WHERE showing_day_id = ? "
+        "ORDER BY CASE WHEN sort_order IS NULL THEN 1 ELSE 0 END, sort_order, showing_stops.id",
+        (day_row["id"],),
+    ).fetchall()
+    conn.close()
+    d = dict(day_row)
+    d["stops"] = [dict(r) for r in stop_rows]
+    return d
+
+
+def create_showing_day(date_str: str, lunch_enabled: bool = True,
+                        lunch_start_time: str = "12:30", lunch_minutes: int = 30) -> dict:
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO showing_days (date, lunch_enabled, lunch_start_time, lunch_minutes, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (date_str, 1 if lunch_enabled else 0, lunch_start_time, int(lunch_minutes), _now().isoformat()),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM showing_days WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    on_data_changed("showing day created")
+    return _showing_day_to_dict(row)
+
+
+def list_showing_days(date_str: str = None) -> list:
+    conn = get_conn()
+    if date_str:
+        rows = conn.execute(
+            "SELECT * FROM showing_days WHERE date = ? ORDER BY created_at DESC", (date_str,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM showing_days ORDER BY date DESC, created_at DESC").fetchall()
+    conn.close()
+    return [_showing_day_to_dict(r) for r in rows]
+
+
+def get_showing_day(showing_day_id: int):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM showing_days WHERE id = ?", (showing_day_id,)).fetchone()
+    conn.close()
+    return _showing_day_to_dict(row) if row else None
+
+
+def update_showing_day_settings(showing_day_id: int, lunch_enabled: bool,
+                                 lunch_start_time: str, lunch_minutes: int):
+    """Changing the lunch settings invalidates any previously-optimized
+    schedule -- an old order/ETA computed under the OLD lunch time would be
+    actively misleading once Mario changes it, so this clears optimized_at
+    and every stop's sort_order/eta rather than leaving a stale schedule
+    displayed as if it still reflected the current settings."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE showing_days SET lunch_enabled = ?, lunch_start_time = ?, lunch_minutes = ?, "
+        "optimized_at = NULL, lunch_eta = NULL, total_drive_minutes = NULL WHERE id = ?",
+        (1 if lunch_enabled else 0, lunch_start_time, int(lunch_minutes), showing_day_id),
+    )
+    conn.execute("UPDATE showing_stops SET sort_order = NULL, eta = NULL WHERE showing_day_id = ?",
+                 (showing_day_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("showing day settings updated")
+    return get_showing_day(showing_day_id)
+
+
+def delete_showing_day(showing_day_id: int):
+    conn = get_conn()
+    conn.execute("DELETE FROM showing_days WHERE id = ?", (showing_day_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("showing day deleted")
+
+
+def add_showing_stop(showing_day_id: int, address: str, client_id: int = None,
+                      visit_minutes: int = 30, notes: str = "") -> dict:
+    """Geocodes the address BEFORE ever writing a row -- a stop with no
+    real coordinates would be useless to the optimizer and worse, silently
+    wrong if it were ever allowed to default to (0, 0) or similar. Raises
+    RuntimeError (not connected / no match / a real API failure) with
+    nothing written on any failure, same fail-safe pattern as
+    create_virtual_meeting()."""
+    geo = ors_routing.geocode(address)
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO showing_stops (showing_day_id, client_id, address, lat, lng, visit_minutes, notes, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (showing_day_id, client_id, geo["label"], geo["lat"], geo["lng"],
+         max(1, int(visit_minutes or 30)), notes or "", _now().isoformat()),
+    )
+    # Adding a stop invalidates any existing optimized order for this day --
+    # the new stop has no place in it yet.
+    conn.execute(
+        "UPDATE showing_days SET optimized_at = NULL, lunch_eta = NULL, total_drive_minutes = NULL WHERE id = ?",
+        (showing_day_id,),
+    )
+    conn.execute("UPDATE showing_stops SET sort_order = NULL, eta = NULL WHERE showing_day_id = ?",
+                 (showing_day_id,))
+    conn.commit()
+    row = conn.execute(
+        "SELECT showing_stops.*, clients.name AS client_name FROM showing_stops "
+        "LEFT JOIN clients ON clients.id = showing_stops.client_id WHERE showing_stops.id = ?",
+        (cur.lastrowid,),
+    ).fetchone()
+    conn.close()
+    on_data_changed("showing stop added")
+    return dict(row)
+
+
+def remove_showing_stop(stop_id: int):
+    conn = get_conn()
+    row = conn.execute("SELECT showing_day_id FROM showing_stops WHERE id = ?", (stop_id,)).fetchone()
+    if not row:
+        conn.close()
+        return
+    showing_day_id = row["showing_day_id"]
+    conn.execute("DELETE FROM showing_stops WHERE id = ?", (stop_id,))
+    conn.execute(
+        "UPDATE showing_days SET optimized_at = NULL, lunch_eta = NULL, total_drive_minutes = NULL WHERE id = ?",
+        (showing_day_id,),
+    )
+    conn.execute("UPDATE showing_stops SET sort_order = NULL, eta = NULL WHERE showing_day_id = ?",
+                 (showing_day_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("showing stop removed")
+
+
+def optimize_showing_day(showing_day_id: int, start_type: str,
+                          start_address: str = None, start_lat: float = None,
+                          start_lng: float = None) -> dict:
+    """Resolves the chosen starting point (geocoding a typed address if
+    that's what was picked -- GPS coordinates from the browser are already
+    real numbers and skip that step), calls the real optimizer, and writes
+    the result back onto the day + its stops. Raises RuntimeError with a
+    clear reason on any failure (nothing not connected/no stops/ORS
+    rejected the request) -- never silently leaves a stale or partial
+    schedule looking like a fresh one."""
+    day = get_showing_day(showing_day_id)
+    if not day:
+        raise RuntimeError("That showing day no longer exists.")
+    if not day["stops"]:
+        raise RuntimeError("Add at least one stop before optimizing a route.")
+
+    if start_type == "gps":
+        if start_lat is None or start_lng is None:
+            raise RuntimeError("Couldn't get your current location — check location permission and try again.")
+        resolved_label = None
+    else:
+        if not start_address or not start_address.strip():
+            raise RuntimeError("Enter a starting address, or switch to using your current location.")
+        geo = ors_routing.geocode(start_address.strip())
+        start_lat, start_lng = geo["lat"], geo["lng"]
+        resolved_label = geo["label"]
+
+    lunch_start = day["lunch_start_time"] if day["lunch_enabled"] else None
+    lunch_minutes = day["lunch_minutes"] if day["lunch_enabled"] else 0
+
+    result = ors_routing.optimize_route(
+        start_lat=start_lat, start_lng=start_lng,
+        stops=[{"id": s["id"], "lat": s["lat"], "lng": s["lng"], "visit_minutes": s["visit_minutes"]}
+               for s in day["stops"]],
+        lunch_start_time=lunch_start, lunch_minutes=lunch_minutes,
+    )
+
+    conn = get_conn()
+    conn.execute(
+        "UPDATE showing_days SET start_type = ?, start_address = ?, start_lat = ?, start_lng = ?, "
+        "optimized_at = ?, lunch_eta = ?, total_drive_minutes = ? WHERE id = ?",
+        (start_type, resolved_label or start_address, start_lat, start_lng,
+         _now().isoformat(), result["lunch_eta"], result["total_drive_minutes"], showing_day_id),
+    )
+    for order_index, stop_id in enumerate(result["order"]):
+        conn.execute(
+            "UPDATE showing_stops SET sort_order = ?, eta = ? WHERE id = ?",
+            (order_index, result["etas"].get(stop_id), stop_id),
+        )
+    conn.commit()
+    conn.close()
+    on_data_changed("showing day optimized")
+    return get_showing_day(showing_day_id)

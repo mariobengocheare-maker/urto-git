@@ -1044,6 +1044,7 @@
   <button class="tab-btn {{ 'active' if hosted else '' }}" id="tabCrmBtn">URTO CRM</button>
   <button class="tab-btn" id="tabDialerBtn">URTO Dialer</button>
   <button class="tab-btn" id="tabTxnBtn">Transactions</button>
+  <button class="tab-btn" id="tabShowingBtn">ShowingDay</button>
 </div>
 
 <main>
@@ -1378,6 +1379,89 @@
         <button class="ghost small" id="txnRestoreBtn" style="display:none">↩ Restore to Active</button>
         <button class="danger small" id="txnDeleteBtn" style="background:var(--danger-fg)">Delete Transaction</button>
       </div>
+    </div>
+  </div>
+</section>
+
+<section id="showingSection" style="display:none">
+  <h1>ShowingDay</h1>
+  <p class="sub">Build a real GPS-optimized driving route for a day of showings, with an optional lunch break.</p>
+
+  <div class="error-box" id="showingOrsWarning" style="display:none">
+    ShowingDay isn't set up on the server yet — it needs a free OpenRouteService API key (openrouteservice.org) added as the <code>ORS_API_KEY</code> environment variable.
+  </div>
+
+  <div class="card" style="margin-bottom:18px">
+    <div class="row" style="margin-top:0; align-items:flex-end; flex-wrap:wrap; gap:14px">
+      <div class="form-group" style="margin-bottom:0">
+        <label for="showingDate">Date</label>
+        <input type="date" id="showingDate">
+      </div>
+      <button id="showingLoadBtn">Load / Start Day</button>
+    </div>
+  </div>
+
+  <div id="showingDayView" style="display:none">
+    <div class="card" style="margin-bottom:18px">
+      <h2 style="margin-top:0">Lunch Break</h2>
+      <div class="row" style="align-items:center; gap:16px; flex-wrap:wrap">
+        <label style="display:flex; align-items:center; gap:8px; font-weight:400">
+          <input type="checkbox" id="showingLunchEnabled" checked> Include a lunch break
+        </label>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="showingLunchTime">Preferred time</label>
+          <input type="time" id="showingLunchTime" value="12:30">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="showingLunchMinutes">Length (minutes)</label>
+          <input type="number" id="showingLunchMinutes" min="10" max="180" step="5" value="30" style="width:90px">
+        </div>
+        <button class="ghost small" id="showingLunchSaveBtn">Save</button>
+      </div>
+      <div class="sub" style="margin-top:8px">The optimizer slots the break in near this time — changing these settings clears any route you've already built, so you'll need to hit Optimize again.</div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <h2 style="margin-top:0">Stops</h2>
+      <div id="showingStopsList"></div>
+      <div class="row" style="margin-top:14px; flex-wrap:wrap; gap:10px; align-items:flex-end">
+        <div class="form-group" style="margin-bottom:0; flex:1; min-width:220px">
+          <label for="showingStopAddress">Address</label>
+          <input type="text" id="showingStopAddress" placeholder="e.g. 123 Ocean Boulevard, Miami Beach">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="showingStopClient">Client (optional)</label>
+          <select id="showingStopClient"><option value="">— None —</option></select>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="showingStopMinutes">Visit length (min)</label>
+          <input type="number" id="showingStopMinutes" min="5" max="240" step="5" value="30" style="width:90px">
+        </div>
+        <button id="showingAddStopBtn">+ Add Stop</button>
+      </div>
+      <div class="error-box" id="showingStopError" style="display:none"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <h2 style="margin-top:0">Starting Point</h2>
+      <div class="row" style="gap:16px; flex-wrap:wrap; align-items:center">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:400">
+          <input type="radio" name="showingStartType" id="showingStartGps" value="gps" checked> Use my current location
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-weight:400">
+          <input type="radio" name="showingStartType" id="showingStartAddr" value="address"> Start from an address
+        </label>
+        <input type="text" id="showingStartAddress" placeholder="Starting address" style="display:none; flex:1; min-width:220px">
+      </div>
+      <button id="showingOptimizeBtn" style="margin-top:16px">🧭 Optimize Route</button>
+      <div class="error-box" id="showingOptimizeError" style="display:none"></div>
+    </div>
+
+    <div class="card" id="showingResultsCard" style="display:none">
+      <h2 style="margin-top:0">Today's Route</h2>
+      <div class="sub" id="showingResultsSummary"></div>
+      <div id="showingResultsList" style="margin-top:14px"></div>
+      <button class="ghost" id="showingOpenMapsBtn" style="margin-top:14px">📍 Open Route in Google Maps</button>
     </div>
   </div>
 </section>
@@ -2097,22 +2181,26 @@ const HOSTED = {{ 'true' if hosted else 'false' }};
 const tabCrmBtn = document.getElementById('tabCrmBtn');
 const tabDialerBtn = document.getElementById('tabDialerBtn');
 const tabTxnBtn = document.getElementById('tabTxnBtn');
+const tabShowingBtn = document.getElementById('tabShowingBtn');
 const homeSection = HOSTED ? null : document.getElementById('homeSection');
 const lookupSection = HOSTED ? null : document.getElementById('lookupSection');
 const crmSection = document.getElementById('crmSection');
 const dialerSection = document.getElementById('dialerSection');
 const txnSection = document.getElementById('txnSection');
+const showingSection = document.getElementById('showingSection');
 
 const TOP_TABS = HOSTED ? [
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
+  { key: 'showing', btn: tabShowingBtn, section: showingSection, onShow: () => { initShowingDayTab(); } },
 ] : [
   { key: 'home', btn: document.getElementById('tabHomeBtn'), section: homeSection, onShow: null },
   { key: 'lookup', btn: document.getElementById('tabLookupBtn'), section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
+  { key: 'showing', btn: tabShowingBtn, section: showingSection, onShow: () => { initShowingDayTab(); } },
 ];
 
 function showTopTab(target) {
@@ -5404,6 +5492,294 @@ async function submitNewDocType() {
 document.getElementById('txnAddDocTypeBtn').addEventListener('click', submitNewDocType);
 txnNewDocName.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); submitNewDocType(); }
+});
+
+/* ===================== ShowingDay (GPS route optimization) ===================== */
+const showingOrsWarning = document.getElementById('showingOrsWarning');
+const showingDate = document.getElementById('showingDate');
+const showingLoadBtn = document.getElementById('showingLoadBtn');
+const showingDayView = document.getElementById('showingDayView');
+const showingLunchEnabled = document.getElementById('showingLunchEnabled');
+const showingLunchTime = document.getElementById('showingLunchTime');
+const showingLunchMinutes = document.getElementById('showingLunchMinutes');
+const showingLunchSaveBtn = document.getElementById('showingLunchSaveBtn');
+const showingStopsList = document.getElementById('showingStopsList');
+const showingStopAddress = document.getElementById('showingStopAddress');
+const showingStopClient = document.getElementById('showingStopClient');
+const showingStopMinutes = document.getElementById('showingStopMinutes');
+const showingAddStopBtn = document.getElementById('showingAddStopBtn');
+const showingStopError = document.getElementById('showingStopError');
+const showingStartGps = document.getElementById('showingStartGps');
+const showingStartAddr = document.getElementById('showingStartAddr');
+const showingStartAddress = document.getElementById('showingStartAddress');
+const showingOptimizeBtn = document.getElementById('showingOptimizeBtn');
+const showingOptimizeError = document.getElementById('showingOptimizeError');
+const showingResultsCard = document.getElementById('showingResultsCard');
+const showingResultsSummary = document.getElementById('showingResultsSummary');
+const showingResultsList = document.getElementById('showingResultsList');
+const showingOpenMapsBtn = document.getElementById('showingOpenMapsBtn');
+
+let currentShowingDay = null;
+let showingClientsLoaded = false;
+
+function todayIsoDate() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function initShowingDayTab() {
+  if (!showingDate.value) showingDate.value = todayIsoDate();
+  try {
+    const res = await fetch('/api/crm/showing_days/ors_status');
+    const s = await res.json();
+    showingOrsWarning.style.display = s.configured ? 'none' : 'block';
+  } catch (e) {
+    // A connectivity hiccup here isn't worth blocking the rest of the tab --
+    // the real error will surface clearly the moment Mario tries to add a
+    // stop or optimize, same as everywhere else in this file.
+  }
+  if (!showingClientsLoaded) {
+    showingClientsLoaded = true;
+    try {
+      const res = await fetch('/api/crm/clients');
+      if (res.ok) {
+        const clients = await res.json();
+        showingStopClient.innerHTML = '<option value="">— None —</option>' +
+          clients.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+      }
+    } catch (e) { /* client list is optional convenience, not required to use this tab */ }
+  }
+}
+
+showingLoadBtn.addEventListener('click', async () => {
+  const dateStr = showingDate.value || todayIsoDate();
+  showingLoadBtn.disabled = true;
+  showingLoadBtn.textContent = 'Loading…';
+  try {
+    const res = await fetch(`/api/crm/showing_days?date=${encodeURIComponent(dateStr)}`);
+    const days = res.ok ? await res.json() : [];
+    if (days.length) {
+      currentShowingDay = days[0];
+    } else {
+      const createRes = await fetch('/api/crm/showing_days', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: dateStr }),
+      });
+      currentShowingDay = await createRes.json();
+    }
+    renderShowingDay();
+    showingDayView.style.display = 'block';
+  } catch (e) {
+    alert("Couldn't reach URTO's server — try again.");
+  } finally {
+    showingLoadBtn.disabled = false;
+    showingLoadBtn.textContent = 'Load / Start Day';
+  }
+});
+
+function renderShowingDay() {
+  const day = currentShowingDay;
+  if (!day) return;
+  showingLunchEnabled.checked = !!day.lunch_enabled;
+  showingLunchTime.value = day.lunch_start_time || '12:30';
+  showingLunchMinutes.value = day.lunch_minutes || 30;
+
+  if (!day.stops.length) {
+    showingStopsList.innerHTML = '<div class="sub">No stops added yet.</div>';
+  } else {
+    showingStopsList.innerHTML = day.stops.map(s => `
+      <div class="row" style="align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border)">
+        <div>
+          ${s.sort_order !== null ? `<b>#${s.sort_order + 1}${s.eta ? ' — ' + formatTime12(s.eta) : ''}</b> ` : ''}
+          ${escapeHtml(s.address)}
+          ${s.client_name ? ` <span class="sub">(${escapeHtml(s.client_name)})</span>` : ''}
+          <span class="sub">— ${s.visit_minutes} min</span>
+        </div>
+        <button class="ghost small" data-remove-stop="${s.id}">🗑</button>
+      </div>
+    `).join('');
+  }
+
+  if (day.optimized_at) {
+    showingResultsCard.style.display = 'block';
+    renderShowingResults();
+  } else {
+    showingResultsCard.style.display = 'none';
+  }
+}
+
+showingStopsList.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-remove-stop]');
+  if (!btn) return;
+  await fetch(`/api/crm/showing_stops/${btn.dataset.removeStop}`, { method: 'DELETE' });
+  const res = await fetch(`/api/crm/showing_days/${currentShowingDay.id}`);
+  currentShowingDay = await res.json();
+  renderShowingDay();
+});
+
+showingLunchSaveBtn.addEventListener('click', async () => {
+  if (!currentShowingDay) return;
+  const res = await fetch(`/api/crm/showing_days/${currentShowingDay.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lunch_enabled: showingLunchEnabled.checked,
+      lunch_start_time: showingLunchTime.value || '12:30',
+      lunch_minutes: parseInt(showingLunchMinutes.value, 10) || 30,
+    }),
+  });
+  currentShowingDay = await res.json();
+  renderShowingDay();
+});
+
+showingAddStopBtn.addEventListener('click', async () => {
+  if (!currentShowingDay) return;
+  showingStopError.style.display = 'none';
+  const address = showingStopAddress.value.trim();
+  if (!address) {
+    showingStopError.textContent = 'Enter an address first.';
+    showingStopError.style.display = 'block';
+    return;
+  }
+  showingAddStopBtn.disabled = true;
+  showingAddStopBtn.textContent = 'Adding…';
+  try {
+    const res = await fetch(`/api/crm/showing_days/${currentShowingDay.id}/stops`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        address,
+        client_id: showingStopClient.value || null,
+        visit_minutes: parseInt(showingStopMinutes.value, 10) || 30,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showingStopError.textContent = data.error || "Couldn't add that stop.";
+      showingStopError.style.display = 'block';
+      return;
+    }
+    showingStopAddress.value = '';
+    showingStopClient.value = '';
+    const dayRes = await fetch(`/api/crm/showing_days/${currentShowingDay.id}`);
+    currentShowingDay = await dayRes.json();
+    renderShowingDay();
+  } catch (e) {
+    showingStopError.textContent = "Couldn't reach URTO's server — try again.";
+    showingStopError.style.display = 'block';
+  } finally {
+    showingAddStopBtn.disabled = false;
+    showingAddStopBtn.textContent = '+ Add Stop';
+  }
+});
+
+function updateShowingStartUi() {
+  showingStartAddress.style.display = showingStartAddr.checked ? 'block' : 'none';
+}
+showingStartGps.addEventListener('change', updateShowingStartUi);
+showingStartAddr.addEventListener('change', updateShowingStartUi);
+
+function getCurrentPositionAsync() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error('This browser has no location support.')); return; }
+    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000 });
+  });
+}
+
+showingOptimizeBtn.addEventListener('click', async () => {
+  if (!currentShowingDay) return;
+  showingOptimizeError.style.display = 'none';
+  showingOptimizeBtn.disabled = true;
+  showingOptimizeBtn.textContent = 'Optimizing…';
+  try {
+    let body;
+    if (showingStartGps.checked) {
+      let pos;
+      try {
+        pos = await getCurrentPositionAsync();
+      } catch (e) {
+        showingOptimizeError.textContent = "Couldn't get your current location — check location permission, or switch to starting from an address.";
+        showingOptimizeError.style.display = 'block';
+        return;
+      }
+      body = { start_type: 'gps', start_lat: pos.coords.latitude, start_lng: pos.coords.longitude };
+    } else {
+      const addr = showingStartAddress.value.trim();
+      if (!addr) {
+        showingOptimizeError.textContent = 'Enter a starting address, or switch to using your current location.';
+        showingOptimizeError.style.display = 'block';
+        return;
+      }
+      body = { start_type: 'address', start_address: addr };
+    }
+    const res = await fetch(`/api/crm/showing_days/${currentShowingDay.id}/optimize`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showingOptimizeError.textContent = data.error || "Couldn't build a route.";
+      showingOptimizeError.style.display = 'block';
+      return;
+    }
+    currentShowingDay = data;
+    renderShowingDay();
+  } catch (e) {
+    showingOptimizeError.textContent = "Couldn't reach URTO's server — try again.";
+    showingOptimizeError.style.display = 'block';
+  } finally {
+    showingOptimizeBtn.disabled = false;
+    showingOptimizeBtn.textContent = '🧭 Optimize Route';
+  }
+});
+
+function renderShowingResults() {
+  const day = currentShowingDay;
+  const ordered = day.stops.filter(s => s.sort_order !== null).sort((a, b) => a.sort_order - b.sort_order);
+
+  // Build one chronological timeline of stops + the lunch break (if any) --
+  // "HH:MM" zero-padded strings sort correctly with plain string comparison
+  // for a single day, so no date-math is needed to merge them in order.
+  const timeline = ordered.map(s => ({ kind: 'stop', time: s.eta, stop: s }));
+  if (day.lunch_eta) {
+    timeline.push({ kind: 'lunch', time: day.lunch_eta, minutes: day.lunch_minutes });
+  }
+  timeline.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+
+  showingResultsSummary.textContent = `${ordered.length} stop${ordered.length === 1 ? '' : 's'}` +
+    (day.total_drive_minutes != null ? `, about ${day.total_drive_minutes} min of driving` : '') +
+    (day.lunch_eta ? `, lunch at ${formatTime12(day.lunch_eta)}` : '');
+
+  showingResultsList.innerHTML = timeline.map(item => {
+    if (item.kind === 'lunch') {
+      return `<div class="row" style="padding:8px 0; border-bottom:1px solid var(--border)">
+        🥪 <b>Lunch break</b> — ${formatTime12(item.time)} (${item.minutes} min)
+      </div>`;
+    }
+    const s = item.stop;
+    return `<div class="row" style="padding:8px 0; border-bottom:1px solid var(--border)">
+      <b>${formatTime12(item.time)}</b> — ${escapeHtml(s.address)}
+      ${s.client_name ? ` <span class="sub">(${escapeHtml(s.client_name)})</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function buildShowingGoogleMapsUrl(day) {
+  const ordered = day.stops.filter(s => s.sort_order !== null).sort((a, b) => a.sort_order - b.sort_order);
+  if (!ordered.length) return null;
+  const dest = encodeURIComponent(ordered[ordered.length - 1].address);
+  const waypoints = ordered.slice(0, -1).map(s => encodeURIComponent(s.address)).join('|');
+  let url = `https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving`;
+  if (waypoints) url += `&waypoints=${waypoints}`;
+  if (day.start_type === 'address' && day.start_address) {
+    url += `&origin=${encodeURIComponent(day.start_address)}`;
+  }
+  // start_type 'gps' deliberately omits &origin= -- Google Maps' own URL
+  // scheme defaults an absent origin to the device's live current location.
+  return url;
+}
+
+showingOpenMapsBtn.addEventListener('click', () => {
+  const url = buildShowingGoogleMapsUrl(currentShowingDay);
+  if (url) window.open(url, '_blank');
 });
 
 </script>
