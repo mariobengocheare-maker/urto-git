@@ -2788,8 +2788,30 @@ if (!HOSTED) {
   // and shut itself down on the tab he was about to use.
   sendHeartbeat();
   setInterval(sendHeartbeat, 5000);
+  // `pagehide` fires not just on a genuine tab close, but also when Chrome's
+  // Memory Saver silently DISCARDS a long-backgrounded tab to reclaim RAM --
+  // from JS's perspective those look identical (the page is torn down either
+  // way), but a discard is Chrome deciding to reclaim an inactive tab, not
+  // Mario actually being done with URTO; he'd tab back to it later and expect
+  // it to just reload, not find a dead server (exactly what he hit: left it
+  // open a long while, came back, and got ERR_CONNECTION_REFUSED). Discard
+  // only ever happens to a tab that's been HIDDEN for a while first -- a real
+  // close of the tab Mario is actually looking at fires pagehide within
+  // milliseconds of it going hidden. So: track how long the tab has been
+  // hidden, and only send the shutdown beacon if it just went hidden a moment
+  // ago (a real close/reload), not if it's been sitting hidden for a while
+  // (almost certainly a discard) -- that case is left for the server's own
+  // heartbeat-timeout watchdog to eventually clean up instead, which is now
+  // long enough to tolerate ordinary background-tab throttling too.
+  let hiddenSince = document.visibilityState === 'hidden' ? Date.now() : null;
+  document.addEventListener('visibilitychange', () => {
+    hiddenSince = document.visibilityState === 'hidden' ? Date.now() : null;
+  });
   window.addEventListener('pagehide', () => {
-    navigator.sendBeacon('/api/shutdown', new Blob([JSON.stringify({ tab_id: URTO_TAB_ID })], { type: 'application/json' }));
+    const likelyRealClose = hiddenSince === null || (Date.now() - hiddenSince) < 30000;
+    if (likelyRealClose) {
+      navigator.sendBeacon('/api/shutdown', new Blob([JSON.stringify({ tab_id: URTO_TAB_ID })], { type: 'application/json' }));
+    }
   });
 }
 

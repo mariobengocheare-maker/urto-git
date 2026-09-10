@@ -95,7 +95,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.13.9"
+APP_VERSION = "2.13.10"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -171,7 +171,20 @@ JOBS_LOCK = threading.Lock()
 # forgiving window, and _request_in_progress() below adds a second, more
 # direct guard: never exit while ANY real request (upload, note save,
 # transaction edit, ...) is actually being handled, not just a FOREWARN job.
-HEARTBEAT_TIMEOUT = 180
+#
+# Raised again, much further, after Mario reported the app "just stops
+# working" after being left open a long while, then refuses to connect at
+# all on reload — the real culprit was Chrome's own background-tab
+# throttling/discarding (Memory Saver), which can silently stop a
+# background tab's heartbeats for far longer than a few minutes, or tear
+# the tab down outright (see templates/index.html's `pagehide` handler for
+# the other half of this fix, which stops treating a Chrome-initiated
+# discard as a real tab close). This timeout is now purely the backstop
+# for a truly abandoned server (browser force-killed, PC crashed) — not
+# the everyday "Mario alt-tabbed away for a while" case — so it can
+# tolerate hours of ordinary idling/throttling without falsely killing a
+# server Mario is still going to come back to.
+HEARTBEAT_TIMEOUT = 3 * 60 * 60  # 3 hours
 
 _active_tabs = {}  # tab_id -> last-heartbeat time.time()
 _active_tabs_lock = threading.Lock()
