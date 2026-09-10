@@ -851,10 +851,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 30px 26px 16px;
+    gap: 40px;
+    flex-wrap: wrap;
+    padding: 30px 26px 34px;
     margin-bottom: 18px;
     overflow: hidden;
   }
+  .commission-total-main { display: flex; flex-direction: column; align-items: center; gap: 10px; }
   .commission-total-number {
     font-family: Optima, 'Century Gothic', Futura, Candara, 'Segoe UI', sans-serif;
     font-size: 4.4rem;
@@ -864,6 +867,19 @@
     line-height: 1;
     text-shadow: 0 2px 24px rgba(255,255,255,.12);
   }
+  .commission-rep-tally { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; font-size: .82rem; color: var(--text-secondary); }
+  .commission-rep-tally .rep-tally-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .commission-rep-tally .rep-tally-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .commission-donut-wrap { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; justify-content: center; }
+  .commission-donut {
+    width: 116px; height: 116px; border-radius: 50%; flex-shrink: 0;
+    -webkit-mask: radial-gradient(farthest-side, transparent 63%, #000 64%);
+    mask: radial-gradient(farthest-side, transparent 63%, #000 64%);
+  }
+  .commission-donut-legend { display: flex; flex-direction: column; gap: 6px; font-size: .78rem; }
+  .commission-donut-legend .donut-legend-row { display: flex; align-items: center; gap: 8px; }
+  .commission-donut-legend .donut-legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .commission-donut-legend .donut-legend-label { color: var(--text-secondary); }
   .commission-total-label {
     position: absolute;
     bottom: 14px;
@@ -876,7 +892,8 @@
   }
   @media (max-width: 640px) {
     .commission-total-number { font-size: 2.6rem; }
-    .commission-total-card { min-height: 110px; padding: 22px 18px 14px; }
+    .commission-total-card { min-height: 110px; padding: 22px 18px 30px; gap: 22px; }
+    .commission-donut { width: 92px; height: 92px; }
   }
 
   .commission-row {
@@ -889,6 +906,7 @@
   .commission-row .commission-main { flex: 1; min-width: 200px; }
   .commission-row .commission-meta { font-size: .8rem; color: var(--text-secondary); }
   .commission-row .commission-file-link { font-size: .82rem; }
+  .commission-row .commission-actions { display: flex; gap: 6px; }
 
   /* ---- Dialer ---- */
   .source-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -1512,6 +1530,15 @@
           <label for="txnCommissionRate">Commission rate (%)</label>
           <input type="number" id="txnCommissionRate" min="0" max="100" step="0.01" style="width:110px">
         </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="txnRepresented">Represented</label>
+          <select id="txnRepresented" style="width:130px">
+            <option value="seller">Seller</option>
+            <option value="buyer">Buyer</option>
+            <option value="landlord">Landlord</option>
+            <option value="tenant">Tenant</option>
+          </select>
+        </div>
         <div class="sub" id="txnCommissionPreview"></div>
       </div>
 
@@ -1666,7 +1693,14 @@
   <p class="sub">Your lifetime commissions, in one place.</p>
 
   <div class="card commission-total-card">
-    <div id="commissionLifetimeTotal" class="commission-total-number">$0</div>
+    <div class="commission-total-main">
+      <div id="commissionLifetimeTotal" class="commission-total-number">$0</div>
+      <div id="commissionRepTally" class="commission-rep-tally"></div>
+    </div>
+    <div class="commission-donut-wrap" id="commissionDonutWrap" style="display:none">
+      <div class="commission-donut" id="commissionDonut"></div>
+      <div class="commission-donut-legend" id="commissionDonutLegend"></div>
+    </div>
     <div class="commission-total-label">Lifetime Commission</div>
   </div>
 
@@ -1693,9 +1727,15 @@
         <input type="text" id="commissionNewTitle" placeholder="e.g. 123 Main St sale">
       </div>
       <div class="form-group" style="margin-bottom:0">
-        <label for="commissionNewAmount">Amount ($)</label>
-        <input type="number" id="commissionNewAmount" min="0" step="0.01" style="width:130px">
+        <label for="commissionNewAmount">Closing Sale Amount ($) *</label>
+        <input type="number" id="commissionNewAmount" min="0" step="0.01" style="width:150px">
       </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionNewDate">Closing Date *</label>
+        <input type="date" id="commissionNewDate">
+      </div>
+    </div>
+    <div class="row" style="flex-wrap:wrap; gap:10px; margin-top:6px">
       <div class="form-group" style="margin-bottom:0">
         <label for="commissionNewBrokerage">Brokerage</label>
         <input type="text" id="commissionNewBrokerage" placeholder="Defaults to current" style="width:170px">
@@ -1705,8 +1745,34 @@
         <input type="number" id="commissionNewSplit" min="0" max="100" step="1" style="width:90px">
       </div>
       <div class="form-group" style="margin-bottom:0">
-        <label for="commissionNewDate">Date</label>
-        <input type="date" id="commissionNewDate">
+        <label for="commissionNewDealType">Deal type</label>
+        <select id="commissionNewDealType">
+          <option value="sale">Sale</option>
+          <option value="rental">Rental</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionNewRepresented">Represented</label>
+        <select id="commissionNewRepresented">
+          <option value="seller">Seller</option>
+          <option value="buyer">Buyer</option>
+          <option value="landlord">Landlord</option>
+          <option value="tenant">Tenant</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label for="commissionNewSellers">Seller(s) (optional)</label>
+      <input type="text" id="commissionNewSellers" placeholder="e.g. John Smith, Jane Smith">
+    </div>
+    <div class="row" style="flex-wrap:wrap; gap:10px">
+      <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0">
+        <label for="commissionNewBuyersAgent">Buyer's agent (optional)</label>
+        <input type="text" id="commissionNewBuyersAgent">
+      </div>
+      <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0">
+        <label for="commissionNewCoListingAgent">Co-listing agent (optional)</label>
+        <input type="text" id="commissionNewCoListingAgent">
       </div>
     </div>
     <div class="form-group" style="margin-top:10px">
@@ -2048,11 +2114,98 @@
         <label for="txnNewType">Transaction Type *</label>
         <select id="txnNewType"></select>
       </div>
+      <div class="form-group">
+        <label for="txnNewRepresented">Who did you represent? *</label>
+        <select id="txnNewRepresented" required>
+          <option value="seller">Seller</option>
+          <option value="buyer">Buyer</option>
+          <option value="landlord">Landlord</option>
+          <option value="tenant">Tenant</option>
+        </select>
+      </div>
       <div class="modal-actions">
         <button type="button" class="ghost" id="txnNewCancelBtn">Cancel</button>
         <button type="submit">Create Transaction</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Edit Commission Entry modal -->
+<div class="modal-overlay" id="commissionEditOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Edit Commission</h2>
+      <button class="modal-close" id="commissionEditCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="commissionEditError" style="display:none"></div>
+    <div class="form-group">
+      <label for="commissionEditTitle">Title</label>
+      <input type="text" id="commissionEditTitle">
+    </div>
+    <div class="row" style="flex-wrap:wrap; gap:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionEditAmount">Closing Sale Amount ($) *</label>
+        <input type="number" id="commissionEditAmount" min="0" step="0.01" style="width:150px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionEditDate">Closing Date *</label>
+        <input type="date" id="commissionEditDate">
+      </div>
+    </div>
+    <div class="row" style="flex-wrap:wrap; gap:10px; margin-top:6px">
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionEditBrokerage">Brokerage</label>
+        <input type="text" id="commissionEditBrokerage" style="width:170px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionEditSplit">Split (%)</label>
+        <input type="number" id="commissionEditSplit" min="0" max="100" step="1" style="width:90px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionEditDealType">Deal type</label>
+        <select id="commissionEditDealType">
+          <option value="sale">Sale</option>
+          <option value="rental">Rental</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionEditRepresented">Represented</label>
+        <select id="commissionEditRepresented">
+          <option value="seller">Seller</option>
+          <option value="buyer">Buyer</option>
+          <option value="landlord">Landlord</option>
+          <option value="tenant">Tenant</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label for="commissionEditSellers">Seller(s) (optional)</label>
+      <input type="text" id="commissionEditSellers" placeholder="e.g. John Smith, Jane Smith">
+    </div>
+    <div class="row" style="flex-wrap:wrap; gap:10px">
+      <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0">
+        <label for="commissionEditBuyersAgent">Buyer's agent (optional)</label>
+        <input type="text" id="commissionEditBuyersAgent">
+      </div>
+      <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0">
+        <label for="commissionEditCoListingAgent">Co-listing agent (optional)</label>
+        <input type="text" id="commissionEditCoListingAgent">
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label for="commissionEditDesc">Description (optional)</label>
+      <textarea id="commissionEditDesc" rows="2"></textarea>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label>File</label>
+      <div id="commissionEditFileCurrent" class="sub" style="margin:0 0 6px"></div>
+      <input type="file" id="commissionEditFile">
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="commissionEditCancelBtn">Cancel</button>
+      <button type="button" id="commissionEditSaveBtn">Save Changes</button>
+    </div>
   </div>
 </div>
 
@@ -5359,6 +5512,7 @@ const txnRestoreBtn = document.getElementById('txnRestoreBtn');
 const txnDeleteBtn = document.getElementById('txnDeleteBtn');
 const txnSalePrice = document.getElementById('txnSalePrice');
 const txnCommissionRate = document.getElementById('txnCommissionRate');
+const txnRepresented = document.getElementById('txnRepresented');
 const txnCommissionPreview = document.getElementById('txnCommissionPreview');
 
 function updateTxnCommissionPreview() {
@@ -5466,6 +5620,7 @@ async function openTxnDetail(txnId) {
   txnDetailMeta.textContent = `${txnTypeLabel(t.transaction_type)} · created ${t.created_at.slice(0, 10)}`;
   txnSalePrice.value = t.sale_price != null ? t.sale_price : '';
   txnCommissionRate.value = t.commission_rate != null ? t.commission_rate : '';
+  txnRepresented.value = t.represented_as || 'seller';
   try {
     const settingsRes = await fetch('/api/crm/commission_settings');
     if (settingsRes.ok) window.commissionDefaultSplitPct = (await settingsRes.json()).default_split_pct;
@@ -5554,12 +5709,14 @@ async function saveTxnDetailFields() {
       title, status: txnDetailStatusValue,
       sale_price: txnSalePrice.value === '' ? null : parseFloat(txnSalePrice.value),
       commission_rate: txnCommissionRate.value === '' ? null : parseFloat(txnCommissionRate.value),
+      represented_as: txnRepresented.value,
     }),
   });
 }
 txnDetailTitle.addEventListener('blur', saveTxnDetailFields);
 txnSalePrice.addEventListener('blur', saveTxnDetailFields);
 txnCommissionRate.addEventListener('blur', saveTxnDetailFields);
+txnRepresented.addEventListener('change', saveTxnDetailFields);
 txnStatusBtns.querySelectorAll('.txn-status-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     setTxnStatusButtons(btn.getAttribute('data-status'));
@@ -5592,6 +5749,7 @@ const txnNewOverlay = document.getElementById('txnNewOverlay');
 const txnNewForm = document.getElementById('txnNewForm');
 const txnNewTitle = document.getElementById('txnNewTitle');
 const txnNewType = document.getElementById('txnNewType');
+const txnNewRepresented = document.getElementById('txnNewRepresented');
 const txnNewError = document.getElementById('txnNewError');
 
 txnNewBtn.addEventListener('click', async () => {
@@ -5613,7 +5771,7 @@ txnNewForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const res = await fetch('/api/txn/transactions', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transaction_type: txnNewType.value, title: txnNewTitle.value.trim() }),
+    body: JSON.stringify({ transaction_type: txnNewType.value, title: txnNewTitle.value.trim(), represented_as: txnNewRepresented.value }),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -6231,6 +6389,10 @@ waterfallNewItem.addEventListener('keydown', (e) => {
 
 /* ===================== Commission Tracker ===================== */
 const commissionLifetimeTotal = document.getElementById('commissionLifetimeTotal');
+const commissionRepTally = document.getElementById('commissionRepTally');
+const commissionDonutWrap = document.getElementById('commissionDonutWrap');
+const commissionDonut = document.getElementById('commissionDonut');
+const commissionDonutLegend = document.getElementById('commissionDonutLegend');
 const commissionCurrentBrokerage = document.getElementById('commissionCurrentBrokerage');
 const commissionDefaultSplit = document.getElementById('commissionDefaultSplit');
 const commissionSaveSplitBtn = document.getElementById('commissionSaveSplitBtn');
@@ -6239,6 +6401,11 @@ const commissionNewAmount = document.getElementById('commissionNewAmount');
 const commissionNewBrokerage = document.getElementById('commissionNewBrokerage');
 const commissionNewSplit = document.getElementById('commissionNewSplit');
 const commissionNewDate = document.getElementById('commissionNewDate');
+const commissionNewDealType = document.getElementById('commissionNewDealType');
+const commissionNewRepresented = document.getElementById('commissionNewRepresented');
+const commissionNewSellers = document.getElementById('commissionNewSellers');
+const commissionNewBuyersAgent = document.getElementById('commissionNewBuyersAgent');
+const commissionNewCoListingAgent = document.getElementById('commissionNewCoListingAgent');
 const commissionNewDesc = document.getElementById('commissionNewDesc');
 const commissionNewFile = document.getElementById('commissionNewFile');
 const commissionAddBtn = document.getElementById('commissionAddBtn');
@@ -6249,6 +6416,31 @@ const commissionSortSelect = document.getElementById('commissionSort');
 let commissionOffset = 0;
 let commissionSort = 'date_desc';
 const COMMISSION_PAGE_SIZE = 20;
+
+const REP_LABELS = { seller: 'Seller', buyer: 'Buyer', landlord: 'Landlord', tenant: 'Tenant' };
+const REP_COLORS = { seller: '#d4af37', buyer: '#4fd1e3', landlord: '#8a5cff', tenant: '#6bd694' };
+const DEAL_TYPE_LABELS = { sale: 'Sale', rental: 'Rental' };
+
+// Edit modal elements.
+const commissionEditOverlay = document.getElementById('commissionEditOverlay');
+const commissionEditCloseBtn = document.getElementById('commissionEditCloseBtn');
+const commissionEditCancelBtn = document.getElementById('commissionEditCancelBtn');
+const commissionEditSaveBtn = document.getElementById('commissionEditSaveBtn');
+const commissionEditError = document.getElementById('commissionEditError');
+const commissionEditTitle = document.getElementById('commissionEditTitle');
+const commissionEditAmount = document.getElementById('commissionEditAmount');
+const commissionEditDate = document.getElementById('commissionEditDate');
+const commissionEditBrokerage = document.getElementById('commissionEditBrokerage');
+const commissionEditSplit = document.getElementById('commissionEditSplit');
+const commissionEditDealType = document.getElementById('commissionEditDealType');
+const commissionEditRepresented = document.getElementById('commissionEditRepresented');
+const commissionEditSellers = document.getElementById('commissionEditSellers');
+const commissionEditBuyersAgent = document.getElementById('commissionEditBuyersAgent');
+const commissionEditCoListingAgent = document.getElementById('commissionEditCoListingAgent');
+const commissionEditDesc = document.getElementById('commissionEditDesc');
+const commissionEditFileCurrent = document.getElementById('commissionEditFileCurrent');
+const commissionEditFile = document.getElementById('commissionEditFile');
+let commissionEditingId = null;
 
 async function initCommissionTab() {
   const res = await fetch('/api/crm/commission_settings');
@@ -6286,6 +6478,50 @@ function formatMoney(n) {
   return `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
 }
 
+// Renders the small tally row (dot + count per represented-as type) plus
+// the donut "statistic wheel" + legend showing % of income, dollar amount,
+// and deal count per type. Sourced from list_commission_entries()'s
+// lifetime-wide by_representation breakdown (never just the current page).
+function renderRepTallyAndDonut(byRep) {
+  if (!byRep) { commissionRepTally.innerHTML = ''; commissionDonutWrap.style.display = 'none'; return; }
+  const totalAmount = Object.values(byRep).reduce((s, v) => s + v.amount, 0);
+  const totalCount = Object.values(byRep).reduce((s, v) => s + v.count, 0);
+
+  commissionRepTally.innerHTML = Object.keys(REP_LABELS).map(key => {
+    const v = byRep[key] || { count: 0, amount: 0 };
+    return `<span class="rep-tally-item"><span class="rep-tally-dot" style="background:${REP_COLORS[key]}"></span>${v.count} ${REP_LABELS[key]}</span>`;
+  }).join('');
+
+  if (totalCount === 0 || totalAmount <= 0) {
+    commissionDonutWrap.style.display = 'none';
+    return;
+  }
+  commissionDonutWrap.style.display = 'flex';
+
+  let pct = 0;
+  const stops = [];
+  for (const key of Object.keys(REP_LABELS)) {
+    const v = byRep[key] || { count: 0, amount: 0 };
+    if (v.amount <= 0) continue;
+    const share = (v.amount / totalAmount) * 100;
+    stops.push(`${REP_COLORS[key]} ${pct}% ${pct + share}%`);
+    pct += share;
+  }
+  commissionDonut.style.background = stops.length
+    ? `conic-gradient(${stops.join(', ')})`
+    : 'rgba(255,255,255,.08)';
+
+  commissionDonutLegend.innerHTML = Object.keys(REP_LABELS).map(key => {
+    const v = byRep[key] || { count: 0, amount: 0 };
+    if (v.count === 0) return '';
+    const share = totalAmount > 0 ? Math.round((v.amount / totalAmount) * 100) : 0;
+    return `<div class="donut-legend-row">
+      <span class="donut-legend-dot" style="background:${REP_COLORS[key]}"></span>
+      <span><b>${share}%</b> <span class="donut-legend-label">${REP_LABELS[key]} · ${formatMoney(v.amount)} · ${v.count} deal${v.count === 1 ? '' : 's'}</span></span>
+    </div>`;
+  }).join('');
+}
+
 async function refreshCommissionList(reset) {
   if (reset) {
     commissionOffset = 0;
@@ -6295,31 +6531,56 @@ async function refreshCommissionList(reset) {
   if (!res.ok) return;
   const data = await res.json();
   commissionLifetimeTotal.textContent = formatMoney(data.lifetime_total);
+  renderRepTallyAndDonut(data.by_representation);
   if (reset && !data.entries.length) {
     commissionList.innerHTML = '<div class="sub">No commissions logged yet.</div>';
   }
   for (const entry of data.entries) {
-    const row = document.createElement('div');
-    row.className = 'commission-row';
-    row.innerHTML = `
-      <div class="commission-main">
-        <b>${escapeHtml(entry.title)}</b>
-        <div class="commission-meta">${formatCommissionDate(entry.closed_date)} · ${escapeHtml(entry.brokerage || '')} · ${entry.split_pct}% split</div>
-        ${entry.description ? `<div class="commission-meta">${escapeHtml(entry.description)}</div>` : ''}
-        ${entry.file_filename ? `<a class="commission-file-link" href="/api/crm/commission_entries/${entry.id}/file" target="_blank">📎 ${escapeHtml(entry.file_original_name || 'file')}</a>` : ''}
-      </div>
-      <div class="commission-amount">${formatMoney(entry.amount)}</div>
-      <button class="ghost small" data-remove-commission="${entry.id}">🗑</button>
-    `;
-    commissionList.appendChild(row);
+    commissionList.appendChild(buildCommissionRow(entry));
   }
   commissionOffset += data.entries.length;
   commissionLoadMoreBtn.style.display = data.has_more ? 'inline-block' : 'none';
 }
 
+// Optional deal-detail fields (seller(s)/buyer's agent/co-listing agent)
+// are only ever shown when Mario actually filled them in -- never an
+// empty label for a field he left blank.
+function buildCommissionRow(entry) {
+  const row = document.createElement('div');
+  row.className = 'commission-row';
+  const metaBits = [
+    formatCommissionDate(entry.closed_date),
+    escapeHtml(entry.brokerage || ''),
+    `${entry.split_pct}% split`,
+    DEAL_TYPE_LABELS[entry.deal_type] || 'Sale',
+    REP_LABELS[entry.represented_as] || 'Seller',
+  ].filter(Boolean);
+  const detailLines = [];
+  if (entry.seller_names) detailLines.push(`Seller(s): ${escapeHtml(entry.seller_names)}`);
+  if (entry.buyers_agent) detailLines.push(`Buyer's agent: ${escapeHtml(entry.buyers_agent)}`);
+  if (entry.co_listing_agent) detailLines.push(`Co-listing agent: ${escapeHtml(entry.co_listing_agent)}`);
+  row.innerHTML = `
+    <div class="commission-main">
+      <b>${escapeHtml(entry.title)}</b>
+      <div class="commission-meta">${metaBits.join(' · ')}</div>
+      ${detailLines.map(l => `<div class="commission-meta">${l}</div>`).join('')}
+      ${entry.description ? `<div class="commission-meta">${escapeHtml(entry.description)}</div>` : ''}
+      ${entry.file_filename ? `<a class="commission-file-link" href="/api/crm/commission_entries/${entry.id}/file" target="_blank">📎 ${escapeHtml(entry.file_original_name || 'file')}</a>` : ''}
+    </div>
+    <div class="commission-amount">${formatMoney(entry.amount)}</div>
+    <div class="commission-actions">
+      <button class="ghost small" data-edit-commission="${entry.id}">✏️</button>
+      <button class="ghost small" data-remove-commission="${entry.id}">🗑</button>
+    </div>
+  `;
+  return row;
+}
+
 commissionLoadMoreBtn.addEventListener('click', () => refreshCommissionList(false));
 
 commissionList.addEventListener('click', async (e) => {
+  const editBtn = e.target.closest('[data-edit-commission]');
+  if (editBtn) { openCommissionEdit(editBtn.dataset.editCommission); return; }
   const btn = e.target.closest('[data-remove-commission]');
   if (!btn) return;
   if (!confirm('Delete this commission entry? This cannot be undone.')) return;
@@ -6335,6 +6596,16 @@ commissionAddBtn.addEventListener('click', async () => {
     commissionAddError.style.display = 'block';
     return;
   }
+  if (!commissionNewAmount.value) {
+    commissionAddError.textContent = 'Closing sale amount is required.';
+    commissionAddError.style.display = 'block';
+    return;
+  }
+  if (!commissionNewDate.value) {
+    commissionAddError.textContent = 'Closing date is required.';
+    commissionAddError.style.display = 'block';
+    return;
+  }
   commissionAddBtn.disabled = true;
   commissionAddBtn.textContent = 'Adding…';
   try {
@@ -6344,6 +6615,11 @@ commissionAddBtn.addEventListener('click', async () => {
     formData.append('split_pct', commissionNewSplit.value || '');
     formData.append('brokerage', commissionNewBrokerage.value.trim());
     formData.append('closed_date', commissionNewDate.value || '');
+    formData.append('deal_type', commissionNewDealType.value);
+    formData.append('represented_as', commissionNewRepresented.value);
+    formData.append('seller_names', commissionNewSellers.value.trim());
+    formData.append('buyers_agent', commissionNewBuyersAgent.value.trim());
+    formData.append('co_listing_agent', commissionNewCoListingAgent.value.trim());
     formData.append('description', commissionNewDesc.value.trim());
     if (commissionNewFile.files[0]) formData.append('file', commissionNewFile.files[0]);
     const res = await fetch('/api/crm/commission_entries', { method: 'POST', body: formData });
@@ -6357,6 +6633,11 @@ commissionAddBtn.addEventListener('click', async () => {
     commissionNewAmount.value = '';
     commissionNewBrokerage.value = '';
     commissionNewSplit.value = '';
+    commissionNewDealType.value = 'sale';
+    commissionNewRepresented.value = 'seller';
+    commissionNewSellers.value = '';
+    commissionNewBuyersAgent.value = '';
+    commissionNewCoListingAgent.value = '';
     commissionNewDesc.value = '';
     commissionNewFile.value = '';
     commissionNewDate.value = todayIsoDate();
@@ -6367,6 +6648,99 @@ commissionAddBtn.addEventListener('click', async () => {
   } finally {
     commissionAddBtn.disabled = false;
     commissionAddBtn.textContent = '+ Add Commission';
+  }
+});
+
+async function openCommissionEdit(entryId) {
+  commissionEditError.style.display = 'none';
+  const res = await fetch(`/api/crm/commission_entries/${entryId}`);
+  if (!res.ok) { alert("Couldn't load that commission entry."); return; }
+  const entry = await res.json();
+  commissionEditingId = entry.id;
+  commissionEditTitle.value = entry.title || '';
+  commissionEditAmount.value = entry.amount != null ? entry.amount : '';
+  commissionEditDate.value = entry.closed_date || '';
+  commissionEditBrokerage.value = entry.brokerage || '';
+  commissionEditSplit.value = entry.split_pct != null ? entry.split_pct : '';
+  commissionEditDealType.value = entry.deal_type || 'sale';
+  commissionEditRepresented.value = entry.represented_as || 'seller';
+  commissionEditSellers.value = entry.seller_names || '';
+  commissionEditBuyersAgent.value = entry.buyers_agent || '';
+  commissionEditCoListingAgent.value = entry.co_listing_agent || '';
+  commissionEditDesc.value = entry.description || '';
+  commissionEditFile.value = '';
+  commissionEditFileCurrent.innerHTML = entry.file_filename
+    ? `📎 <a href="/api/crm/commission_entries/${entry.id}/file" target="_blank">${escapeHtml(entry.file_original_name || 'file')}</a> <button type="button" class="ghost small" id="commissionEditRemoveFileBtn">Remove</button>`
+    : 'No file attached.';
+  const removeFileBtn = document.getElementById('commissionEditRemoveFileBtn');
+  if (removeFileBtn) {
+    removeFileBtn.addEventListener('click', async () => {
+      await fetch(`/api/crm/commission_entries/${entry.id}/file`, { method: 'DELETE' });
+      commissionEditFileCurrent.textContent = 'No file attached.';
+    });
+  }
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  commissionEditOverlay.classList.add('show');
+}
+
+function closeCommissionEdit() {
+  commissionEditOverlay.classList.remove('show');
+  commissionEditingId = null;
+}
+commissionEditCloseBtn.addEventListener('click', closeCommissionEdit);
+commissionEditCancelBtn.addEventListener('click', closeCommissionEdit);
+
+commissionEditSaveBtn.addEventListener('click', async () => {
+  if (!commissionEditingId) return;
+  commissionEditError.style.display = 'none';
+  if (!commissionEditAmount.value) {
+    commissionEditError.textContent = 'Closing sale amount is required.';
+    commissionEditError.style.display = 'block';
+    return;
+  }
+  if (!commissionEditDate.value) {
+    commissionEditError.textContent = 'Closing date is required.';
+    commissionEditError.style.display = 'block';
+    return;
+  }
+  commissionEditSaveBtn.disabled = true;
+  commissionEditSaveBtn.textContent = 'Saving…';
+  try {
+    const res = await fetch(`/api/crm/commission_entries/${commissionEditingId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: commissionEditTitle.value.trim(),
+        amount: commissionEditAmount.value,
+        closed_date: commissionEditDate.value,
+        brokerage: commissionEditBrokerage.value.trim(),
+        split_pct: commissionEditSplit.value,
+        deal_type: commissionEditDealType.value,
+        represented_as: commissionEditRepresented.value,
+        seller_names: commissionEditSellers.value.trim(),
+        buyers_agent: commissionEditBuyersAgent.value.trim(),
+        co_listing_agent: commissionEditCoListingAgent.value.trim(),
+        description: commissionEditDesc.value.trim(),
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      commissionEditError.textContent = data.error || "Couldn't save those changes.";
+      commissionEditError.style.display = 'block';
+      return;
+    }
+    if (commissionEditFile.files[0]) {
+      const formData = new FormData();
+      formData.append('file', commissionEditFile.files[0]);
+      await fetch(`/api/crm/commission_entries/${commissionEditingId}/file`, { method: 'POST', body: formData });
+    }
+    closeCommissionEdit();
+    await refreshCommissionList(true);
+  } catch (e) {
+    commissionEditError.textContent = "Couldn't reach URTO's server — try again.";
+    commissionEditError.style.display = 'block';
+  } finally {
+    commissionEditSaveBtn.disabled = false;
+    commissionEditSaveBtn.textContent = 'Save Changes';
   }
 });
 

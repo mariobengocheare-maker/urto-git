@@ -528,11 +528,14 @@ def txn_create_transaction():
     data = request.get_json(force=True)
     txn_type = data.get("transaction_type", "")
     title = (data.get("title") or "").strip()
+    represented_as = data.get("represented_as", "")
     if txn_type not in crm.TRANSACTION_TYPE_KEYS:
         return jsonify({"error": "Unknown or missing transaction type"}), 400
     if not title:
         return jsonify({"error": "Title is required"}), 400
-    return jsonify(crm.create_transaction(txn_type, title))
+    if represented_as not in ("seller", "buyer", "landlord", "tenant"):
+        return jsonify({"error": "Who you represented is required"}), 400
+    return jsonify(crm.create_transaction(txn_type, title, represented_as=represented_as))
 
 
 @crm_bp.route("/api/txn/transactions/<int:txn_id>")
@@ -554,10 +557,12 @@ def txn_update_transaction(txn_id):
         return jsonify({"error": "Invalid status"}), 400
     sale_price = data.get("sale_price")
     commission_rate = data.get("commission_rate")
+    represented_as = data.get("represented_as") or None
     updated = crm.update_transaction(
         txn_id, title, status,
         sale_price=float(sale_price) if sale_price not in (None, "") else None,
         commission_rate=float(commission_rate) if commission_rate not in (None, "") else None,
+        represented_as=represented_as,
     )
     if not updated:
         abort(404)
@@ -799,6 +804,14 @@ def commission_list():
     return jsonify(crm.list_commission_entries(sort=sort, limit=limit, offset=offset))
 
 
+@crm_bp.route("/api/crm/commission_entries/<int:entry_id>", methods=["GET"])
+def commission_get(entry_id):
+    entry = crm.get_commission_entry(entry_id)
+    if not entry:
+        abort(404)
+    return jsonify(entry)
+
+
 @crm_bp.route("/api/crm/commission_entries", methods=["POST"])
 def commission_create():
     # multipart/form-data (not JSON) since this can include a file upload,
@@ -806,18 +819,34 @@ def commission_create():
     title = (request.form.get("title") or "").strip()
     if not title:
         return jsonify({"error": "Title is required"}), 400
+    # Closing sale amount and closing date are mandatory (Mario: "this is
+    # how it knows oldest or earliest") -- unlike the auto-added-on-close
+    # path (which deliberately allows $0 for a transaction closed with no
+    # price set), a MANUAL entry has no such excuse not to have real
+    # numbers, so both are required here rather than silently defaulting.
+    amount_raw = (request.form.get("amount") or "").strip()
+    if not amount_raw:
+        return jsonify({"error": "Closing sale amount is required"}), 400
     try:
-        amount = float(request.form.get("amount") or 0)
+        amount = float(amount_raw)
     except ValueError:
         return jsonify({"error": "Invalid amount"}), 400
+    closed_date = (request.form.get("closed_date") or "").strip()
+    if not closed_date:
+        return jsonify({"error": "Closing date is required"}), 400
     split_pct = request.form.get("split_pct")
     entry = crm.create_commission_entry(
         title=title,
         description=(request.form.get("description") or "").strip(),
         amount=amount,
         split_pct=float(split_pct) if split_pct not in (None, "") else None,
-        closed_date=(request.form.get("closed_date") or "").strip() or None,
+        closed_date=closed_date,
         brokerage=(request.form.get("brokerage") or "").strip() or None,
+        seller_names=(request.form.get("seller_names") or "").strip() or None,
+        buyers_agent=(request.form.get("buyers_agent") or "").strip() or None,
+        co_listing_agent=(request.form.get("co_listing_agent") or "").strip() or None,
+        deal_type=(request.form.get("deal_type") or "sale").strip(),
+        represented_as=(request.form.get("represented_as") or "seller").strip(),
         file_storage=request.files.get("file"),
     )
     return jsonify(entry)
@@ -826,6 +855,11 @@ def commission_create():
 @crm_bp.route("/api/crm/commission_entries/<int:entry_id>", methods=["PUT"])
 def commission_update(entry_id):
     data = request.get_json(force=True)
+    # seller_names/buyers_agent/co_listing_agent are sent as "" (not
+    # omitted) when Mario clears one in the edit modal -- update_commission_entry()
+    # treats an explicit "" as "clear this field" and None (key genuinely
+    # absent) as "leave unchanged", so pass through .strip() results
+    # directly rather than collapsing "" to None here.
     updated = crm.update_commission_entry(
         entry_id,
         title=(data.get("title") or "").strip() or None,
@@ -834,6 +868,11 @@ def commission_update(entry_id):
         split_pct=float(data["split_pct"]) if data.get("split_pct") not in (None, "") else None,
         closed_date=(data.get("closed_date") or "").strip() or None,
         brokerage=(data.get("brokerage") or "").strip() or None,
+        seller_names=data["seller_names"].strip() if "seller_names" in data else None,
+        buyers_agent=data["buyers_agent"].strip() if "buyers_agent" in data else None,
+        co_listing_agent=data["co_listing_agent"].strip() if "co_listing_agent" in data else None,
+        deal_type=data.get("deal_type"),
+        represented_as=data.get("represented_as"),
     )
     if not updated:
         abort(404)

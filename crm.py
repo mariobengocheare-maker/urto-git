@@ -1188,6 +1188,8 @@ def init_db():
         conn.execute("ALTER TABLE transactions ADD COLUMN sale_price REAL")
     if "commission_rate" not in existing_cols:
         conn.execute("ALTER TABLE transactions ADD COLUMN commission_rate REAL")
+    if "represented_as" not in existing_cols:
+        conn.execute("ALTER TABLE transactions ADD COLUMN represented_as TEXT NOT NULL DEFAULT 'seller'")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transaction_documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1322,6 +1324,23 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    # Optional deal-detail fields, added after this table was already live
+    # with Mario's real data -- guarded ALTER TABLE, same pattern as every
+    # other post-launch schema addition in this file. All three are
+    # deliberately nullable/blank-default: a commission entry added without
+    # them must never display an empty "Seller: " line, just omit it
+    # entirely (see _commission_entry_display fields below).
+    commission_cols = {row["name"] for row in conn.execute("PRAGMA table_info(commission_entries)").fetchall()}
+    if "seller_names" not in commission_cols:
+        conn.execute("ALTER TABLE commission_entries ADD COLUMN seller_names TEXT")
+    if "buyers_agent" not in commission_cols:
+        conn.execute("ALTER TABLE commission_entries ADD COLUMN buyers_agent TEXT")
+    if "co_listing_agent" not in commission_cols:
+        conn.execute("ALTER TABLE commission_entries ADD COLUMN co_listing_agent TEXT")
+    if "deal_type" not in commission_cols:
+        conn.execute("ALTER TABLE commission_entries ADD COLUMN deal_type TEXT NOT NULL DEFAULT 'sale'")
+    if "represented_as" not in commission_cols:
+        conn.execute("ALTER TABLE commission_entries ADD COLUMN represented_as TEXT NOT NULL DEFAULT 'seller'")
     conn.commit()
     _seed_document_types(conn)
     conn.close()
@@ -2760,17 +2779,25 @@ def list_transactions(folder: str = "active") -> list:
     return result
 
 
-def create_transaction(transaction_type: str, title: str) -> dict:
+def create_transaction(transaction_type: str, title: str, represented_as: str = "seller") -> dict:
     """Creates a transaction and snapshots the type's CURRENT document
     checklist into its own independent rows — later edits to the type's
     checklist (add/remove/rename) never retroactively change an already-
     created transaction, so an uploaded signed document is never orphaned
-    by someone editing the shared template afterward."""
+    by someone editing the shared template afterward. `represented_as` is
+    a mandatory field on the "+ New Transaction" form (Mario: who he
+    represented on the deal — seller/buyer/landlord/tenant) and carries
+    through automatically to the commission entry auto-created when this
+    transaction is later marked Closed, rather than that entry always
+    defaulting to "seller" regardless of the actual deal."""
+    if represented_as not in _REPRESENTED_AS_VALUES:
+        represented_as = "seller"
     conn = get_conn()
     now = _now().isoformat(timespec="seconds")
     cur = conn.execute(
-        "INSERT INTO transactions (transaction_type, title, status, created_at) VALUES (?, ?, 'active', ?)",
-        (transaction_type, title, now),
+        "INSERT INTO transactions (transaction_type, title, status, represented_as, created_at) "
+        "VALUES (?, ?, 'active', ?, ?)",
+        (transaction_type, title, represented_as, now),
     )
     txn_id = cur.lastrowid
 
@@ -2821,19 +2848,25 @@ def get_transaction(transaction_id: int) -> dict:
 
 
 def update_transaction(transaction_id: int, title: str, status: str,
-                        sale_price: float = None, commission_rate: float = None) -> dict:
+                        sale_price: float = None, commission_rate: float = None,
+                        represented_as: str = None) -> dict:
     conn = get_conn()
     existing = conn.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
     if not existing:
         conn.close()
         return None
+    if represented_as is not None and represented_as not in _REPRESENTED_AS_VALUES:
+        represented_as = existing["represented_as"]
+    final_represented_as = represented_as if represented_as is not None else existing["represented_as"]
     conn.execute(
-        "UPDATE transactions SET title = ?, status = ?, sale_price = ?, commission_rate = ? WHERE id = ?",
+        "UPDATE transactions SET title = ?, status = ?, sale_price = ?, commission_rate = ?, represented_as = ? "
+        "WHERE id = ?",
         (
             title,
             status,
             sale_price if sale_price is not None else existing["sale_price"],
             commission_rate if commission_rate is not None else existing["commission_rate"],
+            final_represented_as,
             transaction_id,
         ),
     )
@@ -2869,6 +2902,7 @@ def update_transaction(transaction_id: int, title: str, status: str,
             create_commission_entry(
                 title=title, description=description, amount=amount, split_pct=split_pct,
                 closed_date=_today().isoformat(), transaction_id=transaction_id,
+                represented_as=final_represented_as,
             )
     return get_transaction(transaction_id)
 
@@ -3414,6 +3448,18 @@ def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: in
     conn = get_conn()
     total = conn.execute("SELECT COUNT(*) AS c FROM commission_entries").fetchone()["c"]
     lifetime_total = conn.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM commission_entries").fetchone()["s"]
+    # Income + deal-count breakdown by who Mario represented -- a lifetime
+    # stat independent of the current page/sort, so it's always computed
+    # in full here rather than derived from just the current page's rows
+    # (which would give a wrong, page-dependent percentage breakdown).
+    by_representation = {k: {"count": 0, "amount": 0.0} for k in _REPRESENTED_AS_VALUES}
+    for row in conn.execute(
+        "SELECT represented_as, COUNT(*) AS c, COALESCE(SUM(amount), 0) AS s "
+        "FROM commission_entries GROUP BY represented_as"
+    ).fetchall():
+        key = row["represented_as"] if row["represented_as"] in by_representation else "seller"
+        by_representation[key]["count"] += row["c"]
+        by_representation[key]["amount"] += row["s"]
     rows = conn.execute(
         f"SELECT * FROM commission_entries ORDER BY {order_sql} LIMIT ? OFFSET ?",
         (limit, offset),
@@ -3423,27 +3469,38 @@ def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: in
         "entries": [dict(r) for r in rows],
         "total": total,
         "lifetime_total": lifetime_total,
+        "by_representation": by_representation,
         "has_more": offset + len(rows) < total,
     }
 
 
+_REPRESENTED_AS_VALUES = ("seller", "buyer", "landlord", "tenant")
+
+
 def create_commission_entry(title: str, description: str = "", amount: float = 0.0, split_pct: float = None,
                              closed_date: str = None, transaction_id: int = None, brokerage: str = None,
-                             file_storage=None) -> dict:
+                             seller_names: str = None, buyers_agent: str = None, co_listing_agent: str = None,
+                             deal_type: str = "sale", represented_as: str = "seller", file_storage=None) -> dict:
     settings = get_commission_settings()
     if split_pct is None:
         split_pct = settings["default_split_pct"]
     if not brokerage:
         brokerage = settings["current_brokerage"]
     closed_date = closed_date or _today().isoformat()
+    if deal_type not in ("sale", "rental"):
+        deal_type = "sale"
+    if represented_as not in _REPRESENTED_AS_VALUES:
+        represented_as = "seller"
     file_filename = file_original_name = None
     if file_storage and getattr(file_storage, "filename", None):
         file_filename, file_original_name = _store_upload(file_storage, COMMISSION_FILES_DIR)
     conn = get_conn()
     cur = conn.execute(
         "INSERT INTO commission_entries (transaction_id, title, description, amount, split_pct, brokerage, "
-        "closed_date, file_filename, file_original_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "closed_date, seller_names, buyers_agent, co_listing_agent, deal_type, represented_as, file_filename, "
+        "file_original_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (transaction_id, title, description or "", amount, split_pct, brokerage, closed_date,
+         seller_names or None, buyers_agent or None, co_listing_agent or None, deal_type, represented_as,
          file_filename, file_original_name, _now().isoformat()),
     )
     conn.commit()
@@ -3455,15 +3512,29 @@ def create_commission_entry(title: str, description: str = "", amount: float = 0
 
 
 def update_commission_entry(entry_id: int, title: str = None, description: str = None, amount: float = None,
-                             split_pct: float = None, closed_date: str = None, brokerage: str = None):
+                             split_pct: float = None, closed_date: str = None, brokerage: str = None,
+                             seller_names: str = None, buyers_agent: str = None, co_listing_agent: str = None,
+                             deal_type: str = None, represented_as: str = None):
+    """Every param defaults to None meaning "leave unchanged" -- EXCEPT the
+    three optional deal-detail fields (seller_names/buyers_agent/
+    co_listing_agent), where an explicit empty string IS a real value
+    (Mario clearing a field he'd previously filled in) and must be told
+    apart from None ("this field wasn't part of the request at all"). The
+    route layer always sends the current form value (blank or not) for
+    these three on every edit save, so this distinction works correctly."""
     conn = get_conn()
     existing = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
     if not existing:
         conn.close()
         return None
+    if deal_type is not None and deal_type not in ("sale", "rental"):
+        deal_type = existing["deal_type"]
+    if represented_as is not None and represented_as not in _REPRESENTED_AS_VALUES:
+        represented_as = existing["represented_as"]
     conn.execute(
         "UPDATE commission_entries SET title = ?, description = ?, amount = ?, split_pct = ?, closed_date = ?, "
-        "brokerage = ? WHERE id = ?",
+        "brokerage = ?, seller_names = ?, buyers_agent = ?, co_listing_agent = ?, deal_type = ?, "
+        "represented_as = ? WHERE id = ?",
         (
             title if title is not None else existing["title"],
             description if description is not None else existing["description"],
@@ -3471,6 +3542,11 @@ def update_commission_entry(entry_id: int, title: str = None, description: str =
             split_pct if split_pct is not None else existing["split_pct"],
             closed_date if closed_date is not None else existing["closed_date"],
             brokerage if brokerage is not None else existing["brokerage"],
+            seller_names if seller_names is not None else existing["seller_names"],
+            buyers_agent if buyers_agent is not None else existing["buyers_agent"],
+            co_listing_agent if co_listing_agent is not None else existing["co_listing_agent"],
+            deal_type if deal_type is not None else existing["deal_type"],
+            represented_as if represented_as is not None else existing["represented_as"],
             entry_id,
         ),
     )
