@@ -476,6 +476,15 @@ def txn_delete_document_type(doc_type_id):
     return jsonify({"ok": True})
 
 
+@crm_bp.route("/api/txn/document_types/<int:doc_type_id>/contract_flag", methods=["POST"])
+def txn_set_document_type_contract_flag(doc_type_id):
+    data = request.get_json(force=True)
+    updated = crm.set_document_type_contract_flag(doc_type_id, bool(data.get("is_offer_contract")))
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
 @crm_bp.route("/api/txn/document_types/reorder", methods=["POST"])
 def txn_reorder_document_types():
     data = request.get_json(force=True)

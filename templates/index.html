@@ -642,6 +642,8 @@
   .txn-doctype-row .drag-handle:active { cursor: grabbing; }
   .txn-doctype-row .name { font-weight: 600; flex: 1; min-width: 140px; }
   .txn-doctype-row .tmpl-info { font-size: .78rem; color: var(--text-secondary); }
+  .contract-flag-label { display: inline-flex; align-items: center; gap: 5px; font-size: .78rem; color: var(--text-secondary); white-space: nowrap; cursor: pointer; }
+  .contract-flag-label input[type="checkbox"] { width: 14px; height: 14px; }
 
   .modal-overlay {
     display: none;
@@ -898,6 +900,31 @@
     .commission-total-card { min-height: 110px; padding: 22px 18px 30px; gap: 22px; }
     .commission-donut { width: 92px; height: 92px; }
   }
+
+  /* Brokerage progress tracker -- a plain CSS/text reproduction of the
+     LUXE Properties wordmark (no external logo asset, same "no CDN, vendor
+     or hand-draw everything" rule this file follows for the Google
+     Meet/Teams badges) plus a 1-6 dot tracker toward the 90% auto-bump. */
+  .commission-brokerage-card { text-align: center; padding: 26px 20px; }
+  .brokerage-progress-head { position: relative; display: flex; align-items: center; justify-content: center; }
+  #brokerageEditToggleBtn { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+  .luxe-wordmark { display: inline-flex; flex-direction: column; align-items: center; line-height: 1; margin-bottom: 18px; }
+  .luxe-word { font-family: 'Segoe UI', Arial, sans-serif; font-weight: 800; font-size: 1.9rem; letter-spacing: .06em; color: #fff; }
+  .luxe-sub { font-family: 'Segoe UI', Arial, sans-serif; font-weight: 500; font-size: .72rem; letter-spacing: .38em; color: var(--gold); margin-top: 4px; margin-left: .38em; }
+  .brokerage-progress-dots { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
+  .brokerage-progress-dots .progress-dot {
+    width: 34px; height: 34px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .85rem; font-weight: 700;
+    border: 2px solid var(--border); color: var(--text-secondary);
+    background: rgba(255,255,255,.03);
+    transition: all .2s;
+  }
+  .brokerage-progress-dots .progress-dot.filled {
+    border-color: var(--gold); background: linear-gradient(180deg, var(--gold-bright, var(--gold)), var(--gold)); color: #1a1408;
+    box-shadow: 0 0 12px rgba(201,162,39,.35);
+  }
+  .brokerage-progress-label.unlocked { color: var(--gold); font-weight: 600; }
 
   .commission-row {
     display: flex; align-items: center; gap: 14px;
@@ -1713,19 +1740,28 @@
     <div id="commissionTotalLabel" class="commission-total-label">Lifetime Commission</div>
   </div>
 
-  <div class="card" style="margin-bottom:18px">
-    <div class="row" style="justify-content:center; align-items:flex-end; flex-wrap:wrap; gap:16px">
-      <div class="form-group" style="margin-bottom:0">
-        <label for="commissionCurrentBrokerage">Current brokerage</label>
-        <input type="text" id="commissionCurrentBrokerage" placeholder="e.g. LUXE Properties" style="width:220px">
-      </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label for="commissionDefaultSplit">Your default split with brokerage (%)</label>
-        <input type="number" id="commissionDefaultSplit" min="0" max="100" step="1" style="width:110px">
-      </div>
-      <button class="ghost small" id="commissionSaveSplitBtn">Save</button>
+  <div class="card commission-brokerage-card" style="margin-bottom:18px">
+    <div class="brokerage-progress-head">
+      <div class="luxe-wordmark"><span class="luxe-word">LUXE</span><span class="luxe-sub">PROPERTIES</span></div>
+      <button class="ghost small" id="brokerageEditToggleBtn" title="Change brokerage or split">⚙</button>
     </div>
-    <div class="sub" style="margin-top:8px; text-align:center">New transactions you close use this brokerage and split automatically — it auto-bumps to 90% on its own once you hit 6 closings from your current brokerage.</div>
+    <div class="brokerage-progress-dots" id="brokerageProgressDots"></div>
+    <div class="sub brokerage-progress-label" id="brokerageProgressLabel" style="text-align:center">Loading…</div>
+
+    <div id="brokerageEditPanel" style="display:none">
+      <div class="row" style="justify-content:center; align-items:flex-end; flex-wrap:wrap; gap:16px; margin-top:14px">
+        <div class="form-group" style="margin-bottom:0">
+          <label for="commissionCurrentBrokerage">Current brokerage</label>
+          <input type="text" id="commissionCurrentBrokerage" placeholder="e.g. LUXE Properties" style="width:220px">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="commissionDefaultSplit">Your default split with brokerage (%)</label>
+          <input type="number" id="commissionDefaultSplit" min="0" max="100" step="1" style="width:110px">
+        </div>
+        <button class="ghost small" id="commissionSaveSplitBtn">Save</button>
+      </div>
+      <div class="sub" style="margin-top:8px; text-align:center">New transactions you close use this brokerage and split automatically — it auto-bumps to 90% on its own once you hit 6 closings from your current brokerage.</div>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:18px">
@@ -5925,6 +5961,9 @@ async function loadDocTypesList() {
       <span class="drag-handle" title="Drag to reorder">&#9776;</span>
       <span class="name">${escapeHtml(d.name)}</span>
       ${tmplInfo}
+      <label class="contract-flag-label" title="When this transaction type closes, its signed copy is automatically attached to the auto-created Commission Tracker entry.">
+        <input type="checkbox" data-contract-flag="${d.id}" ${d.is_offer_contract ? 'checked' : ''}> This is the offer contract
+      </label>
       <button class="danger small" data-delete-doctype="${d.id}" style="background:var(--danger-fg)">Remove</button>
     `;
     txnDocTypesList.appendChild(row);
@@ -5938,6 +5977,19 @@ async function loadDocTypesList() {
   txnDocTypesList.querySelectorAll('[data-remove-template]').forEach(btn => {
     btn.addEventListener('click', async () => {
       await fetch(`/api/txn/document_types/${btn.getAttribute('data-remove-template')}/template`, { method: 'DELETE' });
+      loadDocTypesList();
+    });
+  });
+  txnDocTypesList.querySelectorAll('[data-contract-flag]').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      await fetch(`/api/txn/document_types/${cb.getAttribute('data-contract-flag')}/contract_flag`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_offer_contract: cb.checked }),
+      });
+      // Re-fetch rather than just toggling this one checkbox -- checking
+      // one document's flag clears every other document's flag on the
+      // server (at most one contract per type), so the whole list needs
+      // to reflect that, not just the row that was clicked.
       loadDocTypesList();
     });
   });
@@ -6574,12 +6626,47 @@ const commissionEditFileCurrent = document.getElementById('commissionEditFileCur
 const commissionEditFile = document.getElementById('commissionEditFile');
 let commissionEditingId = null;
 
+const brokerageProgressDots = document.getElementById('brokerageProgressDots');
+const brokerageProgressLabel = document.getElementById('brokerageProgressLabel');
+const brokerageEditToggleBtn = document.getElementById('brokerageEditToggleBtn');
+const brokerageEditPanel = document.getElementById('brokerageEditPanel');
+
+// Renders the 1-6 dot tracker toward the auto-bump threshold (see
+// crm.get_commission_settings()'s deals_closed_at_brokerage/
+// auto_bump_threshold/split_unlocked -- build order #109). Dots fill up to
+// whichever is smaller of the real count or the threshold, so a brokerage
+// with 11 closings still shows "6 of 6," not an overflowing tracker.
+function renderBrokerageProgress(settings) {
+  const threshold = settings.auto_bump_threshold || 6;
+  const closed = Math.min(settings.deals_closed_at_brokerage || 0, threshold);
+  brokerageProgressDots.innerHTML = '';
+  for (let i = 1; i <= threshold; i++) {
+    const dot = document.createElement('div');
+    dot.className = 'progress-dot' + (i <= closed ? ' filled' : '');
+    dot.textContent = i;
+    brokerageProgressDots.appendChild(dot);
+  }
+  if (settings.split_unlocked) {
+    brokerageProgressLabel.className = 'sub brokerage-progress-label unlocked';
+    brokerageProgressLabel.textContent = `🔓 ${settings.auto_bump_split_pct}% commission unlocked with ${settings.current_brokerage}`;
+  } else {
+    const remaining = threshold - closed;
+    brokerageProgressLabel.className = 'sub brokerage-progress-label';
+    brokerageProgressLabel.textContent = `${closed} of ${threshold} deals with ${settings.current_brokerage} — ${remaining} more to unlock ${settings.auto_bump_split_pct}%`;
+  }
+}
+
+brokerageEditToggleBtn.addEventListener('click', () => {
+  brokerageEditPanel.style.display = brokerageEditPanel.style.display === 'none' ? 'block' : 'none';
+});
+
 async function initCommissionTab() {
   const res = await fetch('/api/crm/commission_settings');
-  const settings = res.ok ? await res.json() : { default_split_pct: 80, current_brokerage: '' };
+  const settings = res.ok ? await res.json() : { default_split_pct: 80, current_brokerage: '', deals_closed_at_brokerage: 0, auto_bump_threshold: 6, auto_bump_split_pct: 90, split_unlocked: false };
   commissionDefaultSplit.value = settings.default_split_pct;
   commissionCurrentBrokerage.value = settings.current_brokerage;
   window.commissionDefaultSplitPct = settings.default_split_pct;
+  renderBrokerageProgress(settings);
   commissionNewDate.value = todayIsoDate();
   applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow, commissionNewSalePriceLabel);
   commissionOffset = 0;
@@ -6607,6 +6694,9 @@ commissionSaveSplitBtn.addEventListener('click', async () => {
     }),
   });
   window.commissionDefaultSplitPct = parseFloat(commissionDefaultSplit.value) || 80;
+  const res = await fetch('/api/crm/commission_settings');
+  if (res.ok) renderBrokerageProgress(await res.json());
+  brokerageEditPanel.style.display = 'none';
 });
 
 commissionSortSelect.addEventListener('change', (e) => {

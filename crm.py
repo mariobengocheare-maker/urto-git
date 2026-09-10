@@ -1301,6 +1301,18 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    doc_type_cols = {row["name"] for row in conn.execute("PRAGMA table_info(document_types)").fetchall()}
+    if "is_offer_contract" not in doc_type_cols:
+        # Marks which ONE document in a transaction type's checklist is the
+        # actual offer/purchase contract (see build order #108) -- a flag
+        # rather than a name match, since checklists are fully custom per
+        # type and guessing by name risks attaching the wrong file to a
+        # commission entry. Mario sets this once per type in Manage
+        # Document Checklists; enforced to at most one per transaction_type
+        # by set_document_type_contract_flag(), never by a DB constraint
+        # (SQLite has no easy partial-unique-index story worth the
+        # complexity here for a single admin-only toggle).
+        conn.execute("ALTER TABLE document_types ADD COLUMN is_offer_contract INTEGER NOT NULL DEFAULT 0")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1341,6 +1353,15 @@ def init_db():
             signed_at TEXT
         )
     """)
+    txn_doc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(transaction_documents)").fetchall()}
+    if "is_offer_contract" not in txn_doc_cols:
+        # Snapshotted from document_types.is_offer_contract at
+        # create_transaction() time -- same snapshot-not-live-join
+        # principle as this table's `name` column, so a later change to
+        # the type's checklist (including which document is flagged as
+        # the contract) never retroactively changes an already-created
+        # transaction.
+        conn.execute("ALTER TABLE transaction_documents ADD COLUMN is_offer_contract INTEGER NOT NULL DEFAULT 0")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
@@ -2762,6 +2783,20 @@ def _store_upload(file_storage, dest_dir: Path) -> tuple:
     return stored, original_name
 
 
+def _copy_stored_file(src_dir: Path, src_stored_filename: str, dest_dir: Path) -> str:
+    """Copies an already-stored upload (e.g. a transaction's signed
+    document) into a different destination dir under a fresh collision-safe
+    name -- used to carry the offer contract into a commission entry's own
+    attachment (see build order #108) without disturbing the original file
+    in its original location. Returns the new stored filename; the caller
+    already has the real original_name to keep tracking separately."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(src_stored_filename).suffix
+    new_stored = f"{uuid.uuid4().hex[:12]}{ext}"
+    shutil.copy2(src_dir / src_stored_filename, dest_dir / new_stored)
+    return new_stored
+
+
 def _delete_stored_file(dest_dir: Path, stored_filename):
     if not stored_filename:
         return
@@ -2890,6 +2925,35 @@ def remove_document_type_template(document_type_id: int):
     _instant_document_mirror()
 
 
+def set_document_type_contract_flag(document_type_id: int, is_contract: bool) -> dict:
+    """Marks (or clears) which document in a transaction type's checklist is
+    the actual offer/purchase contract -- see build order #108. Setting one
+    document's flag on always clears every OTHER document of the SAME
+    transaction_type first, so at most one is ever flagged per type (Mario
+    marks it once in Manage Document Checklists; this is what
+    update_transaction()'s auto-close logic later reads to find the signed
+    contract to carry into the auto-created commission entry)."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM document_types WHERE id = ?", (document_type_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    if is_contract:
+        conn.execute(
+            "UPDATE document_types SET is_offer_contract = 0 WHERE transaction_type = ? AND id != ?",
+            (row["transaction_type"], document_type_id),
+        )
+    conn.execute(
+        "UPDATE document_types SET is_offer_contract = ? WHERE id = ?",
+        (1 if is_contract else 0, document_type_id),
+    )
+    conn.commit()
+    updated = conn.execute("SELECT * FROM document_types WHERE id = ?", (document_type_id,)).fetchone()
+    conn.close()
+    on_data_changed("document checklist updated")
+    return dict(updated)
+
+
 # ---- Transactions ----
 
 def _transaction_to_dict(row, documents=None) -> dict:
@@ -2954,8 +3018,9 @@ def create_transaction(transaction_type: str, title: str, represented_as: str = 
     ).fetchall()
     for i, dt in enumerate(doc_types):
         conn.execute(
-            "INSERT INTO transaction_documents (transaction_id, document_type_id, name, sort_order) VALUES (?, ?, ?, ?)",
-            (txn_id, dt["id"], dt["name"], i),
+            "INSERT INTO transaction_documents (transaction_id, document_type_id, name, sort_order, is_offer_contract) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (txn_id, dt["id"], dt["name"], i, dt["is_offer_contract"]),
         )
     conn.commit()
     row = conn.execute("SELECT * FROM transactions WHERE id = ?", (txn_id,)).fetchone()
@@ -3046,11 +3111,34 @@ def update_transaction(transaction_id: int, title: str, status: str,
             else:
                 amount = 0.0
                 description = "Sale price/commission rate weren't set when this closed — edit this entry to add the real amount."
-            create_commission_entry(
+            new_entry = create_commission_entry(
                 title=title, description=description, amount=amount, split_pct=split_pct,
                 closed_date=_today().isoformat(), transaction_id=transaction_id,
                 represented_as=final_represented_as, sale_price=final_sale_price,
             )
+            # Carry the offer contract straight into the new commission
+            # entry's own attachment, if the transaction has one flagged
+            # (Manage Document Checklists' "This is the offer contract"
+            # toggle -- see build order #108) AND it actually has a signed
+            # copy uploaded. A flagged-but-still-blank contract document is
+            # correctly left alone here -- nothing to copy yet.
+            conn3 = get_conn()
+            contract_doc = conn3.execute(
+                "SELECT * FROM transaction_documents WHERE transaction_id = ? "
+                "AND is_offer_contract = 1 AND signed_filename IS NOT NULL",
+                (transaction_id,),
+            ).fetchone()
+            if contract_doc:
+                new_stored = _copy_stored_file(SIGNED_DIR, contract_doc["signed_filename"], COMMISSION_FILES_DIR)
+                conn3.execute(
+                    "UPDATE commission_entries SET file_filename = ?, file_original_name = ? WHERE id = ?",
+                    (new_stored, contract_doc["signed_original_name"], new_entry["id"]),
+                )
+                conn3.commit()
+            conn3.close()
+            if contract_doc:
+                on_data_changed("commission entry file updated")
+                _instant_document_mirror()
     return get_transaction(transaction_id)
 
 
@@ -3535,9 +3623,27 @@ _DEFAULT_BROKERAGE = "LUXE Properties"
 
 
 def get_commission_settings() -> dict:
+    default_split_pct = float(_get_setting("commission_split_pct") or 80)
+    current_brokerage = _get_setting("commission_current_brokerage") or _DEFAULT_BROKERAGE
+    # Same count _maybe_auto_bump_commission_split() checks -- exposed here
+    # so the Commission Tracker's brokerage card can render a real "N of 6
+    # deals" progress tracker instead of Mario having to intuit it (see
+    # build order #109). Capped at the threshold for display purposes; the
+    # real count can keep growing past it once already unlocked, but the
+    # tracker should show "6 of 6 (unlocked)," not "11 of 6."
+    conn = get_conn()
+    deals_closed = conn.execute(
+        "SELECT COUNT(*) AS c FROM commission_entries WHERE brokerage = ?",
+        (current_brokerage,),
+    ).fetchone()["c"]
+    conn.close()
     return {
-        "default_split_pct": float(_get_setting("commission_split_pct") or 80),
-        "current_brokerage": _get_setting("commission_current_brokerage") or _DEFAULT_BROKERAGE,
+        "default_split_pct": default_split_pct,
+        "current_brokerage": current_brokerage,
+        "deals_closed_at_brokerage": deals_closed,
+        "auto_bump_threshold": _COMMISSION_AUTO_BUMP_THRESHOLD,
+        "auto_bump_split_pct": _COMMISSION_AUTO_BUMP_SPLIT,
+        "split_unlocked": default_split_pct >= _COMMISSION_AUTO_BUMP_SPLIT,
     }
 
 
