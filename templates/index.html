@@ -1762,15 +1762,15 @@
       </div>
     </div>
     <div class="form-group" style="margin-top:10px">
-      <label for="commissionNewSellers">Seller(s) (optional)</label>
+      <label for="commissionNewSellers" id="commissionNewSellersLabel">Buyer(s) (optional)</label>
       <input type="text" id="commissionNewSellers" placeholder="e.g. John Smith, Jane Smith">
     </div>
     <div class="row" style="flex-wrap:wrap; gap:10px">
       <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0">
-        <label for="commissionNewBuyersAgent">Buyer's agent (optional)</label>
+        <label for="commissionNewBuyersAgent" id="commissionNewBuyersAgentLabel">Buyer's agent (optional)</label>
         <input type="text" id="commissionNewBuyersAgent">
       </div>
-      <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0">
+      <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0" id="commissionNewCoListingRow">
         <label for="commissionNewCoListingAgent">Co-listing agent (optional)</label>
         <input type="text" id="commissionNewCoListingAgent">
       </div>
@@ -2180,15 +2180,15 @@
       </div>
     </div>
     <div class="form-group" style="margin-top:10px">
-      <label for="commissionEditSellers">Seller(s) (optional)</label>
+      <label for="commissionEditSellers" id="commissionEditSellersLabel">Buyer(s) (optional)</label>
       <input type="text" id="commissionEditSellers" placeholder="e.g. John Smith, Jane Smith">
     </div>
     <div class="row" style="flex-wrap:wrap; gap:10px">
       <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0">
-        <label for="commissionEditBuyersAgent">Buyer's agent (optional)</label>
+        <label for="commissionEditBuyersAgent" id="commissionEditBuyersAgentLabel">Buyer's agent (optional)</label>
         <input type="text" id="commissionEditBuyersAgent">
       </div>
-      <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0">
+      <div class="form-group" style="flex:1; min-width:180px; margin-bottom:0" id="commissionEditCoListingRow">
         <label for="commissionEditCoListingAgent">Co-listing agent (optional)</label>
         <input type="text" id="commissionEditCoListingAgent">
       </div>
@@ -6404,8 +6404,11 @@ const commissionNewDate = document.getElementById('commissionNewDate');
 const commissionNewDealType = document.getElementById('commissionNewDealType');
 const commissionNewRepresented = document.getElementById('commissionNewRepresented');
 const commissionNewSellers = document.getElementById('commissionNewSellers');
+const commissionNewSellersLabel = document.getElementById('commissionNewSellersLabel');
 const commissionNewBuyersAgent = document.getElementById('commissionNewBuyersAgent');
+const commissionNewBuyersAgentLabel = document.getElementById('commissionNewBuyersAgentLabel');
 const commissionNewCoListingAgent = document.getElementById('commissionNewCoListingAgent');
+const commissionNewCoListingRow = document.getElementById('commissionNewCoListingRow');
 const commissionNewDesc = document.getElementById('commissionNewDesc');
 const commissionNewFile = document.getElementById('commissionNewFile');
 const commissionAddBtn = document.getElementById('commissionAddBtn');
@@ -6421,6 +6424,38 @@ const REP_LABELS = { seller: 'Seller', buyer: 'Buyer', landlord: 'Landlord', ten
 const REP_COLORS = { seller: '#d4af37', buyer: '#4fd1e3', landlord: '#8a5cff', tenant: '#6bd694' };
 const DEAL_TYPE_LABELS = { sale: 'Sale', rental: 'Rental' };
 
+// Which represented-as values are even valid for each deal type (a "tenant"
+// only exists on a rental, a "seller" only on a sale), the field labels for
+// the "other party" and "their agent" per represented-as (Mario already
+// knows who HE represented -- these two optional fields are always about
+// the OTHER side of the deal), and whether a co-listing agent field makes
+// sense at all (only when Mario is on the listing side -- seller/landlord --
+// since he isn't the listing agent when representing the buyer/tenant).
+const COMMISSION_DEAL_TYPE_REPS = { sale: ['seller', 'buyer'], rental: ['landlord', 'tenant'] };
+const COMMISSION_REP_CROSS_MAP = { seller: 'landlord', landlord: 'seller', buyer: 'tenant', tenant: 'buyer' };
+const COMMISSION_REP_FIELD_CONFIG = {
+  seller:   { other: 'Buyer(s)',  agent: "Buyer's agent",  showCoListing: true },
+  buyer:    { other: 'Seller(s)', agent: 'Listing agent',  showCoListing: false },
+  landlord: { other: 'Tenant',    agent: "Tenant's agent", showCoListing: true },
+  tenant:   { other: 'Landlord',  agent: 'Listing agent',  showCoListing: false },
+};
+
+// Keeps a Deal Type + Represented pair together (a sale can't have a
+// "tenant", a rental can't have a "seller") and relabels/hides the
+// optional deal-detail fields to match whichever side Mario represented --
+// shared by both the Add form and the Edit modal.
+function applyCommissionRepFields(dealTypeSelect, representedSelect, otherLabelEl, agentLabelEl, coListingRowEl) {
+  const allowed = COMMISSION_DEAL_TYPE_REPS[dealTypeSelect.value] || COMMISSION_DEAL_TYPE_REPS.sale;
+  if (!allowed.includes(representedSelect.value)) {
+    representedSelect.value = COMMISSION_REP_CROSS_MAP[representedSelect.value] || allowed[0];
+  }
+  Array.from(representedSelect.options).forEach(opt => { opt.hidden = !allowed.includes(opt.value); });
+  const cfg = COMMISSION_REP_FIELD_CONFIG[representedSelect.value] || COMMISSION_REP_FIELD_CONFIG.seller;
+  otherLabelEl.textContent = `${cfg.other} (optional)`;
+  agentLabelEl.textContent = `${cfg.agent} (optional)`;
+  coListingRowEl.style.display = cfg.showCoListing ? '' : 'none';
+}
+
 // Edit modal elements.
 const commissionEditOverlay = document.getElementById('commissionEditOverlay');
 const commissionEditCloseBtn = document.getElementById('commissionEditCloseBtn');
@@ -6435,8 +6470,11 @@ const commissionEditSplit = document.getElementById('commissionEditSplit');
 const commissionEditDealType = document.getElementById('commissionEditDealType');
 const commissionEditRepresented = document.getElementById('commissionEditRepresented');
 const commissionEditSellers = document.getElementById('commissionEditSellers');
+const commissionEditSellersLabel = document.getElementById('commissionEditSellersLabel');
 const commissionEditBuyersAgent = document.getElementById('commissionEditBuyersAgent');
+const commissionEditBuyersAgentLabel = document.getElementById('commissionEditBuyersAgentLabel');
 const commissionEditCoListingAgent = document.getElementById('commissionEditCoListingAgent');
+const commissionEditCoListingRow = document.getElementById('commissionEditCoListingRow');
 const commissionEditDesc = document.getElementById('commissionEditDesc');
 const commissionEditFileCurrent = document.getElementById('commissionEditFileCurrent');
 const commissionEditFile = document.getElementById('commissionEditFile');
@@ -6449,9 +6487,22 @@ async function initCommissionTab() {
   commissionCurrentBrokerage.value = settings.current_brokerage;
   window.commissionDefaultSplitPct = settings.default_split_pct;
   commissionNewDate.value = todayIsoDate();
+  applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow);
   commissionOffset = 0;
   await refreshCommissionList(true);
 }
+
+function updateCommissionNewRepFields() {
+  applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow);
+}
+commissionNewDealType.addEventListener('change', updateCommissionNewRepFields);
+commissionNewRepresented.addEventListener('change', updateCommissionNewRepFields);
+
+function updateCommissionEditRepFields() {
+  applyCommissionRepFields(commissionEditDealType, commissionEditRepresented, commissionEditSellersLabel, commissionEditBuyersAgentLabel, commissionEditCoListingRow);
+}
+commissionEditDealType.addEventListener('change', updateCommissionEditRepFields);
+commissionEditRepresented.addEventListener('change', updateCommissionEditRepFields);
 
 commissionSaveSplitBtn.addEventListener('click', async () => {
   await fetch('/api/crm/commission_settings', {
@@ -6635,6 +6686,7 @@ commissionAddBtn.addEventListener('click', async () => {
     commissionNewSplit.value = '';
     commissionNewDealType.value = 'sale';
     commissionNewRepresented.value = 'seller';
+    updateCommissionNewRepFields();
     commissionNewSellers.value = '';
     commissionNewBuyersAgent.value = '';
     commissionNewCoListingAgent.value = '';
@@ -6664,6 +6716,7 @@ async function openCommissionEdit(entryId) {
   commissionEditSplit.value = entry.split_pct != null ? entry.split_pct : '';
   commissionEditDealType.value = entry.deal_type || 'sale';
   commissionEditRepresented.value = entry.represented_as || 'seller';
+  updateCommissionEditRepFields();
   commissionEditSellers.value = entry.seller_names || '';
   commissionEditBuyersAgent.value = entry.buyers_agent || '';
   commissionEditCoListingAgent.value = entry.co_listing_agent || '';
