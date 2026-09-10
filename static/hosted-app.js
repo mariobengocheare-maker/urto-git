@@ -45,12 +45,21 @@
     await sub.unsubscribe();
   }
 
+  // Inserted before .app-body (the sidebar+main flex row), NOT before
+  // <main> itself -- main now lives INSIDE that flex row alongside the
+  // sidebar nav (desktop sidebar layout), so a bar inserted right before
+  // main would land as a third flex sibling squeezed between the sidebar
+  // and the content instead of spanning the full page width above both.
+  function _barAnchor() {
+    return document.querySelector(".app-body") || document.querySelector("main");
+  }
+
   function injectBar() {
     const bar = document.createElement("div");
     bar.id = "urtoPushBar";
     bar.style.cssText = "display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:10px; padding:8px 16px; font-size:.82rem; color:var(--text-secondary); background:rgba(6,11,22,.5); border-bottom:1px solid var(--border)";
-    const main = document.querySelector("main");
-    main.parentNode.insertBefore(bar, main);
+    const anchor = _barAnchor();
+    anchor.parentNode.insertBefore(bar, anchor);
     return bar;
   }
 
@@ -68,8 +77,8 @@
       '<button class="ghost small" id="urtoImportDataBtn">Import from URTO_Full_Data_Export.json</button>' +
       '<input type="file" id="urtoImportDataInput" accept=".json" style="display:none">' +
       '<span id="urtoImportDataMsg"></span>';
-    const main = document.querySelector("main");
-    main.parentNode.insertBefore(bar, main);
+    const anchor = _barAnchor();
+    anchor.parentNode.insertBefore(bar, anchor);
 
     const fileInput = document.getElementById("urtoImportDataInput");
     const msg = document.getElementById("urtoImportDataMsg");

@@ -552,7 +552,13 @@ def txn_update_transaction(txn_id):
         return jsonify({"error": "Title is required"}), 400
     if status not in crm.TRANSACTION_STATUSES:
         return jsonify({"error": "Invalid status"}), 400
-    updated = crm.update_transaction(txn_id, title, status)
+    sale_price = data.get("sale_price")
+    commission_rate = data.get("commission_rate")
+    updated = crm.update_transaction(
+        txn_id, title, status,
+        sale_price=float(sale_price) if sale_price not in (None, "") else None,
+        commission_rate=float(commission_rate) if commission_rate not in (None, "") else None,
+    )
     if not updated:
         abort(404)
     return jsonify(updated)
@@ -700,3 +706,172 @@ def showing_optimize(day_id):
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 502
     return jsonify(day)
+
+
+# ===================== EOS & Rocks =====================
+
+@crm_bp.route("/api/crm/eos_rocks", methods=["GET"])
+def eos_list_rocks():
+    return jsonify(crm.get_eos_rocks())
+
+
+@crm_bp.route("/api/crm/eos_rocks/<rock_key>", methods=["PUT"])
+def eos_update_rock(rock_key):
+    data = request.get_json(force=True)
+    try:
+        rock = crm.update_eos_rock(
+            rock_key,
+            title=(data.get("title") or "").strip(),
+            description=(data.get("description") or "").strip(),
+            start_date=(data.get("start_date") or "").strip() or None,
+        )
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(rock)
+
+
+# ===================== Waterfall to-do =====================
+
+@crm_bp.route("/api/crm/waterfall_items", methods=["GET"])
+def waterfall_list():
+    return jsonify(crm.list_waterfall_items())
+
+
+@crm_bp.route("/api/crm/waterfall_items", methods=["POST"])
+def waterfall_add():
+    data = request.get_json(force=True)
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "Enter a step first"}), 400
+    return jsonify(crm.add_waterfall_item(title))
+
+
+@crm_bp.route("/api/crm/waterfall_items/<int:item_id>", methods=["PUT"])
+def waterfall_update(item_id):
+    data = request.get_json(force=True)
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "Enter a step first"}), 400
+    updated = crm.update_waterfall_item(item_id, title)
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
+@crm_bp.route("/api/crm/waterfall_items/<int:item_id>", methods=["DELETE"])
+def waterfall_delete(item_id):
+    crm.delete_waterfall_item(item_id)
+    return jsonify({"ok": True})
+
+
+@crm_bp.route("/api/crm/waterfall_items/<int:item_id>/complete", methods=["POST"])
+def waterfall_complete(item_id):
+    data = request.get_json(force=True)
+    try:
+        item = crm.set_waterfall_item_completed(item_id, bool(data.get("completed", True)))
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(item)
+
+
+# ===================== Commission Tracker =====================
+
+@crm_bp.route("/api/crm/commission_settings", methods=["GET"])
+def commission_get_settings():
+    return jsonify(crm.get_commission_settings())
+
+
+@crm_bp.route("/api/crm/commission_settings", methods=["PUT"])
+def commission_update_settings():
+    data = request.get_json(force=True)
+    if "default_split_pct" in data:
+        crm.set_commission_default_split(float(data["default_split_pct"]))
+    if "current_brokerage" in data:
+        crm.set_commission_current_brokerage((data["current_brokerage"] or "").strip())
+    return jsonify(crm.get_commission_settings())
+
+
+@crm_bp.route("/api/crm/commission_entries", methods=["GET"])
+def commission_list():
+    sort = request.args.get("sort", "date_desc")
+    limit = int(request.args.get("limit", 20))
+    offset = int(request.args.get("offset", 0))
+    return jsonify(crm.list_commission_entries(sort=sort, limit=limit, offset=offset))
+
+
+@crm_bp.route("/api/crm/commission_entries", methods=["POST"])
+def commission_create():
+    # multipart/form-data (not JSON) since this can include a file upload,
+    # same shape as the Transaction Manager's signed-document upload route.
+    title = (request.form.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "Title is required"}), 400
+    try:
+        amount = float(request.form.get("amount") or 0)
+    except ValueError:
+        return jsonify({"error": "Invalid amount"}), 400
+    split_pct = request.form.get("split_pct")
+    entry = crm.create_commission_entry(
+        title=title,
+        description=(request.form.get("description") or "").strip(),
+        amount=amount,
+        split_pct=float(split_pct) if split_pct not in (None, "") else None,
+        closed_date=(request.form.get("closed_date") or "").strip() or None,
+        brokerage=(request.form.get("brokerage") or "").strip() or None,
+        file_storage=request.files.get("file"),
+    )
+    return jsonify(entry)
+
+
+@crm_bp.route("/api/crm/commission_entries/<int:entry_id>", methods=["PUT"])
+def commission_update(entry_id):
+    data = request.get_json(force=True)
+    updated = crm.update_commission_entry(
+        entry_id,
+        title=(data.get("title") or "").strip() or None,
+        description=data.get("description"),
+        amount=float(data["amount"]) if data.get("amount") not in (None, "") else None,
+        split_pct=float(data["split_pct"]) if data.get("split_pct") not in (None, "") else None,
+        closed_date=(data.get("closed_date") or "").strip() or None,
+        brokerage=(data.get("brokerage") or "").strip() or None,
+    )
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
+@crm_bp.route("/api/crm/commission_entries/<int:entry_id>", methods=["DELETE"])
+def commission_delete(entry_id):
+    crm.delete_commission_entry(entry_id)
+    return jsonify({"ok": True})
+
+
+@crm_bp.route("/api/crm/commission_entries/<int:entry_id>/file", methods=["POST"])
+def commission_upload_file(entry_id):
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "No file uploaded"}), 400
+    updated = crm.set_commission_entry_file(entry_id, file)
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
+@crm_bp.route("/api/crm/commission_entries/<int:entry_id>/file", methods=["DELETE"])
+def commission_remove_file(entry_id):
+    updated = crm.remove_commission_entry_file(entry_id)
+    if not updated:
+        abort(404)
+    return jsonify(updated)
+
+
+@crm_bp.route("/api/crm/commission_entries/<int:entry_id>/file")
+def commission_download_file(entry_id):
+    entry = crm.get_commission_entry(entry_id)
+    if not entry or not entry.get("file_filename"):
+        abort(404)
+    return send_file(
+        crm.COMMISSION_FILES_DIR / entry["file_filename"],
+        as_attachment=True,
+        download_name=entry.get("file_original_name") or "attachment",
+    )

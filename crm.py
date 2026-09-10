@@ -100,6 +100,7 @@ DB_PATH = DATA_DIR / "urto_crm.db"
 DOCUMENTS_DIR = DATA_DIR / "documents"
 TEMPLATES_DIR = DOCUMENTS_DIR / "templates"
 SIGNED_DIR = DOCUMENTS_DIR / "signed"
+COMMISSION_FILES_DIR = DOCUMENTS_DIR / "commission_files"
 
 
 def _migrate_legacy_data_dir():
@@ -1183,6 +1184,10 @@ def init_db():
         # Preserve anything already moved to the old single "Closings" folder
         # (the `archived` flag) under the new three-way `folder` column.
         conn.execute("UPDATE transactions SET folder = 'closings' WHERE archived = 1")
+    if "sale_price" not in existing_cols:
+        conn.execute("ALTER TABLE transactions ADD COLUMN sale_price REAL")
+    if "commission_rate" not in existing_cols:
+        conn.execute("ALTER TABLE transactions ADD COLUMN commission_rate REAL")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transaction_documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1259,6 +1264,61 @@ def init_db():
             notes TEXT,
             sort_order INTEGER,
             eta TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    # EOS & Rocks -- three fixed slots (30/60/90-day), each independently
+    # editable (title/description/start date), with the "by" date always
+    # computed from start + the slot's own fixed day count rather than
+    # stored, so it's never possible for the two to silently drift apart.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS eos_rocks (
+            rock_key TEXT PRIMARY KEY,
+            days INTEGER NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            start_date TEXT
+        )
+    """)
+    for rock_key, days in (("rock_30", 30), ("rock_60", 60), ("rock_90", 90)):
+        conn.execute(
+            "INSERT OR IGNORE INTO eos_rocks (rock_key, days, title, description, start_date) VALUES (?, ?, '', '', NULL)",
+            (rock_key, days),
+        )
+    # Waterfall to-do -- a strictly sequential checklist (see
+    # set_waterfall_item_completed()): item N can only be checked off once
+    # every item before it already is, and un-checking an earlier item
+    # re-locks everything after it, so the "each step depends on the last"
+    # premise can never be silently violated by completing out of order.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS waterfall_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            completed_at TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    # Commission Tracker -- transaction_id is ON DELETE SET NULL (not
+    # CASCADE): a commission already earned and recorded must never
+    # disappear just because the transaction record itself is later
+    # deleted -- it's Mario's real income history, independent of whether
+    # the underlying transaction row still exists. split_pct is captured
+    # PER ENTRY (not read live from the current default setting) so a
+    # historic entry's numbers never silently change if Mario's default
+    # split changes later at a new brokerage.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS commission_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            amount REAL NOT NULL DEFAULT 0,
+            split_pct REAL NOT NULL DEFAULT 80,
+            brokerage TEXT NOT NULL DEFAULT '',
+            closed_date TEXT NOT NULL,
+            file_filename TEXT,
+            file_original_name TEXT,
             created_at TEXT NOT NULL
         )
     """)
@@ -2760,19 +2820,56 @@ def get_transaction(transaction_id: int) -> dict:
     return _transaction_to_dict(row, [dict(d) for d in docs])
 
 
-def update_transaction(transaction_id: int, title: str, status: str) -> dict:
+def update_transaction(transaction_id: int, title: str, status: str,
+                        sale_price: float = None, commission_rate: float = None) -> dict:
     conn = get_conn()
     existing = conn.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
     if not existing:
         conn.close()
         return None
     conn.execute(
-        "UPDATE transactions SET title = ?, status = ? WHERE id = ?",
-        (title, status, transaction_id),
+        "UPDATE transactions SET title = ?, status = ?, sale_price = ?, commission_rate = ? WHERE id = ?",
+        (
+            title,
+            status,
+            sale_price if sale_price is not None else existing["sale_price"],
+            commission_rate if commission_rate is not None else existing["commission_rate"],
+            transaction_id,
+        ),
     )
     conn.commit()
     conn.close()
     on_data_changed("transaction updated")
+
+    # Auto-add to the Commission Tracker the moment a transaction actually
+    # BECOMES closed (a real status transition, not just re-saving an
+    # already-closed transaction's title) -- and only ever once per
+    # transaction, ever, even across a later reopen+re-close, since a
+    # second check here confirms no auto-added entry already references
+    # this transaction_id. A closed deal always gets added to the lifetime
+    # list even if sale price/commission rate were never filled in -- with
+    # a $0 amount and a clear note -- rather than silently vanishing from
+    # Mario's income history just because a field was left blank.
+    if status == "closed" and existing["status"] != "closed":
+        conn2 = get_conn()
+        already = conn2.execute(
+            "SELECT 1 FROM commission_entries WHERE transaction_id = ?", (transaction_id,)
+        ).fetchone()
+        conn2.close()
+        if not already:
+            final_sale_price = sale_price if sale_price is not None else existing["sale_price"]
+            final_rate = commission_rate if commission_rate is not None else existing["commission_rate"]
+            split_pct = get_commission_settings()["default_split_pct"]
+            if final_sale_price and final_rate:
+                amount = final_sale_price * (final_rate / 100) * (split_pct / 100)
+                description = ""
+            else:
+                amount = 0.0
+                description = "Sale price/commission rate weren't set when this closed — edit this entry to add the real amount."
+            create_commission_entry(
+                title=title, description=description, amount=amount, split_pct=split_pct,
+                closed_date=_today().isoformat(), transaction_id=transaction_id,
+            )
     return get_transaction(transaction_id)
 
 
@@ -3125,3 +3222,307 @@ def optimize_showing_day(showing_day_id: int, start_type: str,
     conn.close()
     on_data_changed("showing day optimized")
     return get_showing_day(showing_day_id)
+
+
+# ===================== EOS & Rocks =====================
+
+def get_eos_rocks() -> list:
+    """The 'by' date is always computed fresh from start_date + the rock's
+    own fixed day count, never stored -- so it's structurally impossible
+    for the shown end date to drift out of sync with the start date."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM eos_rocks ORDER BY days").fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        if d["start_date"]:
+            start = datetime.strptime(d["start_date"], "%Y-%m-%d").date()
+            d["end_date"] = (start + timedelta(days=d["days"])).isoformat()
+        else:
+            d["end_date"] = None
+        result.append(d)
+    return result
+
+
+_ROCK_KEYS = {"rock_30", "rock_60", "rock_90"}
+
+
+def update_eos_rock(rock_key: str, title: str, description: str, start_date: str = None) -> dict:
+    if rock_key not in _ROCK_KEYS:
+        raise RuntimeError("Unknown rock.")
+    conn = get_conn()
+    conn.execute(
+        "UPDATE eos_rocks SET title = ?, description = ?, start_date = ? WHERE rock_key = ?",
+        (title or "", description or "", start_date or None, rock_key),
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("EOS rock updated")
+    return next(r for r in get_eos_rocks() if r["rock_key"] == rock_key)
+
+
+# ===================== Waterfall to-do =====================
+
+def list_waterfall_items() -> list:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM waterfall_items ORDER BY sort_order, id").fetchall()
+    conn.close()
+    items = [dict(r) for r in rows]
+    # An item is only "unlocked" once every item before it (lower
+    # sort_order) is already completed -- this is computed here, on read,
+    # rather than stored, so it's never possible for it to go stale.
+    unlocked = True
+    for item in items:
+        item["unlocked"] = unlocked
+        if not item["completed_at"]:
+            unlocked = False
+    return items
+
+
+def add_waterfall_item(title: str) -> dict:
+    conn = get_conn()
+    max_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS m FROM waterfall_items").fetchone()["m"]
+    cur = conn.execute(
+        "INSERT INTO waterfall_items (title, sort_order, created_at) VALUES (?, ?, ?)",
+        (title, max_order + 1, _now().isoformat()),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM waterfall_items WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    on_data_changed("waterfall item added")
+    return dict(row)
+
+
+def update_waterfall_item(item_id: int, title: str):
+    conn = get_conn()
+    conn.execute("UPDATE waterfall_items SET title = ? WHERE id = ?", (title, item_id))
+    conn.commit()
+    row = conn.execute("SELECT * FROM waterfall_items WHERE id = ?", (item_id,)).fetchone()
+    conn.close()
+    on_data_changed("waterfall item updated")
+    return dict(row) if row else None
+
+
+def delete_waterfall_item(item_id: int):
+    conn = get_conn()
+    row = conn.execute("SELECT sort_order FROM waterfall_items WHERE id = ?", (item_id,)).fetchone()
+    if row:
+        conn.execute("DELETE FROM waterfall_items WHERE id = ?", (item_id,))
+        # Close the gap so sort_order stays contiguous (0,1,2,...) -- the
+        # unlock check above depends on a clean, gapless ordering.
+        conn.execute("UPDATE waterfall_items SET sort_order = sort_order - 1 WHERE sort_order > ?",
+                     (row["sort_order"],))
+    conn.commit()
+    conn.close()
+    on_data_changed("waterfall item deleted")
+
+
+def set_waterfall_item_completed(item_id: int, completed: bool) -> dict:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM waterfall_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise RuntimeError("That to-do item no longer exists.")
+    if completed:
+        blocking = conn.execute(
+            "SELECT COUNT(*) AS c FROM waterfall_items WHERE sort_order < ? AND completed_at IS NULL",
+            (row["sort_order"],),
+        ).fetchone()["c"]
+        if blocking:
+            conn.close()
+            raise RuntimeError("Complete the earlier steps first — this one is still locked.")
+        conn.execute("UPDATE waterfall_items SET completed_at = ? WHERE id = ?", (_now().isoformat(), item_id))
+    else:
+        # Un-completing an earlier step re-locks everything after it too --
+        # otherwise a later step could stay "done" while a step it
+        # depended on goes back to incomplete, breaking the whole premise
+        # of a waterfall (each step only makes sense once the one before
+        # it is real).
+        conn.execute("UPDATE waterfall_items SET completed_at = NULL WHERE sort_order >= ?", (row["sort_order"],))
+    conn.commit()
+    conn.close()
+    on_data_changed("waterfall item completion changed")
+    return next((i for i in list_waterfall_items() if i["id"] == item_id), None)
+
+
+# ===================== Commission Tracker =====================
+
+_COMMISSION_AUTO_BUMP_THRESHOLD = 6
+_COMMISSION_AUTO_BUMP_SPLIT = 90.0
+_DEFAULT_BROKERAGE = "LUXE Properties"
+
+
+def get_commission_settings() -> dict:
+    return {
+        "default_split_pct": float(_get_setting("commission_split_pct") or 80),
+        "current_brokerage": _get_setting("commission_current_brokerage") or _DEFAULT_BROKERAGE,
+    }
+
+
+def set_commission_default_split(pct: float):
+    _set_setting("commission_split_pct", str(pct))
+
+
+def set_commission_current_brokerage(name: str):
+    _set_setting("commission_current_brokerage", name or _DEFAULT_BROKERAGE)
+
+
+def _maybe_auto_bump_commission_split():
+    """Mario: once 6 closings under his CURRENT brokerage exist, his split
+    automatically moves to 90% for every deal from then on (a real
+    brokerage-tenure milestone he described). Deliberately counts every
+    commission entry tagged with the current brokerage, whether it was
+    auto-added from closing a Transaction Manager deal or backfilled by
+    hand -- either way it's a real closing under that brokerage. Only ever
+    moves the default UP, never back down automatically; a downward
+    correction (e.g. a mistaken entry) is something Mario would do himself
+    via the Save Split button, not something this should ever undo on its
+    own. Already-recorded entries are never touched -- split_pct is
+    captured per-entry at creation time, so this can't retroactively
+    change history."""
+    settings = get_commission_settings()
+    if settings["default_split_pct"] >= _COMMISSION_AUTO_BUMP_SPLIT:
+        return
+    conn = get_conn()
+    count = conn.execute(
+        "SELECT COUNT(*) AS c FROM commission_entries WHERE brokerage = ?",
+        (settings["current_brokerage"],),
+    ).fetchone()["c"]
+    conn.close()
+    if count >= _COMMISSION_AUTO_BUMP_THRESHOLD:
+        set_commission_default_split(_COMMISSION_AUTO_BUMP_SPLIT)
+
+
+_COMMISSION_SORTS = {
+    "date_desc": "closed_date DESC, id DESC",
+    "date_asc": "closed_date ASC, id ASC",
+    "amount_desc": "amount DESC, id DESC",
+    "amount_asc": "amount ASC, id ASC",
+}
+
+
+def get_commission_entry(entry_id: int):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: int = 0) -> dict:
+    order_sql = _COMMISSION_SORTS.get(sort, _COMMISSION_SORTS["date_desc"])
+    conn = get_conn()
+    total = conn.execute("SELECT COUNT(*) AS c FROM commission_entries").fetchone()["c"]
+    lifetime_total = conn.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM commission_entries").fetchone()["s"]
+    rows = conn.execute(
+        f"SELECT * FROM commission_entries ORDER BY {order_sql} LIMIT ? OFFSET ?",
+        (limit, offset),
+    ).fetchall()
+    conn.close()
+    return {
+        "entries": [dict(r) for r in rows],
+        "total": total,
+        "lifetime_total": lifetime_total,
+        "has_more": offset + len(rows) < total,
+    }
+
+
+def create_commission_entry(title: str, description: str = "", amount: float = 0.0, split_pct: float = None,
+                             closed_date: str = None, transaction_id: int = None, brokerage: str = None,
+                             file_storage=None) -> dict:
+    settings = get_commission_settings()
+    if split_pct is None:
+        split_pct = settings["default_split_pct"]
+    if not brokerage:
+        brokerage = settings["current_brokerage"]
+    closed_date = closed_date or _today().isoformat()
+    file_filename = file_original_name = None
+    if file_storage and getattr(file_storage, "filename", None):
+        file_filename, file_original_name = _store_upload(file_storage, COMMISSION_FILES_DIR)
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO commission_entries (transaction_id, title, description, amount, split_pct, brokerage, "
+        "closed_date, file_filename, file_original_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (transaction_id, title, description or "", amount, split_pct, brokerage, closed_date,
+         file_filename, file_original_name, _now().isoformat()),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    on_data_changed("commission entry added")
+    _maybe_auto_bump_commission_split()
+    return dict(row)
+
+
+def update_commission_entry(entry_id: int, title: str = None, description: str = None, amount: float = None,
+                             split_pct: float = None, closed_date: str = None, brokerage: str = None):
+    conn = get_conn()
+    existing = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return None
+    conn.execute(
+        "UPDATE commission_entries SET title = ?, description = ?, amount = ?, split_pct = ?, closed_date = ?, "
+        "brokerage = ? WHERE id = ?",
+        (
+            title if title is not None else existing["title"],
+            description if description is not None else existing["description"],
+            amount if amount is not None else existing["amount"],
+            split_pct if split_pct is not None else existing["split_pct"],
+            closed_date if closed_date is not None else existing["closed_date"],
+            brokerage if brokerage is not None else existing["brokerage"],
+            entry_id,
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    conn.close()
+    _maybe_auto_bump_commission_split()
+    on_data_changed("commission entry updated")
+    return dict(row)
+
+
+def delete_commission_entry(entry_id: int):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    if row and row["file_filename"]:
+        _delete_stored_file(COMMISSION_FILES_DIR, row["file_filename"])
+    conn.execute("DELETE FROM commission_entries WHERE id = ?", (entry_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("commission entry deleted")
+
+
+def set_commission_entry_file(entry_id: int, file_storage):
+    conn = get_conn()
+    existing = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return None
+    if existing["file_filename"]:
+        _delete_stored_file(COMMISSION_FILES_DIR, existing["file_filename"])
+    stored, original = _store_upload(file_storage, COMMISSION_FILES_DIR)
+    conn.execute("UPDATE commission_entries SET file_filename = ?, file_original_name = ? WHERE id = ?",
+                 (stored, original, entry_id))
+    conn.commit()
+    row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    conn.close()
+    on_data_changed("commission entry file updated")
+    return dict(row)
+
+
+def remove_commission_entry_file(entry_id: int):
+    conn = get_conn()
+    existing = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return None
+    if existing["file_filename"]:
+        _delete_stored_file(COMMISSION_FILES_DIR, existing["file_filename"])
+    conn.execute("UPDATE commission_entries SET file_filename = NULL, file_original_name = NULL WHERE id = ?",
+                 (entry_id,))
+    conn.commit()
+    row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    conn.close()
+    on_data_changed("commission entry file removed")
+    return dict(row)

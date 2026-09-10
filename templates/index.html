@@ -114,7 +114,14 @@
     background: linear-gradient(135deg, rgba(12,20,42,.86) 0%, rgba(26,42,72,.8) 100%);
     backdrop-filter: blur(14px) saturate(1.1);
     -webkit-backdrop-filter: blur(14px) saturate(1.1);
-    padding: 18px 28px;
+    /* env(safe-area-inset-*) resolves to 0 on a normal browser tab/desktop
+       (a no-op there) but is real and nonzero for an installed iOS PWA
+       (standalone display-mode) -- without this, the URTO wordmark sat
+       right under the notch/status bar/dynamic island since a standalone
+       PWA does NOT automatically reserve that space the way Safari's own
+       chrome does. Requires viewport-fit=cover in the <meta viewport> tag
+       (already set) for these env() values to be anything but 0. */
+    padding: calc(18px + env(safe-area-inset-top)) calc(28px + env(safe-area-inset-right)) 18px calc(28px + env(safe-area-inset-left));
     border-bottom: 1px solid rgba(201,162,39,.22);
     box-shadow: 0 8px 34px rgba(0,0,0,.45), 0 1px 0 rgba(201,162,39,.12);
   }
@@ -194,6 +201,46 @@
      whose fixed-position canvas must not sit inside a transformed ancestor. */
   @keyframes sectionRise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
   main > section.reveal { animation: sectionRise .5s cubic-bezier(.2,.7,.3,1) both; }
+
+  /* Desktop: nav moves to a left sidebar instead of the horizontal top bar
+     (Mario: too many tabs now to sit comfortably in one row). `.tabs` is a
+     flex ITEM here (not fixed-positioned), with `position: sticky` so it
+     tracks scrolling without ever needing to know the header's exact
+     height -- that height isn't constant (hosted-app.js can inject an
+     extra notification bar above this wrapper), so a hardcoded `top`
+     offset would silently drift wrong. Mobile (below this breakpoint)
+     keeps the original horizontal top-tabs layout completely unchanged. */
+  @media (min-width: 900px) {
+    .app-body { display: flex; align-items: flex-start; }
+    .tabs {
+      flex-direction: column;
+      align-items: stretch;
+      width: 200px;
+      flex-shrink: 0;
+      max-width: none;
+      margin: 0;
+      padding: 20px 10px;
+      position: sticky;
+      top: 0;
+      align-self: flex-start;
+      max-height: 100vh;
+      overflow-y: auto;
+      border-bottom: none;
+      border-right: 1px solid var(--border);
+      gap: 2px;
+    }
+    .tab-btn {
+      text-align: left;
+      margin-right: 0;
+      border-bottom: none;
+      border-left: 3px solid transparent;
+      border-radius: 6px;
+      padding: 12px 14px;
+    }
+    .tab-btn.active { border-left-color: var(--gold); background: rgba(201,162,39,.08); }
+    .tab-btn.active::after { display: none; }
+    main { flex: 1; min-width: 0; max-width: none; margin: 0; padding: 32px 40px 60px; }
+  }
 
   h1 {
     position: relative;
@@ -786,6 +833,29 @@
   .day-view-row.completed .day-view-time { color: var(--success-fg); }
   .day-view-row.manual .day-view-time { color: var(--gold); }
 
+  .eos-rock-card input, .eos-rock-card textarea { width: 100%; }
+  .waterfall-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 8px; border-bottom: 1px solid var(--border);
+  }
+  .waterfall-item:last-child { border-bottom: none; }
+  .waterfall-item.locked { opacity: .45; }
+  .waterfall-item input[type="checkbox"] { width: 18px; height: 18px; flex-shrink: 0; }
+  .waterfall-item .waterfall-title { flex: 1; min-width: 0; }
+  .waterfall-item.completed .waterfall-title { text-decoration: line-through; color: var(--text-secondary); }
+  .waterfall-item .waterfall-lock-note { font-size: .78rem; color: var(--text-secondary); font-style: italic; }
+
+  .commission-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 8px; border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .commission-row:last-child { border-bottom: none; }
+  .commission-row .commission-amount { font-weight: 700; color: var(--gold); font-size: 1.05rem; white-space: nowrap; }
+  .commission-row .commission-main { flex: 1; min-width: 200px; }
+  .commission-row .commission-meta { font-size: .8rem; color: var(--text-secondary); }
+  .commission-row .commission-file-link { font-size: .82rem; }
+
   /* ---- Dialer ---- */
   .source-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
   .source-bar button { background: rgba(19,28,46,.5); color: var(--text); border: 1px solid var(--border); }
@@ -979,9 +1049,31 @@
     white-space: nowrap;
   }
 
+  .theme-toggle-btn {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    z-index: 60;
+    background: rgba(15,22,38,.75);
+    color: var(--text);
+    border: 1px solid rgba(201,162,39,.35);
+    border-radius: 999px;
+    padding: 9px 16px;
+    font-size: .8rem;
+    font-weight: 600;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 6px 18px rgba(0,0,0,.35);
+  }
+  .theme-toggle-btn:hover { border-color: var(--gold); box-shadow: 0 6px 18px rgba(0,0,0,.35), 0 0 14px rgba(201,162,39,.25); }
+  .theme-toggle-btn.playing { color: var(--gold); border-color: var(--gold); }
+  @media (max-width: 640px) {
+    .theme-toggle-btn { bottom: 12px; right: 12px; padding: 8px 13px; font-size: .74rem; }
+  }
+
   /* ---- Mobile layout ---- */
   @media (max-width: 640px) {
-    .topbar { padding: 14px 16px; }
+    .topbar { padding: calc(14px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 14px calc(16px + env(safe-area-inset-left)); }
     .brand-name { font-size: 1.1rem; }
     main { padding: 20px 14px; }
 
@@ -1022,6 +1114,9 @@
 
 <div class="space-bg"></div>
 
+<audio id="themeAudio" src="{{ url_for('static', filename='audio/theme.mp3') }}" loop preload="none"></audio>
+<button id="themeToggleBtn" class="theme-toggle-btn" type="button" title="Play background theme">🎵 Play Theme</button>
+
 <div class="topbar">
   <div class="brand">
     <svg width="34" height="34" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
@@ -1036,6 +1131,7 @@
   </div>
 </div>
 
+<div class="app-body">
 <div class="tabs">
   {% if not hosted %}
   <button class="tab-btn active" id="tabHomeBtn">Home</button>
@@ -1045,6 +1141,8 @@
   <button class="tab-btn" id="tabDialerBtn">URTO Dialer</button>
   <button class="tab-btn" id="tabTxnBtn">Transactions</button>
   <button class="tab-btn" id="tabShowingBtn">ShowingDay</button>
+  <button class="tab-btn" id="tabEosBtn">EOS &amp; Rocks</button>
+  <button class="tab-btn" id="tabCommissionBtn">Commissions</button>
 </div>
 
 <main>
@@ -1371,6 +1469,18 @@
       </div>
       <div class="txn-detail-meta" id="txnDetailMeta"></div>
 
+      <div class="row" style="gap:16px; flex-wrap:wrap; margin:16px 0; align-items:flex-end">
+        <div class="form-group" style="margin-bottom:0">
+          <label for="txnSalePrice">Sale price ($)</label>
+          <input type="number" id="txnSalePrice" min="0" step="0.01" style="width:150px">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="txnCommissionRate">Commission rate (%)</label>
+          <input type="number" id="txnCommissionRate" min="0" max="100" step="0.01" style="width:110px">
+        </div>
+        <div class="sub" id="txnCommissionPreview"></div>
+      </div>
+
       <div class="txn-doc-table" id="txnDocTable"></div>
 
       <div class="row" style="margin-top:22px" id="txnFolderBtns">
@@ -1466,7 +1576,137 @@
   </div>
 </section>
 
+<section id="eosSection" style="display:none">
+  <h1>EOS &amp; Rocks</h1>
+  <p class="sub">Your 30/60/90-day priorities, plus a step-by-step waterfall to-do list.</p>
+
+  <div class="row" id="eosRocksRow" style="gap:16px; align-items:stretch; flex-wrap:wrap; margin-bottom:22px">
+    <div class="card eos-rock-card" data-rock="rock_30" style="flex:1; min-width:260px">
+      <h2 style="margin-top:0">30-Day Rock</h2>
+      <input type="text" class="eos-rock-title" placeholder="What's the rock?">
+      <textarea class="eos-rock-desc" rows="3" placeholder="Details (optional)" style="margin-top:8px"></textarea>
+      <div class="form-group" style="margin-top:10px; margin-bottom:0">
+        <label>Start date</label>
+        <input type="date" class="eos-rock-start">
+      </div>
+      <div class="sub eos-rock-end" style="margin-top:8px"></div>
+      <button class="ghost small eos-rock-save" style="margin-top:10px">Save</button>
+    </div>
+    <div class="card eos-rock-card" data-rock="rock_60" style="flex:1; min-width:260px">
+      <h2 style="margin-top:0">60-Day Rock</h2>
+      <input type="text" class="eos-rock-title" placeholder="What's the rock?">
+      <textarea class="eos-rock-desc" rows="3" placeholder="Details (optional)" style="margin-top:8px"></textarea>
+      <div class="form-group" style="margin-top:10px; margin-bottom:0">
+        <label>Start date</label>
+        <input type="date" class="eos-rock-start">
+      </div>
+      <div class="sub eos-rock-end" style="margin-top:8px"></div>
+      <button class="ghost small eos-rock-save" style="margin-top:10px">Save</button>
+    </div>
+    <div class="card eos-rock-card" data-rock="rock_90" style="flex:1; min-width:260px">
+      <h2 style="margin-top:0">90-Day Rock</h2>
+      <input type="text" class="eos-rock-title" placeholder="What's the rock?">
+      <textarea class="eos-rock-desc" rows="3" placeholder="Details (optional)" style="margin-top:8px"></textarea>
+      <div class="form-group" style="margin-top:10px; margin-bottom:0">
+        <label>Start date</label>
+        <input type="date" class="eos-rock-start">
+      </div>
+      <div class="sub eos-rock-end" style="margin-top:8px"></div>
+      <button class="ghost small eos-rock-save" style="margin-top:10px">Save</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Waterfall To-Do</h2>
+    <p class="sub">Each item unlocks only once the one before it is checked off.</p>
+    <div id="waterfallList"></div>
+    <div class="row" style="margin-top:14px">
+      <input type="text" id="waterfallNewItem" placeholder="Add a new step…" style="flex:1">
+      <button id="waterfallAddBtn">+ Add Step</button>
+    </div>
+  </div>
+</section>
+
+<section id="commissionSection" style="display:none">
+  <h1>Commission Tracker</h1>
+  <p class="sub">Your lifetime commissions, in one place.</p>
+
+  <div class="card" style="margin-bottom:18px; text-align:center">
+    <div class="sub">Lifetime Commission</div>
+    <div id="commissionLifetimeTotal" style="font-size:2.6rem; font-weight:800; color:var(--gold); margin-top:4px">$0</div>
+  </div>
+
+  <div class="card" style="margin-bottom:18px">
+    <div class="row" style="justify-content:center; align-items:flex-end; flex-wrap:wrap; gap:16px">
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionCurrentBrokerage">Current brokerage</label>
+        <input type="text" id="commissionCurrentBrokerage" placeholder="e.g. LUXE Properties" style="width:220px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionDefaultSplit">Your default split with brokerage (%)</label>
+        <input type="number" id="commissionDefaultSplit" min="0" max="100" step="1" style="width:110px">
+      </div>
+      <button class="ghost small" id="commissionSaveSplitBtn">Save</button>
+    </div>
+    <div class="sub" style="margin-top:8px; text-align:center">New transactions you close use this brokerage and split automatically — it auto-bumps to 90% on its own once you hit 6 closings from your current brokerage.</div>
+  </div>
+
+  <div class="card" style="margin-bottom:18px">
+    <h2 style="margin-top:0">+ Add a Lifetime Commission</h2>
+    <div class="row" style="flex-wrap:wrap; gap:10px">
+      <div class="form-group" style="flex:1; min-width:200px; margin-bottom:0">
+        <label for="commissionNewTitle">Title</label>
+        <input type="text" id="commissionNewTitle" placeholder="e.g. 123 Main St sale">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionNewAmount">Amount ($)</label>
+        <input type="number" id="commissionNewAmount" min="0" step="0.01" style="width:130px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionNewBrokerage">Brokerage</label>
+        <input type="text" id="commissionNewBrokerage" placeholder="Defaults to current" style="width:170px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionNewSplit">Split (%)</label>
+        <input type="number" id="commissionNewSplit" min="0" max="100" step="1" style="width:90px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionNewDate">Date</label>
+        <input type="date" id="commissionNewDate">
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label for="commissionNewDesc">Description (optional)</label>
+      <textarea id="commissionNewDesc" rows="2"></textarea>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label for="commissionNewFile">Photo or file (optional)</label>
+      <input type="file" id="commissionNewFile">
+    </div>
+    <button id="commissionAddBtn" style="margin-top:10px">+ Add Commission</button>
+    <div class="error-box" id="commissionAddError" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px">
+      <h2 style="margin:0">All Commissions</h2>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionSort">Sort by</label>
+        <select id="commissionSort">
+          <option value="date_desc">Most recent first</option>
+          <option value="date_asc">Oldest first</option>
+          <option value="amount_desc">Biggest first</option>
+          <option value="amount_asc">Smallest first</option>
+        </select>
+      </div>
+    </div>
+    <div id="commissionList" style="margin-top:14px"></div>
+    <button class="ghost" id="commissionLoadMoreBtn" style="margin-top:14px; display:none">Load More</button>
+  </div>
+</section>
+
 </main>
+</div>
 
 <footer class="site-footer">
   URTO — Ultimate Realtor Tool · Created by Mario Bengochea · v{{ app_version }} (updated {{ app_version_date }})
@@ -2182,18 +2422,24 @@ const tabCrmBtn = document.getElementById('tabCrmBtn');
 const tabDialerBtn = document.getElementById('tabDialerBtn');
 const tabTxnBtn = document.getElementById('tabTxnBtn');
 const tabShowingBtn = document.getElementById('tabShowingBtn');
+const tabEosBtn = document.getElementById('tabEosBtn');
+const tabCommissionBtn = document.getElementById('tabCommissionBtn');
 const homeSection = HOSTED ? null : document.getElementById('homeSection');
 const lookupSection = HOSTED ? null : document.getElementById('lookupSection');
 const crmSection = document.getElementById('crmSection');
 const dialerSection = document.getElementById('dialerSection');
 const txnSection = document.getElementById('txnSection');
 const showingSection = document.getElementById('showingSection');
+const eosSection = document.getElementById('eosSection');
+const commissionSection = document.getElementById('commissionSection');
 
 const TOP_TABS = HOSTED ? [
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
   { key: 'showing', btn: tabShowingBtn, section: showingSection, onShow: () => { initShowingDayTab(); } },
+  { key: 'eos', btn: tabEosBtn, section: eosSection, onShow: () => { initEosTab(); } },
+  { key: 'commission', btn: tabCommissionBtn, section: commissionSection, onShow: () => { initCommissionTab(); } },
 ] : [
   { key: 'home', btn: document.getElementById('tabHomeBtn'), section: homeSection, onShow: null },
   { key: 'lookup', btn: document.getElementById('tabLookupBtn'), section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
@@ -2201,6 +2447,8 @@ const TOP_TABS = HOSTED ? [
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
   { key: 'showing', btn: tabShowingBtn, section: showingSection, onShow: () => { initShowingDayTab(); } },
+  { key: 'eos', btn: tabEosBtn, section: eosSection, onShow: () => { initEosTab(); } },
+  { key: 'commission', btn: tabCommissionBtn, section: commissionSection, onShow: () => { initCommissionTab(); } },
 ];
 
 function showTopTab(target) {
@@ -5075,6 +5323,20 @@ const txnMoveClosingsBtn = document.getElementById('txnMoveClosingsBtn');
 const txnMoveArchiveBtn = document.getElementById('txnMoveArchiveBtn');
 const txnRestoreBtn = document.getElementById('txnRestoreBtn');
 const txnDeleteBtn = document.getElementById('txnDeleteBtn');
+const txnSalePrice = document.getElementById('txnSalePrice');
+const txnCommissionRate = document.getElementById('txnCommissionRate');
+const txnCommissionPreview = document.getElementById('txnCommissionPreview');
+
+function updateTxnCommissionPreview() {
+  const price = parseFloat(txnSalePrice.value);
+  const rate = parseFloat(txnCommissionRate.value);
+  if (!price || !rate) { txnCommissionPreview.textContent = ''; return; }
+  const split = (window.commissionDefaultSplitPct != null) ? window.commissionDefaultSplitPct : 80;
+  const amount = price * (rate / 100) * (split / 100);
+  txnCommissionPreview.textContent = `≈ $${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} to you at your current ${split}% split`;
+}
+txnSalePrice.addEventListener('input', updateTxnCommissionPreview);
+txnCommissionRate.addEventListener('input', updateTxnCommissionPreview);
 
 txnListSubtabs.querySelectorAll('button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -5168,6 +5430,13 @@ async function openTxnDetail(txnId) {
   txnDetailTitle.value = t.title;
   setTxnStatusButtons(t.status);
   txnDetailMeta.textContent = `${txnTypeLabel(t.transaction_type)} · created ${t.created_at.slice(0, 10)}`;
+  txnSalePrice.value = t.sale_price != null ? t.sale_price : '';
+  txnCommissionRate.value = t.commission_rate != null ? t.commission_rate : '';
+  try {
+    const settingsRes = await fetch('/api/crm/commission_settings');
+    if (settingsRes.ok) window.commissionDefaultSplitPct = (await settingsRes.json()).default_split_pct;
+  } catch (e) { /* preview just falls back to 80% if this fails */ }
+  updateTxnCommissionPreview();
 
   const inActive = currentTxnFolder === 'active';
   txnMoveClosingsBtn.style.display = inActive ? '' : 'none';
@@ -5247,10 +5516,16 @@ async function saveTxnDetailFields() {
   if (!title) return;
   await fetch(`/api/txn/transactions/${currentTxnId}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, status: txnDetailStatusValue }),
+    body: JSON.stringify({
+      title, status: txnDetailStatusValue,
+      sale_price: txnSalePrice.value === '' ? null : parseFloat(txnSalePrice.value),
+      commission_rate: txnCommissionRate.value === '' ? null : parseFloat(txnCommissionRate.value),
+    }),
   });
 }
 txnDetailTitle.addEventListener('blur', saveTxnDetailFields);
+txnSalePrice.addEventListener('blur', saveTxnDetailFields);
+txnCommissionRate.addEventListener('blur', saveTxnDetailFields);
 txnStatusBtns.querySelectorAll('.txn-status-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     setTxnStatusButtons(btn.getAttribute('data-status'));
@@ -5780,6 +6055,313 @@ function buildShowingGoogleMapsUrl(day) {
 showingOpenMapsBtn.addEventListener('click', () => {
   const url = buildShowingGoogleMapsUrl(currentShowingDay);
   if (url) window.open(url, '_blank');
+});
+
+/* ===================== EOS & Rocks ===================== */
+const waterfallList = document.getElementById('waterfallList');
+const waterfallNewItem = document.getElementById('waterfallNewItem');
+const waterfallAddBtn = document.getElementById('waterfallAddBtn');
+let eosLoaded = false;
+
+function formatEosDate(dateStr) {
+  if (!dateStr) return null;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+async function initEosTab() {
+  await loadEosRocks();
+  if (!eosLoaded) {
+    eosLoaded = true;
+    await loadWaterfallItems();
+  }
+}
+
+async function loadEosRocks() {
+  const res = await fetch('/api/crm/eos_rocks');
+  const rocks = res.ok ? await res.json() : [];
+  for (const rock of rocks) {
+    const card = document.querySelector(`.eos-rock-card[data-rock="${rock.rock_key}"]`);
+    if (!card) continue;
+    card.querySelector('.eos-rock-title').value = rock.title || '';
+    card.querySelector('.eos-rock-desc').value = rock.description || '';
+    card.querySelector('.eos-rock-start').value = rock.start_date || '';
+    const endEl = card.querySelector('.eos-rock-end');
+    if (rock.start_date && rock.end_date) {
+      endEl.textContent = `From ${formatEosDate(rock.start_date)} — by ${formatEosDate(rock.end_date)}`;
+    } else {
+      endEl.textContent = 'Set a start date to see the target date.';
+    }
+  }
+}
+
+document.querySelectorAll('.eos-rock-save').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const card = btn.closest('.eos-rock-card');
+    const rockKey = card.getAttribute('data-rock');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+      await fetch(`/api/crm/eos_rocks/${rockKey}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: card.querySelector('.eos-rock-title').value,
+          description: card.querySelector('.eos-rock-desc').value,
+          start_date: card.querySelector('.eos-rock-start').value,
+        }),
+      });
+      await loadEosRocks();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Save';
+    }
+  });
+});
+
+/* ===================== Waterfall to-do ===================== */
+async function loadWaterfallItems() {
+  const res = await fetch('/api/crm/waterfall_items');
+  const items = res.ok ? await res.json() : [];
+  if (!items.length) {
+    waterfallList.innerHTML = '<div class="sub">No steps yet — add your first one below.</div>';
+    return;
+  }
+  waterfallList.innerHTML = items.map(item => {
+    const classes = ['waterfall-item'];
+    if (!item.unlocked) classes.push('locked');
+    if (item.completed_at) classes.push('completed');
+    return `
+      <div class="${classes.join(' ')}" data-item-id="${item.id}">
+        <input type="checkbox" ${item.completed_at ? 'checked' : ''} ${item.unlocked ? '' : 'disabled'}>
+        <input type="text" class="waterfall-title" value="${escapeHtml(item.title)}" ${item.completed_at ? 'disabled' : ''}>
+        ${!item.unlocked ? '<span class="waterfall-lock-note">🔒 locked</span>' : ''}
+        <button class="ghost small" data-remove-waterfall="${item.id}">🗑</button>
+      </div>
+    `;
+  }).join('');
+}
+
+waterfallList.addEventListener('change', async (e) => {
+  const row = e.target.closest('.waterfall-item');
+  if (!row) return;
+  const itemId = row.dataset.itemId;
+  if (e.target.type === 'checkbox') {
+    try {
+      const res = await fetch(`/api/crm/waterfall_items/${itemId}/complete`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ completed: e.target.checked }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Couldn't update that step.");
+      }
+    } finally {
+      loadWaterfallItems();
+    }
+  }
+});
+
+// focusout (unlike blur) bubbles normally, so this can be delegated from
+// the list container instead of needing a listener on every row's input.
+waterfallList.addEventListener('focusout', async (e) => {
+  if (!e.target.classList || !e.target.classList.contains('waterfall-title')) return;
+  const row = e.target.closest('.waterfall-item');
+  const title = e.target.value.trim();
+  if (!title) return;
+  await fetch(`/api/crm/waterfall_items/${row.dataset.itemId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+});
+
+waterfallList.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-remove-waterfall]');
+  if (!btn) return;
+  await fetch(`/api/crm/waterfall_items/${btn.dataset.removeWaterfall}`, { method: 'DELETE' });
+  loadWaterfallItems();
+});
+
+waterfallAddBtn.addEventListener('click', async () => {
+  const title = waterfallNewItem.value.trim();
+  if (!title) return;
+  await fetch('/api/crm/waterfall_items', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  waterfallNewItem.value = '';
+  loadWaterfallItems();
+});
+waterfallNewItem.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); waterfallAddBtn.click(); }
+});
+
+/* ===================== Commission Tracker ===================== */
+const commissionLifetimeTotal = document.getElementById('commissionLifetimeTotal');
+const commissionCurrentBrokerage = document.getElementById('commissionCurrentBrokerage');
+const commissionDefaultSplit = document.getElementById('commissionDefaultSplit');
+const commissionSaveSplitBtn = document.getElementById('commissionSaveSplitBtn');
+const commissionNewTitle = document.getElementById('commissionNewTitle');
+const commissionNewAmount = document.getElementById('commissionNewAmount');
+const commissionNewBrokerage = document.getElementById('commissionNewBrokerage');
+const commissionNewSplit = document.getElementById('commissionNewSplit');
+const commissionNewDate = document.getElementById('commissionNewDate');
+const commissionNewDesc = document.getElementById('commissionNewDesc');
+const commissionNewFile = document.getElementById('commissionNewFile');
+const commissionAddBtn = document.getElementById('commissionAddBtn');
+const commissionAddError = document.getElementById('commissionAddError');
+const commissionList = document.getElementById('commissionList');
+const commissionLoadMoreBtn = document.getElementById('commissionLoadMoreBtn');
+const commissionSortSelect = document.getElementById('commissionSort');
+let commissionOffset = 0;
+let commissionSort = 'date_desc';
+const COMMISSION_PAGE_SIZE = 20;
+
+async function initCommissionTab() {
+  const res = await fetch('/api/crm/commission_settings');
+  const settings = res.ok ? await res.json() : { default_split_pct: 80, current_brokerage: '' };
+  commissionDefaultSplit.value = settings.default_split_pct;
+  commissionCurrentBrokerage.value = settings.current_brokerage;
+  window.commissionDefaultSplitPct = settings.default_split_pct;
+  commissionNewDate.value = todayIsoDate();
+  commissionOffset = 0;
+  await refreshCommissionList(true);
+}
+
+commissionSaveSplitBtn.addEventListener('click', async () => {
+  await fetch('/api/crm/commission_settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      default_split_pct: parseFloat(commissionDefaultSplit.value) || 80,
+      current_brokerage: commissionCurrentBrokerage.value.trim(),
+    }),
+  });
+  window.commissionDefaultSplitPct = parseFloat(commissionDefaultSplit.value) || 80;
+});
+
+commissionSortSelect.addEventListener('change', (e) => {
+  commissionSort = e.target.value;
+  refreshCommissionList(true);
+});
+
+function formatCommissionDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatMoney(n) {
+  return `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
+}
+
+async function refreshCommissionList(reset) {
+  if (reset) {
+    commissionOffset = 0;
+    commissionList.innerHTML = '';
+  }
+  const res = await fetch(`/api/crm/commission_entries?sort=${commissionSort}&limit=${COMMISSION_PAGE_SIZE}&offset=${commissionOffset}`);
+  if (!res.ok) return;
+  const data = await res.json();
+  commissionLifetimeTotal.textContent = formatMoney(data.lifetime_total);
+  if (reset && !data.entries.length) {
+    commissionList.innerHTML = '<div class="sub">No commissions logged yet.</div>';
+  }
+  for (const entry of data.entries) {
+    const row = document.createElement('div');
+    row.className = 'commission-row';
+    row.innerHTML = `
+      <div class="commission-main">
+        <b>${escapeHtml(entry.title)}</b>
+        <div class="commission-meta">${formatCommissionDate(entry.closed_date)} · ${escapeHtml(entry.brokerage || '')} · ${entry.split_pct}% split</div>
+        ${entry.description ? `<div class="commission-meta">${escapeHtml(entry.description)}</div>` : ''}
+        ${entry.file_filename ? `<a class="commission-file-link" href="/api/crm/commission_entries/${entry.id}/file" target="_blank">📎 ${escapeHtml(entry.file_original_name || 'file')}</a>` : ''}
+      </div>
+      <div class="commission-amount">${formatMoney(entry.amount)}</div>
+      <button class="ghost small" data-remove-commission="${entry.id}">🗑</button>
+    `;
+    commissionList.appendChild(row);
+  }
+  commissionOffset += data.entries.length;
+  commissionLoadMoreBtn.style.display = data.has_more ? 'inline-block' : 'none';
+}
+
+commissionLoadMoreBtn.addEventListener('click', () => refreshCommissionList(false));
+
+commissionList.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-remove-commission]');
+  if (!btn) return;
+  if (!confirm('Delete this commission entry? This cannot be undone.')) return;
+  await fetch(`/api/crm/commission_entries/${btn.dataset.removeCommission}`, { method: 'DELETE' });
+  refreshCommissionList(true);
+});
+
+commissionAddBtn.addEventListener('click', async () => {
+  commissionAddError.style.display = 'none';
+  const title = commissionNewTitle.value.trim();
+  if (!title) {
+    commissionAddError.textContent = 'Enter a title first.';
+    commissionAddError.style.display = 'block';
+    return;
+  }
+  commissionAddBtn.disabled = true;
+  commissionAddBtn.textContent = 'Adding…';
+  try {
+    const formData = new FormData();
+    formData.append('title', title);
+    formData.append('amount', commissionNewAmount.value || '0');
+    formData.append('split_pct', commissionNewSplit.value || '');
+    formData.append('brokerage', commissionNewBrokerage.value.trim());
+    formData.append('closed_date', commissionNewDate.value || '');
+    formData.append('description', commissionNewDesc.value.trim());
+    if (commissionNewFile.files[0]) formData.append('file', commissionNewFile.files[0]);
+    const res = await fetch('/api/crm/commission_entries', { method: 'POST', body: formData });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      commissionAddError.textContent = data.error || "Couldn't add that commission.";
+      commissionAddError.style.display = 'block';
+      return;
+    }
+    commissionNewTitle.value = '';
+    commissionNewAmount.value = '';
+    commissionNewBrokerage.value = '';
+    commissionNewSplit.value = '';
+    commissionNewDesc.value = '';
+    commissionNewFile.value = '';
+    commissionNewDate.value = todayIsoDate();
+    await initCommissionTab();
+  } catch (e) {
+    commissionAddError.textContent = "Couldn't reach URTO's server — try again.";
+    commissionAddError.style.display = 'block';
+  } finally {
+    commissionAddBtn.disabled = false;
+    commissionAddBtn.textContent = '+ Add Commission';
+  }
+});
+
+/* ===================== Background theme music ===================== */
+// A single global <audio> element that lives outside every tab section, so
+// it keeps playing uninterrupted across tab switches (nothing here ever
+// removes/recreates it). Browsers block autoplay with sound until a real
+// user gesture -- Mario's own click on this button IS that gesture, so no
+// special handling is needed to get playback to actually start.
+const themeAudio = document.getElementById('themeAudio');
+const themeToggleBtn = document.getElementById('themeToggleBtn');
+
+themeToggleBtn.addEventListener('click', () => {
+  if (themeAudio.paused) {
+    themeAudio.play().catch(() => {
+      themeToggleBtn.textContent = '🎵 Play Theme';
+      themeToggleBtn.classList.remove('playing');
+    });
+  } else {
+    themeAudio.pause();
+  }
+});
+themeAudio.addEventListener('play', () => {
+  themeToggleBtn.textContent = '⏸ Pause Theme';
+  themeToggleBtn.classList.add('playing');
+});
+themeAudio.addEventListener('pause', () => {
+  themeToggleBtn.textContent = '🎵 Play Theme';
+  themeToggleBtn.classList.remove('playing');
 });
 
 </script>
