@@ -147,6 +147,31 @@ def upload_or_update_file(access_token: str, name: str, content: bytes, mimetype
     return res.json()
 
 
+def list_files_in_folder(access_token: str, folder_id: str) -> list:
+    """Returns [{"id": ..., "name": ..., "is_folder": bool}, ...] for every
+    non-trashed item directly inside folder_id -- used to find and remove
+    files/subfolders Drive still has that are no longer expected (a
+    renamed/removed document), the same deletion-propagation every other
+    backup destination already gets. `is_folder` lets a caller recurse into
+    subfolders (e.g. one per transaction) while pruning leaf files."""
+    query = f"'{folder_id}' in parents and trashed = false"
+    res = requests.get(
+        f"{DRIVE_API}/files", headers=_headers(access_token),
+        params={"q": query, "fields": "files(id,name,mimeType)", "spaces": "drive"}, timeout=20,
+    )
+    res.raise_for_status()
+    return [
+        {"id": f["id"], "name": f["name"], "is_folder": f.get("mimeType") == "application/vnd.google-apps.folder"}
+        for f in res.json().get("files", [])
+    ]
+
+
+def delete_file(access_token: str, file_id: str):
+    res = requests.delete(f"{DRIVE_API}/files/{file_id}", headers=_headers(access_token), timeout=20)
+    if res.status_code not in (200, 204, 404):
+        res.raise_for_status()
+
+
 def create_meet_event(access_token: str, summary: str, start_iso: str, end_iso: str, timezone: str,
                        attendee_email: str = None, description: str = "") -> dict:
     """Creates a real event on Mario's primary Google Calendar with a Google

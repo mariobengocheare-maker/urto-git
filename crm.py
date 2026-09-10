@@ -7,6 +7,7 @@ follow-up data and schedule math.
 import calendar
 import csv
 import json
+import mimetypes
 import os
 import re
 import requests
@@ -441,28 +442,17 @@ def _copy_if_newer(src: Path, dest: Path, expected: set):
         pass
 
 
-def _mirror_documents_folder(backup_dir: Path):
-    """Mirrors Transaction Manager's uploaded files into TWO human-browsable
-    folders (real names, not the internal stored/uuid filenames) rather than
-    a flat raw copy of DOCUMENTS_DIR:
-
-      * 'Transaction Checklist Documents/<Type>/<Document Name><ext>' — the
-        shared blank template for each document on a type's checklist.
-      * 'Transactions/<Transaction Title> (id)/<Document Name> - Template
-        <ext>' and '... - Signed<ext>' — one folder per actual transaction
-        (across every folder: active/closings/archive), using that
-        transaction's own snapshotted document names.
-
-    Full diff each run: copies new/changed files AND deletes anything in
-    the backup no longer expected (deleted document, renamed transaction,
-    removed signed upload, transaction itself deleted), same principle as
-    the CRM's instant-mirror deletions elsewhere."""
-    checklist_root = backup_dir / "Transaction Checklist Documents"
-    txns_root = backup_dir / "Transactions"
-    expected = set()
-
+def _iter_document_backup_files():
+    """Yields (rel_folder_parts, filename, src_path) for every real uploaded
+    file that belongs in a human-browsable backup mirror — Transaction
+    Manager's shared templates/per-transaction signed copies, AND Commission
+    Tracker's per-entry photo/file uploads. This is the single source of
+    truth both `_mirror_documents_folder()` (local/OneDrive/Google-Drive-
+    local-folder copy) and `_push_documents_to_google_drive()` (the real
+    Google Drive API push) walk, so the two destinations can never silently
+    drift out of agreement about which files should exist."""
     for txn_type, label in TRANSACTION_TYPES:
-        type_dir = checklist_root / _safe_name(label, txn_type)
+        type_folder = ("Transaction Checklist Documents", _safe_name(label, txn_type))
         for dt in list_document_types(txn_type):
             if not dt.get("template_filename"):
                 continue
@@ -470,12 +460,11 @@ def _mirror_documents_folder(backup_dir: Path):
             if not src.exists():
                 continue
             ext = Path(dt.get("template_original_name") or dt["template_filename"]).suffix
-            dest = type_dir / f"{_safe_name(dt['name'], 'Document')}{ext}"
-            _copy_if_newer(src, dest, expected)
+            yield type_folder, f"{_safe_name(dt['name'], 'Document')}{ext}", src
 
     for folder in TRANSACTION_FOLDERS:
         for txn in list_transactions(folder):
-            txn_dir = txns_root / f"{_safe_name(txn['title'], 'Transaction')} ({txn['id']})"
+            txn_folder = ("Transactions", f"{_safe_name(txn['title'], 'Transaction')} ({txn['id']})")
             for doc in txn.get("documents") or []:
                 doc_name = _safe_name(doc.get("name") or "Document", "Document")
                 # Template: only the shared type-level file, if the doc's
@@ -488,14 +477,58 @@ def _mirror_documents_folder(backup_dir: Path):
                         src = TEMPLATES_DIR / dt["template_filename"]
                         if src.exists():
                             ext = Path(dt.get("template_original_name") or dt["template_filename"]).suffix
-                            _copy_if_newer(src, txn_dir / f"{doc_name} - Template{ext}", expected)
+                            yield txn_folder, f"{doc_name} - Template{ext}", src
                 if doc.get("signed_filename"):
                     src = SIGNED_DIR / doc["signed_filename"]
                     if src.exists():
                         ext = Path(doc.get("signed_original_name") or doc["signed_filename"]).suffix
-                        _copy_if_newer(src, txn_dir / f"{doc_name} - Signed{ext}", expected)
+                        yield txn_folder, f"{doc_name} - Signed{ext}", src
 
-    for root in (checklist_root, txns_root):
+    conn = get_conn()
+    commission_rows = conn.execute(
+        "SELECT id, title, file_filename, file_original_name FROM commission_entries WHERE file_filename IS NOT NULL"
+    ).fetchall()
+    conn.close()
+    for row in commission_rows:
+        src = COMMISSION_FILES_DIR / row["file_filename"]
+        if not src.exists():
+            continue
+        ext = Path(row["file_original_name"] or row["file_filename"]).suffix
+        filename = f"{_safe_name(row['title'] or 'Commission', 'Commission')} ({row['id']}){ext}"
+        yield ("Commission Files",), filename, src
+
+
+def _mirror_documents_folder(backup_dir: Path):
+    """Mirrors Transaction Manager's uploaded files AND Commission Tracker's
+    per-entry file uploads into human-browsable folders (real names, not the
+    internal stored/uuid filenames) rather than a flat raw copy of
+    DOCUMENTS_DIR:
+
+      * 'Transaction Checklist Documents/<Type>/<Document Name><ext>' — the
+        shared blank template for each document on a type's checklist.
+      * 'Transactions/<Transaction Title> (id)/<Document Name> - Template
+        <ext>' and '... - Signed<ext>' — one folder per actual transaction
+        (across every folder: active/closings/archive), using that
+        transaction's own snapshotted document names.
+      * 'Commission Files/<Title> (id)<ext>' — one file per commission entry
+        that has an attached photo/file upload.
+
+    Full diff each run: copies new/changed files AND deletes anything in
+    the backup no longer expected (deleted document, renamed transaction,
+    removed signed upload, transaction itself deleted), same principle as
+    the CRM's instant-mirror deletions elsewhere."""
+    roots = {
+        "Transaction Checklist Documents": backup_dir / "Transaction Checklist Documents",
+        "Transactions": backup_dir / "Transactions",
+        "Commission Files": backup_dir / "Commission Files",
+    }
+    expected = set()
+
+    for rel_parts, filename, src in _iter_document_backup_files():
+        dest = backup_dir.joinpath(*rel_parts, filename)
+        _copy_if_newer(src, dest, expected)
+
+    for root in roots.values():
         if not root.exists():
             continue
         for existing in list(root.rglob("*")):
@@ -506,6 +539,83 @@ def _mirror_documents_folder(backup_dir: Path):
                 existing.rmdir()  # only removes it if now empty
             except OSError:
                 pass
+
+
+def _push_documents_to_google_drive(access_token: str, root_folder_id: str):
+    """Pushes the same Transaction Manager + Commission Tracker files
+    `_mirror_documents_folder()` writes locally up to Mario's REAL Google
+    Drive too — closing the gap where uploaded FILES (unlike the DB/JSON/
+    contacts data, which rides the whole-file DB mirror automatically)
+    previously never reached Google Drive on the hosted deployment at all.
+    Mirrors the same nested-folder structure under the existing "URTO
+    Backups" root, creating subfolders on demand and caching their ids for
+    the duration of this one pass, then recursively PRUNES the three known
+    root folders (Transaction Checklist Documents / Transactions /
+    Commission Files) against what's actually expected right now.
+
+    Pruning has to be a full recursive walk of each root, not just "check
+    the folders we just uploaded into" — if the LAST file under some
+    subfolder (e.g. the only document type for a checklist, or a
+    transaction's only doc) gets removed, nothing uploads there this pass
+    at all, so that subfolder would never be visited for cleanup otherwise.
+    This mirrors `_mirror_documents_folder()`'s local behavior, which
+    naturally handles this via a full `rglob()` of the filesystem root.
+    Every step is individually tolerant of failure -- one bad file/folder
+    must never abort the rest."""
+    folder_id_cache = {(): root_folder_id}
+
+    def _folder_id_for(rel_parts):
+        if rel_parts in folder_id_cache:
+            return folder_id_cache[rel_parts]
+        parent_id = _folder_id_for(rel_parts[:-1])
+        fid = google_drive_api.find_or_create_folder(access_token, rel_parts[-1], parent_id)
+        folder_id_cache[rel_parts] = fid
+        return fid
+
+    expected = {}
+    for rel_parts, filename, src in _iter_document_backup_files():
+        try:
+            folder_id = _folder_id_for(rel_parts)
+            mimetype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            google_drive_api.upload_or_update_file(access_token, filename, src.read_bytes(), mimetype, folder_id)
+            expected.setdefault(rel_parts, set()).add(filename)
+        except Exception:
+            continue
+
+    for root_name in ("Transaction Checklist Documents", "Transactions", "Commission Files"):
+        try:
+            root_id = google_drive_api.find_or_create_folder(access_token, root_name, root_folder_id)
+            _prune_drive_folder(access_token, root_id, (root_name,), expected)
+        except Exception:
+            continue
+
+
+def _prune_drive_folder(access_token: str, folder_id: str, rel_parts: tuple, expected: dict) -> bool:
+    """Recursively deletes anything under folder_id that isn't listed in
+    `expected` (a rel_parts -> {filenames} map), removing now-empty
+    subfolders too. Returns True if folder_id itself ends up completely
+    empty, so the caller can remove it as well."""
+    try:
+        children = google_drive_api.list_files_in_folder(access_token, folder_id)
+    except Exception:
+        return False
+    expected_names = expected.get(rel_parts, set())
+    remaining = 0
+    for child in children:
+        try:
+            if child.get("is_folder"):
+                child_empty = _prune_drive_folder(access_token, child["id"], rel_parts + (child["name"],), expected)
+                if child_empty:
+                    google_drive_api.delete_file(access_token, child["id"])
+                else:
+                    remaining += 1
+            elif child["name"] in expected_names:
+                remaining += 1
+            else:
+                google_drive_api.delete_file(access_token, child["id"])
+        except Exception:
+            remaining += 1
+    return remaining == 0
 
 
 def _safe_name(name: str, fallback: str) -> str:
@@ -698,17 +808,38 @@ def _write_code_download_link(backup_dir: Path):
 
 
 def _instant_document_mirror():
-    """Mirrors the Transaction Manager document folders to every backup
-    destination right away — called from the specific document-mutation
-    functions (upload/remove a template or signed file, create/delete a
-    transaction) rather than from the general on_data_changed() instant
-    path, so routine note/follow-up saves don't pay for real file I/O on
-    every single edit — only actual document changes do."""
+    """Mirrors the Transaction Manager + Commission Tracker document folders
+    to every backup destination right away — called from the specific
+    document-mutation functions (upload/remove a template, signed, or
+    commission file; create/delete a transaction or commission entry)
+    rather than from the general on_data_changed() instant path, so routine
+    note/follow-up saves don't pay for real file I/O on every single edit —
+    only actual document changes do. The real Google Drive API push (a
+    genuine outbound network round-trip) is fired on a background thread —
+    same reasoning as on_data_changed()'s own backup dispatch (build order
+    #83) and push_test() (build order #85): a slow/stuck Drive call must
+    never make the save request itself hang."""
     for dest_info in resolve_backup_dirs():
         try:
             _mirror_documents_folder(dest_info["path"])
         except Exception:
             pass
+    threading.Thread(target=_push_instant_documents_to_google_drive_safe, daemon=True).start()
+
+
+def _push_instant_documents_to_google_drive_safe():
+    try:
+        refresh_token = get_google_oauth_refresh_token()
+        if not refresh_token or not google_drive_api.is_configured():
+            return
+        access_token = google_drive_api.refresh_access_token(refresh_token)
+        folder_id = get_google_drive_folder_id()
+        if not folder_id:
+            folder_id = google_drive_api.find_or_create_folder(access_token, "URTO Backups")
+            save_google_drive_folder_id(folder_id)
+        _push_documents_to_google_drive(access_token, folder_id)
+    except Exception:
+        pass
 
 
 def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
@@ -754,6 +885,14 @@ def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
             google_drive_api.upload_or_update_file(
                 access_token, newest.name, newest.read_bytes(), "application/x-sqlite3", folder_id,
             )
+        # Real uploaded files (Transaction Manager templates/signed copies,
+        # Commission Tracker attachments) also ride the periodic snapshot
+        # pass, as a backstop in case a prior instant push (see
+        # _instant_document_mirror()) never fired or failed.
+        try:
+            _push_documents_to_google_drive(access_token, folder_id)
+        except Exception:
+            pass
 
     return True
 
@@ -3508,6 +3647,8 @@ def create_commission_entry(title: str, description: str = "", amount: float = 0
     conn.close()
     on_data_changed("commission entry added")
     _maybe_auto_bump_commission_split()
+    if file_filename:
+        _instant_document_mirror()
     return dict(row)
 
 
@@ -3561,12 +3702,15 @@ def update_commission_entry(entry_id: int, title: str = None, description: str =
 def delete_commission_entry(entry_id: int):
     conn = get_conn()
     row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
+    had_file = bool(row and row["file_filename"])
     if row and row["file_filename"]:
         _delete_stored_file(COMMISSION_FILES_DIR, row["file_filename"])
     conn.execute("DELETE FROM commission_entries WHERE id = ?", (entry_id,))
     conn.commit()
     conn.close()
     on_data_changed("commission entry deleted")
+    if had_file:
+        _instant_document_mirror()
 
 
 def set_commission_entry_file(entry_id: int, file_storage):
@@ -3584,6 +3728,7 @@ def set_commission_entry_file(entry_id: int, file_storage):
     row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
     conn.close()
     on_data_changed("commission entry file updated")
+    _instant_document_mirror()
     return dict(row)
 
 
@@ -3593,6 +3738,7 @@ def remove_commission_entry_file(entry_id: int):
     if not existing:
         conn.close()
         return None
+    had_file = bool(existing["file_filename"])
     if existing["file_filename"]:
         _delete_stored_file(COMMISSION_FILES_DIR, existing["file_filename"])
     conn.execute("UPDATE commission_entries SET file_filename = NULL, file_original_name = NULL WHERE id = ?",
@@ -3601,4 +3747,6 @@ def remove_commission_entry_file(entry_id: int):
     row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
     conn.close()
     on_data_changed("commission entry file removed")
+    if had_file:
+        _instant_document_mirror()
     return dict(row)
