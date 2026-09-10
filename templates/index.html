@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>URTO — Ultimate Realtor Tool</title>
+<title>URTO</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2316233c'/%3E%3Cpath d='M16 6 L27 15 H23 V26 H9 V15 H5 Z' fill='%23d4af37'/%3E%3Crect x='13' y='18' width='6' height='8' fill='%2316233c'/%3E%3C/svg%3E">
 {% if hosted %}
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -911,19 +911,28 @@
   .luxe-wordmark { display: inline-flex; flex-direction: column; align-items: center; line-height: 1; margin-bottom: 18px; }
   .luxe-word { font-family: 'Segoe UI', Arial, sans-serif; font-weight: 800; font-size: 1.9rem; letter-spacing: .06em; color: #fff; }
   .luxe-sub { font-family: 'Segoe UI', Arial, sans-serif; font-weight: 500; font-size: .72rem; letter-spacing: .38em; color: var(--gold); margin-top: 4px; margin-left: .38em; }
-  .brokerage-progress-dots { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
-  .brokerage-progress-dots .progress-dot {
-    width: 34px; height: 34px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: .85rem; font-weight: 700;
-    border: 2px solid var(--border); color: var(--text-secondary);
-    background: rgba(255,255,255,.03);
-    transition: all .2s;
+  .brokerage-progress-bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .brokerage-progress-track {
+    flex: 1; height: 14px; border-radius: 999px;
+    background: rgba(255,255,255,.06);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
   }
-  .brokerage-progress-dots .progress-dot.filled {
-    border-color: var(--gold); background: linear-gradient(180deg, var(--gold-bright, var(--gold)), var(--gold)); color: #1a1408;
-    box-shadow: 0 0 12px rgba(201,162,39,.35);
+  .brokerage-progress-fill {
+    height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, var(--gold), var(--gold-bright, var(--gold)));
+    box-shadow: 0 0 10px rgba(201,162,39,.45);
+    transition: width .4s ease;
   }
+  .brokerage-progress-endcap {
+    display: flex; align-items: center; gap: 5px;
+    font-size: .72rem; font-weight: 700; letter-spacing: .03em;
+    color: var(--text-secondary); white-space: nowrap;
+  }
+  .brokerage-progress-endcap .unlock-icon { font-size: .9rem; line-height: 1; opacity: .55; transition: opacity .2s; }
+  .brokerage-progress-endcap.unlocked { color: var(--gold); }
+  .brokerage-progress-endcap.unlocked .unlock-icon { opacity: 1; }
   .brokerage-progress-label.unlocked { color: var(--gold); font-weight: 600; }
 
   .commission-row {
@@ -1745,7 +1754,10 @@
       <div class="luxe-wordmark"><span class="luxe-word">LUXE</span><span class="luxe-sub">PROPERTIES</span></div>
       <button class="ghost small" id="brokerageEditToggleBtn" title="Change brokerage or split">⚙</button>
     </div>
-    <div class="brokerage-progress-dots" id="brokerageProgressDots"></div>
+    <div class="brokerage-progress-bar-row">
+      <div class="brokerage-progress-track"><div class="brokerage-progress-fill" id="brokerageProgressFill" style="width:0%"></div></div>
+      <div class="brokerage-progress-endcap" id="brokerageProgressEndcap"><span class="unlock-icon">🔒</span><span>90%</span></div>
+    </div>
     <div class="sub brokerage-progress-label" id="brokerageProgressLabel" style="text-align:center">Loading…</div>
 
     <div id="brokerageEditPanel" style="display:none">
@@ -6626,33 +6638,32 @@ const commissionEditFileCurrent = document.getElementById('commissionEditFileCur
 const commissionEditFile = document.getElementById('commissionEditFile');
 let commissionEditingId = null;
 
-const brokerageProgressDots = document.getElementById('brokerageProgressDots');
+const brokerageProgressFill = document.getElementById('brokerageProgressFill');
+const brokerageProgressEndcap = document.getElementById('brokerageProgressEndcap');
 const brokerageProgressLabel = document.getElementById('brokerageProgressLabel');
 const brokerageEditToggleBtn = document.getElementById('brokerageEditToggleBtn');
 const brokerageEditPanel = document.getElementById('brokerageEditPanel');
 
-// Renders the 1-6 dot tracker toward the auto-bump threshold (see
+// Renders a linear fill bar toward the auto-bump threshold (see
 // crm.get_commission_settings()'s deals_closed_at_brokerage/
-// auto_bump_threshold/split_unlocked -- build order #109). Dots fill up to
-// whichever is smaller of the real count or the threshold, so a brokerage
-// with 11 closings still shows "6 of 6," not an overflowing tracker.
+// auto_bump_threshold/split_unlocked -- build order #109/#110). The bar
+// fills to whichever is smaller of the real count or the threshold, so a
+// brokerage with 11 closings still shows a full bar, not an overflow.
 function renderBrokerageProgress(settings) {
   const threshold = settings.auto_bump_threshold || 6;
   const closed = Math.min(settings.deals_closed_at_brokerage || 0, threshold);
-  brokerageProgressDots.innerHTML = '';
-  for (let i = 1; i <= threshold; i++) {
-    const dot = document.createElement('div');
-    dot.className = 'progress-dot' + (i <= closed ? ' filled' : '');
-    dot.textContent = i;
-    brokerageProgressDots.appendChild(dot);
-  }
+  const pct = threshold > 0 ? (closed / threshold) * 100 : 0;
+  brokerageProgressFill.style.width = `${pct}%`;
+  const splitPct = settings.auto_bump_split_pct;
+  brokerageProgressEndcap.className = 'brokerage-progress-endcap' + (settings.split_unlocked ? ' unlocked' : '');
+  brokerageProgressEndcap.innerHTML = `<span class="unlock-icon">${settings.split_unlocked ? '🔓' : '🔒'}</span><span>${splitPct}% Commission</span>`;
   if (settings.split_unlocked) {
     brokerageProgressLabel.className = 'sub brokerage-progress-label unlocked';
-    brokerageProgressLabel.textContent = `🔓 ${settings.auto_bump_split_pct}% commission unlocked with ${settings.current_brokerage}`;
+    brokerageProgressLabel.textContent = `🔓 ${splitPct}% commission unlocked with ${settings.current_brokerage}`;
   } else {
     const remaining = threshold - closed;
     brokerageProgressLabel.className = 'sub brokerage-progress-label';
-    brokerageProgressLabel.textContent = `${closed} of ${threshold} deals with ${settings.current_brokerage} — ${remaining} more to unlock ${settings.auto_bump_split_pct}%`;
+    brokerageProgressLabel.textContent = `${closed} of ${threshold} deals with ${settings.current_brokerage} — ${remaining} more to unlock ${splitPct}%`;
   }
 }
 
