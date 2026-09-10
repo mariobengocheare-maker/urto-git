@@ -171,6 +171,18 @@ def proxy_request(flask_request, subpath_with_prefix: str):
             }
             kwargs["files"] = files
             kwargs["data"] = {k: v for k, v in flask_request.form.items()}
+        elif flask_request.form:
+            # A multipart/form-data submit with real text fields but ZERO
+            # actual file parts -- e.g. Commission Tracker's "+ Add
+            # Commission" form (always built as FormData, but the "Photo
+            # or file" input is optional) when no file is attached.
+            # Werkzeug parses this straight into request.form and leaves
+            # request.data empty, so checking only files/data (the old
+            # code) fell through both branches and proxied an EMPTY body
+            # to the hosted server -- every field silently dropped, which
+            # surfaced as a false "Title is required" even with a title
+            # typed in, since the hosted server genuinely received nothing.
+            kwargs["data"] = {k: v for k, v in flask_request.form.items()}
         elif flask_request.data:
             kwargs["data"] = flask_request.data
             if flask_request.content_type:

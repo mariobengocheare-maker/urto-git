@@ -3604,14 +3604,15 @@ def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: in
     # stat independent of the current page/sort, so it's always computed
     # in full here rather than derived from just the current page's rows
     # (which would give a wrong, page-dependent percentage breakdown).
-    by_representation = {k: {"count": 0, "amount": 0.0} for k in _REPRESENTED_AS_VALUES}
+    by_representation = {k: {"count": 0, "amount": 0.0, "sale_amount": 0.0} for k in _REPRESENTED_AS_VALUES}
     for row in conn.execute(
-        "SELECT represented_as, COUNT(*) AS c, COALESCE(SUM(amount), 0) AS s "
-        "FROM commission_entries GROUP BY represented_as"
+        "SELECT represented_as, COUNT(*) AS c, COALESCE(SUM(amount), 0) AS s, "
+        "COALESCE(SUM(sale_price), 0) AS sale_s FROM commission_entries GROUP BY represented_as"
     ).fetchall():
         key = row["represented_as"] if row["represented_as"] in by_representation else "seller"
         by_representation[key]["count"] += row["c"]
         by_representation[key]["amount"] += row["s"]
+        by_representation[key]["sale_amount"] += row["sale_s"]
     rows = conn.execute(
         f"SELECT * FROM commission_entries ORDER BY {order_sql} LIMIT ? OFFSET ?",
         (limit, offset),

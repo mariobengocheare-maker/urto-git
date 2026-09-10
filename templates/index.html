@@ -6564,17 +6564,27 @@ function formatMoney(n) {
   return `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
 }
 
+// Last-fetched by_representation breakdown, kept around so the Swap
+// button can re-render the donut/legend off the same data (against
+// whichever dollar figure is now primary) without a re-fetch.
+let commissionLastByRep = null;
+
 // Renders the small tally row (dot + count per represented-as type) plus
 // the donut "statistic wheel" + legend showing % of income, dollar amount,
 // and deal count per type. Sourced from list_commission_entries()'s
 // lifetime-wide by_representation breakdown (never just the current page).
+// Which dollar figure the donut/legend/percentages are built from follows
+// commissionPrimaryMetric -- swapping to Gross Sales as the big number
+// also switches the stat wheel to break down gross sales, not commission.
 function renderRepTallyAndDonut(byRep) {
+  commissionLastByRep = byRep;
   if (!byRep) { commissionRepTally.innerHTML = ''; commissionDonutWrap.style.display = 'none'; return; }
-  const totalAmount = Object.values(byRep).reduce((s, v) => s + v.amount, 0);
+  const amountField = commissionPrimaryMetric === 'sale' ? 'sale_amount' : 'amount';
+  const totalAmount = Object.values(byRep).reduce((s, v) => s + v[amountField], 0);
   const totalCount = Object.values(byRep).reduce((s, v) => s + v.count, 0);
 
   commissionRepTally.innerHTML = Object.keys(REP_LABELS).map(key => {
-    const v = byRep[key] || { count: 0, amount: 0 };
+    const v = byRep[key] || { count: 0, amount: 0, sale_amount: 0 };
     return `<span class="rep-tally-item"><span class="rep-tally-dot" style="background:${REP_COLORS[key]}"></span>${v.count} ${REP_LABELS[key]}</span>`;
   }).join('');
 
@@ -6587,9 +6597,9 @@ function renderRepTallyAndDonut(byRep) {
   let pct = 0;
   const stops = [];
   for (const key of Object.keys(REP_LABELS)) {
-    const v = byRep[key] || { count: 0, amount: 0 };
-    if (v.amount <= 0) continue;
-    const share = (v.amount / totalAmount) * 100;
+    const v = byRep[key] || { count: 0, amount: 0, sale_amount: 0 };
+    if (v[amountField] <= 0) continue;
+    const share = (v[amountField] / totalAmount) * 100;
     stops.push(`${REP_COLORS[key]} ${pct}% ${pct + share}%`);
     pct += share;
   }
@@ -6598,12 +6608,12 @@ function renderRepTallyAndDonut(byRep) {
     : 'rgba(255,255,255,.08)';
 
   commissionDonutLegend.innerHTML = Object.keys(REP_LABELS).map(key => {
-    const v = byRep[key] || { count: 0, amount: 0 };
+    const v = byRep[key] || { count: 0, amount: 0, sale_amount: 0 };
     if (v.count === 0) return '';
-    const share = totalAmount > 0 ? Math.round((v.amount / totalAmount) * 100) : 0;
+    const share = totalAmount > 0 ? Math.round((v[amountField] / totalAmount) * 100) : 0;
     return `<div class="donut-legend-row">
       <span class="donut-legend-dot" style="background:${REP_COLORS[key]}"></span>
-      <span><b>${share}%</b> <span class="donut-legend-label">${REP_LABELS[key]} · ${formatMoney(v.amount)} · ${v.count} deal${v.count === 1 ? '' : 's'}</span></span>
+      <span><b>${share}%</b> <span class="donut-legend-label">${REP_LABELS[key]} · ${formatMoney(v[amountField])} · ${v.count} deal${v.count === 1 ? '' : 's'}</span></span>
     </div>`;
   }).join('');
 }
@@ -6625,6 +6635,7 @@ function renderCommissionTotals() {
 commissionSwapBtn.addEventListener('click', () => {
   commissionPrimaryMetric = commissionPrimaryMetric === 'sale' ? 'commission' : 'sale';
   renderCommissionTotals();
+  renderRepTallyAndDonut(commissionLastByRep);
 });
 
 async function refreshCommissionList(reset) {
