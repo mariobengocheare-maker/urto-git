@@ -2144,6 +2144,20 @@
   </div>
 </div>
 
+<!-- File preview modal (Transaction Manager templates/signed docs, Commission Tracker attachments) -->
+<div class="modal-overlay" id="filePreviewOverlay">
+  <div class="modal" style="max-width:800px">
+    <div class="modal-head">
+      <h2 id="filePreviewTitle">File</h2>
+      <button class="modal-close" id="filePreviewCloseBtn">&times;</button>
+    </div>
+    <div id="filePreviewBody"></div>
+    <div class="modal-actions">
+      <a id="filePreviewDownloadLink" class="ghost small" href="#" style="text-decoration:none; display:inline-flex; align-items:center; padding:6px 12px; border-radius:7px;">⬇ Download</a>
+    </div>
+  </div>
+</div>
+
 <!-- Edit Commission Entry modal -->
 <div class="modal-overlay" id="commissionEditOverlay">
   <div class="modal">
@@ -3590,6 +3604,51 @@ document.getElementById('callHistoryCloseBtn').addEventListener('click', () => c
 document.getElementById('cdCallHistoryLink').addEventListener('click', (e) => {
   e.preventDefault();
   openCallHistory(currentClientId, document.getElementById('cdName').textContent);
+});
+
+/* ===================== File preview (shared by Transaction Manager + Commission Tracker) ===================== */
+// URTO's document-serving routes (transaction templates/signed docs, commission
+// entry attachments) now default to an INLINE response (see crm_routes.py) so
+// the browser can render an image/PDF directly instead of forcing a download --
+// this modal is that in-app viewer. A file type the browser can't natively
+// display (Word docs, etc.) falls back to a clear message + the Download link,
+// which appends ?download=1 to force a real Save As for that one click.
+const filePreviewOverlay = document.getElementById('filePreviewOverlay');
+const filePreviewTitle = document.getElementById('filePreviewTitle');
+const filePreviewBody = document.getElementById('filePreviewBody');
+const filePreviewDownloadLink = document.getElementById('filePreviewDownloadLink');
+const FILE_PREVIEW_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
+
+function openFilePreview(url, filename) {
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  filePreviewTitle.textContent = filename || 'File';
+  const ext = (filename || '').split('.').pop().toLowerCase();
+  filePreviewDownloadLink.href = url + (url.includes('?') ? '&' : '?') + 'download=1';
+  filePreviewDownloadLink.setAttribute('download', filename || '');
+  if (FILE_PREVIEW_IMAGE_EXTS.includes(ext)) {
+    filePreviewBody.innerHTML = `<img src="${url}" alt="${escapeHtml(filename || '')}" style="max-width:100%; display:block; margin:0 auto; border-radius:8px;">`;
+  } else if (ext === 'pdf') {
+    filePreviewBody.innerHTML = `<iframe src="${url}" style="width:100%; height:70vh; border:0; border-radius:8px; background:#fff;"></iframe>`;
+  } else {
+    filePreviewBody.innerHTML = `<div class="empty-state">Preview isn't available for this file type${ext ? ` (.${escapeHtml(ext)})` : ''} — use Download below to open it.</div>`;
+  }
+  filePreviewOverlay.classList.add('show');
+}
+
+document.getElementById('filePreviewCloseBtn').addEventListener('click', () => {
+  filePreviewOverlay.classList.remove('show');
+  filePreviewBody.innerHTML = '';
+});
+
+// Delegated click handler: any link marked .file-preview-link opens the
+// preview modal instead of navigating/downloading directly. Right-click
+// "Save link as..." and the Download button inside the modal both still
+// work, since the href is always a real, valid URL to the file.
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('.file-preview-link');
+  if (!link) return;
+  e.preventDefault();
+  openFilePreview(link.getAttribute('href'), link.dataset.filename || link.textContent.trim());
 });
 
 document.getElementById('dciCallHistoryLink').addEventListener('click', (e) => {
@@ -5658,11 +5717,11 @@ async function openTxnDetail(txnId) {
     row.className = 'txn-doc-row' + (doc.signed_filename ? ' signed' : '');
 
     const templateBox = doc.template_filename
-      ? `<div class="txn-doc-file">📄 <a href="/api/txn/document_types/${doc.document_type_id}/template" target="_blank">${escapeHtml(doc.template_original_name || 'template')}</a></div>`
+      ? `<div class="txn-doc-file">📄 <a href="/api/txn/document_types/${doc.document_type_id}/template" class="file-preview-link" data-filename="${escapeHtml(doc.template_original_name || 'template')}">${escapeHtml(doc.template_original_name || 'template')}</a></div>`
       : `<div class="txn-doc-empty">No template uploaded (see Manage Document Checklists)</div>`;
 
     const signedBox = doc.signed_filename
-      ? `<div class="txn-doc-file">✅ <a href="/api/txn/transaction_documents/${doc.id}/signed" target="_blank">${escapeHtml(doc.signed_original_name || 'signed')}</a>
+      ? `<div class="txn-doc-file">✅ <a href="/api/txn/transaction_documents/${doc.id}/signed" class="file-preview-link" data-filename="${escapeHtml(doc.signed_original_name || 'signed')}">${escapeHtml(doc.signed_original_name || 'signed')}</a>
            <button class="ghost small" data-remove-signed="${doc.id}">Remove</button></div>`
       : `<div class="txn-doc-file"><button class="small" data-upload-signed="${doc.id}">Upload signed copy</button></div>`;
 
@@ -5858,7 +5917,7 @@ async function loadDocTypesList() {
     row.dataset.docId = d.id;
     const tmplInfo = d.template_filename
       ? `<span class="tmpl-info">📄 ${escapeHtml(d.template_original_name || 'template')}</span>
-         <a href="/api/txn/document_types/${d.id}/template" target="_blank" class="ghost small" style="text-decoration:none; display:inline-flex; align-items:center; padding:6px 12px; border-radius:7px;">View</a>
+         <a href="/api/txn/document_types/${d.id}/template" class="file-preview-link ghost small" data-filename="${escapeHtml(d.template_original_name || 'template')}" style="text-decoration:none; display:inline-flex; align-items:center; padding:6px 12px; border-radius:7px;">View</a>
          <button class="ghost small" data-remove-template="${d.id}">Remove template</button>`
       : `<span class="tmpl-info">No template</span>
          <button class="ghost small" data-upload-template="${d.id}">Upload template</button>`;
@@ -6682,7 +6741,7 @@ function buildCommissionRow(entry) {
       <div class="commission-meta">${metaBits.join(' · ')}</div>
       ${detailLines.map(l => `<div class="commission-meta">${l}</div>`).join('')}
       ${entry.description ? `<div class="commission-meta">${escapeHtml(entry.description)}</div>` : ''}
-      ${entry.file_filename ? `<a class="commission-file-link" href="/api/crm/commission_entries/${entry.id}/file" target="_blank">📎 ${escapeHtml(entry.file_original_name || 'file')}</a>` : ''}
+      ${entry.file_filename ? `<a class="commission-file-link file-preview-link" href="/api/crm/commission_entries/${entry.id}/file" data-filename="${escapeHtml(entry.file_original_name || 'file')}">📎 ${escapeHtml(entry.file_original_name || 'file')}</a>` : ''}
     </div>
     <div class="commission-amount-block">
       <div class="commission-amount">${formatMoney(entry.amount)}</div>
@@ -6800,7 +6859,7 @@ async function openCommissionEdit(entryId) {
   commissionEditDesc.value = entry.description || '';
   commissionEditFile.value = '';
   commissionEditFileCurrent.innerHTML = entry.file_filename
-    ? `📎 <a href="/api/crm/commission_entries/${entry.id}/file" target="_blank">${escapeHtml(entry.file_original_name || 'file')}</a> <button type="button" class="ghost small" id="commissionEditRemoveFileBtn">Remove</button>`
+    ? `📎 <a href="/api/crm/commission_entries/${entry.id}/file" class="file-preview-link" data-filename="${escapeHtml(entry.file_original_name || 'file')}">${escapeHtml(entry.file_original_name || 'file')}</a> <button type="button" class="ghost small" id="commissionEditRemoveFileBtn">Remove</button>`
     : 'No file attached.';
   const removeFileBtn = document.getElementById('commissionEditRemoveFileBtn');
   if (removeFileBtn) {

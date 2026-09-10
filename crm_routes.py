@@ -512,7 +512,10 @@ def txn_download_document_type_template(doc_type_id):
         abort(404)
     return send_file(
         crm.TEMPLATES_DIR / doc_type["template_filename"],
-        as_attachment=True,
+        # Inline by default so the browser previews PDFs/images in place
+        # instead of downloading -- ?download=1 (the Download button/link
+        # in the preview modal) still forces a real Save As.
+        as_attachment=bool(request.args.get("download")),
         download_name=doc_type["template_original_name"] or "template",
     )
 
@@ -613,7 +616,9 @@ def txn_download_signed(doc_id):
         abort(404)
     return send_file(
         crm.SIGNED_DIR / row["signed_filename"],
-        as_attachment=True,
+        # Inline by default (in-app preview) -- ?download=1 forces a real
+        # Save As, same convention as the other two file-serving routes.
+        as_attachment=bool(request.args.get("download")),
         download_name=row["signed_original_name"] or "signed_document",
     )
 
@@ -921,6 +926,8 @@ def commission_download_file(entry_id):
         abort(404)
     return send_file(
         crm.COMMISSION_FILES_DIR / entry["file_filename"],
-        as_attachment=True,
+        # Inline by default (in-app preview) -- ?download=1 forces a real
+        # Save As, same convention as the other two file-serving routes.
+        as_attachment=bool(request.args.get("download")),
         download_name=entry.get("file_original_name") or "attachment",
     )
