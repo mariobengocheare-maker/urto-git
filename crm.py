@@ -3595,6 +3595,11 @@ def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: in
     conn = get_conn()
     total = conn.execute("SELECT COUNT(*) AS c FROM commission_entries").fetchone()["c"]
     lifetime_total = conn.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM commission_entries").fetchone()["s"]
+    # Gross sales/rent total across every entry that actually has a
+    # sale_price on record -- NULL entries (created before build order #104
+    # added this field) are simply excluded from the sum via SUM()'s own
+    # NULL-skipping behavior, not counted as $0.
+    lifetime_sale_total = conn.execute("SELECT COALESCE(SUM(sale_price), 0) AS s FROM commission_entries").fetchone()["s"]
     # Income + deal-count breakdown by who Mario represented -- a lifetime
     # stat independent of the current page/sort, so it's always computed
     # in full here rather than derived from just the current page's rows
@@ -3616,6 +3621,7 @@ def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: in
         "entries": [dict(r) for r in rows],
         "total": total,
         "lifetime_total": lifetime_total,
+        "lifetime_sale_total": lifetime_sale_total,
         "by_representation": by_representation,
         "has_more": offset + len(rows) < total,
     }

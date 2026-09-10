@@ -867,6 +867,9 @@
     line-height: 1;
     text-shadow: 0 2px 24px rgba(255,255,255,.12);
   }
+  .commission-total-sub-row { display: flex; align-items: center; gap: 10px; }
+  .commission-total-sub { font-size: 1rem; color: var(--text-secondary); white-space: nowrap; }
+  #commissionSwapBtn { font-size: .72rem; padding: 3px 9px; line-height: 1.4; }
   .commission-rep-tally { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; font-size: .82rem; color: var(--text-secondary); }
   .commission-rep-tally .rep-tally-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   .commission-rep-tally .rep-tally-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
@@ -1697,13 +1700,17 @@
   <div class="card commission-total-card">
     <div class="commission-total-main">
       <div id="commissionLifetimeTotal" class="commission-total-number">$0</div>
+      <div class="commission-total-sub-row">
+        <div id="commissionLifetimeSub" class="commission-total-sub">Gross sales: $0</div>
+        <button type="button" id="commissionSwapBtn" class="ghost small" title="Swap which figure is shown bigger">⇅ Swap</button>
+      </div>
       <div id="commissionRepTally" class="commission-rep-tally"></div>
     </div>
     <div class="commission-donut-wrap" id="commissionDonutWrap" style="display:none">
       <div class="commission-donut" id="commissionDonut"></div>
       <div class="commission-donut-legend" id="commissionDonutLegend"></div>
     </div>
-    <div class="commission-total-label">Lifetime Commission</div>
+    <div id="commissionTotalLabel" class="commission-total-label">Lifetime Commission</div>
   </div>
 
   <div class="card" style="margin-bottom:18px">
@@ -6399,6 +6406,9 @@ waterfallNewItem.addEventListener('keydown', (e) => {
 
 /* ===================== Commission Tracker ===================== */
 const commissionLifetimeTotal = document.getElementById('commissionLifetimeTotal');
+const commissionLifetimeSub = document.getElementById('commissionLifetimeSub');
+const commissionSwapBtn = document.getElementById('commissionSwapBtn');
+const commissionTotalLabel = document.getElementById('commissionTotalLabel');
 const commissionRepTally = document.getElementById('commissionRepTally');
 const commissionDonutWrap = document.getElementById('commissionDonutWrap');
 const commissionDonut = document.getElementById('commissionDonut');
@@ -6431,6 +6441,11 @@ const commissionSortSelect = document.getElementById('commissionSort');
 let commissionOffset = 0;
 let commissionSort = 'date_desc';
 const COMMISSION_PAGE_SIZE = 20;
+// Which lifetime figure renders as the BIG number -- 'commission' (the
+// default, per Mario's explicit ask) or 'sale'. Swapping just re-renders
+// from the already-fetched totals below; it never re-fetches.
+let commissionPrimaryMetric = 'commission';
+let commissionTotals = { commission: 0, sale: 0 };
 
 const REP_LABELS = { seller: 'Seller', buyer: 'Buyer', landlord: 'Landlord', tenant: 'Tenant' };
 const REP_COLORS = { seller: '#d4af37', buyer: '#4fd1e3', landlord: '#8a5cff', tenant: '#6bd694' };
@@ -6593,6 +6608,25 @@ function renderRepTallyAndDonut(byRep) {
   }).join('');
 }
 
+// Renders the big/small total pair from the last-fetched commissionTotals,
+// swapping which figure is big based on commissionPrimaryMetric -- pure
+// re-render, no fetch, so the swap button responds instantly.
+function renderCommissionTotals() {
+  const showingSale = commissionPrimaryMetric === 'sale';
+  const bigValue = showingSale ? commissionTotals.sale : commissionTotals.commission;
+  const subValue = showingSale ? commissionTotals.commission : commissionTotals.sale;
+  commissionLifetimeTotal.textContent = formatMoney(bigValue);
+  commissionLifetimeSub.textContent = showingSale
+    ? `Lifetime commission: ${formatMoney(subValue)}`
+    : `Gross sales: ${formatMoney(subValue)}`;
+  commissionTotalLabel.textContent = showingSale ? 'Gross Sales' : 'Lifetime Commission';
+}
+
+commissionSwapBtn.addEventListener('click', () => {
+  commissionPrimaryMetric = commissionPrimaryMetric === 'sale' ? 'commission' : 'sale';
+  renderCommissionTotals();
+});
+
 async function refreshCommissionList(reset) {
   if (reset) {
     commissionOffset = 0;
@@ -6601,7 +6635,8 @@ async function refreshCommissionList(reset) {
   const res = await fetch(`/api/crm/commission_entries?sort=${commissionSort}&limit=${COMMISSION_PAGE_SIZE}&offset=${commissionOffset}`);
   if (!res.ok) return;
   const data = await res.json();
-  commissionLifetimeTotal.textContent = formatMoney(data.lifetime_total);
+  commissionTotals = { commission: data.lifetime_total, sale: data.lifetime_sale_total };
+  renderCommissionTotals();
   renderRepTallyAndDonut(data.by_representation);
   if (reset && !data.entries.length) {
     commissionList.innerHTML = '<div class="sub">No commissions logged yet.</div>';
