@@ -902,7 +902,9 @@
     flex-wrap: wrap;
   }
   .commission-row:last-child { border-bottom: none; }
-  .commission-row .commission-amount { font-weight: 700; color: var(--gold); font-size: 1.05rem; white-space: nowrap; }
+  .commission-row .commission-amount-block { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .commission-row .commission-amount { font-weight: 700; color: var(--gold); font-size: 1.15rem; white-space: nowrap; }
+  .commission-row .commission-sale-sub { font-size: .72rem; color: var(--text-secondary); white-space: nowrap; }
   .commission-row .commission-main { flex: 1; min-width: 200px; }
   .commission-row .commission-meta { font-size: .8rem; color: var(--text-secondary); }
   .commission-row .commission-file-link { font-size: .82rem; }
@@ -1727,7 +1729,11 @@
         <input type="text" id="commissionNewTitle" placeholder="e.g. 123 Main St sale">
       </div>
       <div class="form-group" style="margin-bottom:0">
-        <label for="commissionNewAmount">Closing Sale Amount ($) *</label>
+        <label for="commissionNewSalePrice" id="commissionNewSalePriceLabel">Closing Sale Amount ($) *</label>
+        <input type="number" id="commissionNewSalePrice" min="0" step="0.01" style="width:150px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionNewAmount">Commission ($) *</label>
         <input type="number" id="commissionNewAmount" min="0" step="0.01" style="width:150px">
       </div>
       <div class="form-group" style="margin-bottom:0">
@@ -2145,7 +2151,11 @@
     </div>
     <div class="row" style="flex-wrap:wrap; gap:10px">
       <div class="form-group" style="margin-bottom:0">
-        <label for="commissionEditAmount">Closing Sale Amount ($) *</label>
+        <label for="commissionEditSalePrice" id="commissionEditSalePriceLabel">Closing Sale Amount ($) *</label>
+        <input type="number" id="commissionEditSalePrice" min="0" step="0.01" style="width:150px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="commissionEditAmount">Commission ($) *</label>
         <input type="number" id="commissionEditAmount" min="0" step="0.01" style="width:150px">
       </div>
       <div class="form-group" style="margin-bottom:0">
@@ -6397,6 +6407,8 @@ const commissionCurrentBrokerage = document.getElementById('commissionCurrentBro
 const commissionDefaultSplit = document.getElementById('commissionDefaultSplit');
 const commissionSaveSplitBtn = document.getElementById('commissionSaveSplitBtn');
 const commissionNewTitle = document.getElementById('commissionNewTitle');
+const commissionNewSalePrice = document.getElementById('commissionNewSalePrice');
+const commissionNewSalePriceLabel = document.getElementById('commissionNewSalePriceLabel');
 const commissionNewAmount = document.getElementById('commissionNewAmount');
 const commissionNewBrokerage = document.getElementById('commissionNewBrokerage');
 const commissionNewSplit = document.getElementById('commissionNewSplit');
@@ -6443,8 +6455,11 @@ const COMMISSION_REP_FIELD_CONFIG = {
 // Keeps a Deal Type + Represented pair together (a sale can't have a
 // "tenant", a rental can't have a "seller") and relabels/hides the
 // optional deal-detail fields to match whichever side Mario represented --
-// shared by both the Add form and the Edit modal.
-function applyCommissionRepFields(dealTypeSelect, representedSelect, otherLabelEl, agentLabelEl, coListingRowEl) {
+// shared by both the Add form and the Edit modal. Also relabels the
+// mandatory "closing amount" field between Sale/Rent phrasing, since a
+// rental's closing figure is a monthly rent, not a sale price.
+const COMMISSION_SALE_PRICE_LABELS = { sale: 'Closing Sale Amount ($) *', rental: 'Closing Rent Amount ($) *' };
+function applyCommissionRepFields(dealTypeSelect, representedSelect, otherLabelEl, agentLabelEl, coListingRowEl, salePriceLabelEl) {
   const allowed = COMMISSION_DEAL_TYPE_REPS[dealTypeSelect.value] || COMMISSION_DEAL_TYPE_REPS.sale;
   if (!allowed.includes(representedSelect.value)) {
     representedSelect.value = COMMISSION_REP_CROSS_MAP[representedSelect.value] || allowed[0];
@@ -6454,6 +6469,9 @@ function applyCommissionRepFields(dealTypeSelect, representedSelect, otherLabelE
   otherLabelEl.textContent = `${cfg.other} (optional)`;
   agentLabelEl.textContent = `${cfg.agent} (optional)`;
   coListingRowEl.style.display = cfg.showCoListing ? '' : 'none';
+  if (salePriceLabelEl) {
+    salePriceLabelEl.textContent = COMMISSION_SALE_PRICE_LABELS[dealTypeSelect.value] || COMMISSION_SALE_PRICE_LABELS.sale;
+  }
 }
 
 // Edit modal elements.
@@ -6463,6 +6481,8 @@ const commissionEditCancelBtn = document.getElementById('commissionEditCancelBtn
 const commissionEditSaveBtn = document.getElementById('commissionEditSaveBtn');
 const commissionEditError = document.getElementById('commissionEditError');
 const commissionEditTitle = document.getElementById('commissionEditTitle');
+const commissionEditSalePrice = document.getElementById('commissionEditSalePrice');
+const commissionEditSalePriceLabel = document.getElementById('commissionEditSalePriceLabel');
 const commissionEditAmount = document.getElementById('commissionEditAmount');
 const commissionEditDate = document.getElementById('commissionEditDate');
 const commissionEditBrokerage = document.getElementById('commissionEditBrokerage');
@@ -6487,19 +6507,19 @@ async function initCommissionTab() {
   commissionCurrentBrokerage.value = settings.current_brokerage;
   window.commissionDefaultSplitPct = settings.default_split_pct;
   commissionNewDate.value = todayIsoDate();
-  applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow);
+  applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow, commissionNewSalePriceLabel);
   commissionOffset = 0;
   await refreshCommissionList(true);
 }
 
 function updateCommissionNewRepFields() {
-  applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow);
+  applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow, commissionNewSalePriceLabel);
 }
 commissionNewDealType.addEventListener('change', updateCommissionNewRepFields);
 commissionNewRepresented.addEventListener('change', updateCommissionNewRepFields);
 
 function updateCommissionEditRepFields() {
-  applyCommissionRepFields(commissionEditDealType, commissionEditRepresented, commissionEditSellersLabel, commissionEditBuyersAgentLabel, commissionEditCoListingRow);
+  applyCommissionRepFields(commissionEditDealType, commissionEditRepresented, commissionEditSellersLabel, commissionEditBuyersAgentLabel, commissionEditCoListingRow, commissionEditSalePriceLabel);
 }
 commissionEditDealType.addEventListener('change', updateCommissionEditRepFields);
 commissionEditRepresented.addEventListener('change', updateCommissionEditRepFields);
@@ -6618,7 +6638,10 @@ function buildCommissionRow(entry) {
       ${entry.description ? `<div class="commission-meta">${escapeHtml(entry.description)}</div>` : ''}
       ${entry.file_filename ? `<a class="commission-file-link" href="/api/crm/commission_entries/${entry.id}/file" target="_blank">📎 ${escapeHtml(entry.file_original_name || 'file')}</a>` : ''}
     </div>
-    <div class="commission-amount">${formatMoney(entry.amount)}</div>
+    <div class="commission-amount-block">
+      <div class="commission-amount">${formatMoney(entry.amount)}</div>
+      ${entry.sale_price != null ? `<div class="commission-sale-sub">${entry.deal_type === 'rental' ? 'Rented for' : 'Sold for'} ${formatMoney(entry.sale_price)}</div>` : ''}
+    </div>
     <div class="commission-actions">
       <button class="ghost small" data-edit-commission="${entry.id}">✏️</button>
       <button class="ghost small" data-remove-commission="${entry.id}">🗑</button>
@@ -6647,8 +6670,13 @@ commissionAddBtn.addEventListener('click', async () => {
     commissionAddError.style.display = 'block';
     return;
   }
+  if (!commissionNewSalePrice.value) {
+    commissionAddError.textContent = `${commissionNewSalePriceLabel.textContent.replace(' *', '')} is required.`;
+    commissionAddError.style.display = 'block';
+    return;
+  }
   if (!commissionNewAmount.value) {
-    commissionAddError.textContent = 'Closing sale amount is required.';
+    commissionAddError.textContent = 'Commission amount is required.';
     commissionAddError.style.display = 'block';
     return;
   }
@@ -6662,6 +6690,7 @@ commissionAddBtn.addEventListener('click', async () => {
   try {
     const formData = new FormData();
     formData.append('title', title);
+    formData.append('sale_price', commissionNewSalePrice.value || '0');
     formData.append('amount', commissionNewAmount.value || '0');
     formData.append('split_pct', commissionNewSplit.value || '');
     formData.append('brokerage', commissionNewBrokerage.value.trim());
@@ -6681,6 +6710,7 @@ commissionAddBtn.addEventListener('click', async () => {
       return;
     }
     commissionNewTitle.value = '';
+    commissionNewSalePrice.value = '';
     commissionNewAmount.value = '';
     commissionNewBrokerage.value = '';
     commissionNewSplit.value = '';
@@ -6710,6 +6740,7 @@ async function openCommissionEdit(entryId) {
   const entry = await res.json();
   commissionEditingId = entry.id;
   commissionEditTitle.value = entry.title || '';
+  commissionEditSalePrice.value = entry.sale_price != null ? entry.sale_price : '';
   commissionEditAmount.value = entry.amount != null ? entry.amount : '';
   commissionEditDate.value = entry.closed_date || '';
   commissionEditBrokerage.value = entry.brokerage || '';
@@ -6746,8 +6777,13 @@ commissionEditCancelBtn.addEventListener('click', closeCommissionEdit);
 commissionEditSaveBtn.addEventListener('click', async () => {
   if (!commissionEditingId) return;
   commissionEditError.style.display = 'none';
+  if (!commissionEditSalePrice.value) {
+    commissionEditError.textContent = `${commissionEditSalePriceLabel.textContent.replace(' *', '')} is required.`;
+    commissionEditError.style.display = 'block';
+    return;
+  }
   if (!commissionEditAmount.value) {
-    commissionEditError.textContent = 'Closing sale amount is required.';
+    commissionEditError.textContent = 'Commission amount is required.';
     commissionEditError.style.display = 'block';
     return;
   }
@@ -6763,6 +6799,7 @@ commissionEditSaveBtn.addEventListener('click', async () => {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         title: commissionEditTitle.value.trim(),
+        sale_price: commissionEditSalePrice.value,
         amount: commissionEditAmount.value,
         closed_date: commissionEditDate.value,
         brokerage: commissionEditBrokerage.value.trim(),

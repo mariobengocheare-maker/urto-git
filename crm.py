@@ -1480,6 +1480,14 @@ def init_db():
         conn.execute("ALTER TABLE commission_entries ADD COLUMN deal_type TEXT NOT NULL DEFAULT 'sale'")
     if "represented_as" not in commission_cols:
         conn.execute("ALTER TABLE commission_entries ADD COLUMN represented_as TEXT NOT NULL DEFAULT 'seller'")
+    if "sale_price" not in commission_cols:
+        # `amount` has always meant the take-home COMMISSION dollar figure
+        # (see update_transaction()'s auto-create math: amount = sale_price
+        # * rate% * split%) -- this column is the genuinely separate
+        # closing sale/rent price Mario also wants tracked and shown
+        # alongside it. Nullable: existing entries predate this field and
+        # must render without a broken "Sold for" sub-line, not a fake $0.
+        conn.execute("ALTER TABLE commission_entries ADD COLUMN sale_price REAL")
     conn.commit()
     _seed_document_types(conn)
     conn.close()
@@ -3041,7 +3049,7 @@ def update_transaction(transaction_id: int, title: str, status: str,
             create_commission_entry(
                 title=title, description=description, amount=amount, split_pct=split_pct,
                 closed_date=_today().isoformat(), transaction_id=transaction_id,
-                represented_as=final_represented_as,
+                represented_as=final_represented_as, sale_price=final_sale_price,
             )
     return get_transaction(transaction_id)
 
@@ -3619,7 +3627,8 @@ _REPRESENTED_AS_VALUES = ("seller", "buyer", "landlord", "tenant")
 def create_commission_entry(title: str, description: str = "", amount: float = 0.0, split_pct: float = None,
                              closed_date: str = None, transaction_id: int = None, brokerage: str = None,
                              seller_names: str = None, buyers_agent: str = None, co_listing_agent: str = None,
-                             deal_type: str = "sale", represented_as: str = "seller", file_storage=None) -> dict:
+                             deal_type: str = "sale", represented_as: str = "seller", file_storage=None,
+                             sale_price: float = None) -> dict:
     settings = get_commission_settings()
     if split_pct is None:
         split_pct = settings["default_split_pct"]
@@ -3637,10 +3646,10 @@ def create_commission_entry(title: str, description: str = "", amount: float = 0
     cur = conn.execute(
         "INSERT INTO commission_entries (transaction_id, title, description, amount, split_pct, brokerage, "
         "closed_date, seller_names, buyers_agent, co_listing_agent, deal_type, represented_as, file_filename, "
-        "file_original_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "file_original_name, created_at, sale_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (transaction_id, title, description or "", amount, split_pct, brokerage, closed_date,
          seller_names or None, buyers_agent or None, co_listing_agent or None, deal_type, represented_as,
-         file_filename, file_original_name, _now().isoformat()),
+         file_filename, file_original_name, _now().isoformat(), sale_price),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -3655,14 +3664,17 @@ def create_commission_entry(title: str, description: str = "", amount: float = 0
 def update_commission_entry(entry_id: int, title: str = None, description: str = None, amount: float = None,
                              split_pct: float = None, closed_date: str = None, brokerage: str = None,
                              seller_names: str = None, buyers_agent: str = None, co_listing_agent: str = None,
-                             deal_type: str = None, represented_as: str = None):
+                             deal_type: str = None, represented_as: str = None, sale_price: float = None):
     """Every param defaults to None meaning "leave unchanged" -- EXCEPT the
     three optional deal-detail fields (seller_names/buyers_agent/
     co_listing_agent), where an explicit empty string IS a real value
     (Mario clearing a field he'd previously filled in) and must be told
     apart from None ("this field wasn't part of the request at all"). The
     route layer always sends the current form value (blank or not) for
-    these three on every edit save, so this distinction works correctly."""
+    these three on every edit save, so this distinction works correctly.
+    sale_price is a plain "None means unchanged" optional number, like
+    amount/closed_date -- it's mandatory on the Add/Edit forms themselves,
+    so the route layer never has a legitimate reason to omit it."""
     conn = get_conn()
     existing = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (entry_id,)).fetchone()
     if not existing:
@@ -3675,7 +3687,7 @@ def update_commission_entry(entry_id: int, title: str = None, description: str =
     conn.execute(
         "UPDATE commission_entries SET title = ?, description = ?, amount = ?, split_pct = ?, closed_date = ?, "
         "brokerage = ?, seller_names = ?, buyers_agent = ?, co_listing_agent = ?, deal_type = ?, "
-        "represented_as = ? WHERE id = ?",
+        "represented_as = ?, sale_price = ? WHERE id = ?",
         (
             title if title is not None else existing["title"],
             description if description is not None else existing["description"],
@@ -3688,6 +3700,7 @@ def update_commission_entry(entry_id: int, title: str = None, description: str =
             co_listing_agent if co_listing_agent is not None else existing["co_listing_agent"],
             deal_type if deal_type is not None else existing["deal_type"],
             represented_as if represented_as is not None else existing["represented_as"],
+            sale_price if sale_price is not None else existing["sale_price"],
             entry_id,
         ),
     )

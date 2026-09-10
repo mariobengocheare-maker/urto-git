@@ -819,14 +819,22 @@ def commission_create():
     title = (request.form.get("title") or "").strip()
     if not title:
         return jsonify({"error": "Title is required"}), 400
-    # Closing sale amount and closing date are mandatory (Mario: "this is
-    # how it knows oldest or earliest") -- unlike the auto-added-on-close
-    # path (which deliberately allows $0 for a transaction closed with no
-    # price set), a MANUAL entry has no such excuse not to have real
-    # numbers, so both are required here rather than silently defaulting.
+    # Closing sale/rent amount, commission amount, and closing date are all
+    # mandatory (Mario: "this is how it knows oldest or earliest," plus his
+    # explicit ask for both the sale price AND the commission split to be
+    # tracked separately) -- unlike the auto-added-on-close path (which
+    # deliberately allows $0 for a transaction closed with no price set), a
+    # MANUAL entry has no such excuse not to have real numbers.
+    sale_price_raw = (request.form.get("sale_price") or "").strip()
+    if not sale_price_raw:
+        return jsonify({"error": "Closing sale amount is required"}), 400
+    try:
+        sale_price = float(sale_price_raw)
+    except ValueError:
+        return jsonify({"error": "Invalid closing sale amount"}), 400
     amount_raw = (request.form.get("amount") or "").strip()
     if not amount_raw:
-        return jsonify({"error": "Closing sale amount is required"}), 400
+        return jsonify({"error": "Commission amount is required"}), 400
     try:
         amount = float(amount_raw)
     except ValueError:
@@ -839,6 +847,7 @@ def commission_create():
         title=title,
         description=(request.form.get("description") or "").strip(),
         amount=amount,
+        sale_price=sale_price,
         split_pct=float(split_pct) if split_pct not in (None, "") else None,
         closed_date=closed_date,
         brokerage=(request.form.get("brokerage") or "").strip() or None,
@@ -865,6 +874,7 @@ def commission_update(entry_id):
         title=(data.get("title") or "").strip() or None,
         description=data.get("description"),
         amount=float(data["amount"]) if data.get("amount") not in (None, "") else None,
+        sale_price=float(data["sale_price"]) if data.get("sale_price") not in (None, "") else None,
         split_pct=float(data["split_pct"]) if data.get("split_pct") not in (None, "") else None,
         closed_date=(data.get("closed_date") or "").strip() or None,
         brokerage=(data.get("brokerage") or "").strip() or None,
