@@ -3606,7 +3606,15 @@ async function openClientDetail(id) {
   currentClientId = id;
   resetCdDictation();
   const res = await fetch(`/api/crm/clients/${id}`);
-  if (!res.ok) return;
+  if (!res.ok) {
+    // A stale link to an already-deleted client (e.g. the Missed Follow-ups
+    // "no phone" banner still showing a name Mario just deleted) used to
+    // fail this fetch and silently do nothing -- a click with no visible
+    // result at all. Say so, and clean up whatever stale list pointed here.
+    alert("This client no longer exists — it may have already been deleted.");
+    if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
+    return;
+  }
   const c = await res.json();
 
   document.getElementById('cdName').textContent = c.name;
@@ -3913,6 +3921,12 @@ document.getElementById('cdDeleteBtn').addEventListener('click', async () => {
   clMembersReturnListId = null;
   clientDetailOverlay.classList.remove('show');
   loadClients();
+  // Deleting a client reached via the Missed Follow-ups "no phone" banner
+  // (see build order #112, which only refreshed that banner on a client
+  // SAVE, not a delete) must also drop them from the banner immediately --
+  // otherwise the blob still shows a name that's gone, and clicking it next
+  // was a dead click with no explanation (see build order #113).
+  if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
 });
 
 /* ===================== Contact Lists ===================== */
