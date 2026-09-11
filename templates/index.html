@@ -6968,8 +6968,9 @@ function buildCommissionRow(entry) {
     REP_LABELS[entry.represented_as] || 'Seller',
   ].filter(Boolean);
   const detailLines = [];
-  if (entry.seller_names) detailLines.push(`Seller(s): ${escapeHtml(entry.seller_names)}`);
-  if (entry.buyers_agent) detailLines.push(`Buyer's agent: ${escapeHtml(entry.buyers_agent)}`);
+  const repCfg = COMMISSION_REP_FIELD_CONFIG[entry.represented_as] || COMMISSION_REP_FIELD_CONFIG.seller;
+  if (entry.seller_names) detailLines.push(`${repCfg.other}: ${escapeHtml(entry.seller_names)}`);
+  if (entry.buyers_agent) detailLines.push(`${repCfg.agent}: ${escapeHtml(entry.buyers_agent)}`);
   if (entry.co_listing_agent) detailLines.push(`Co-listing agent: ${escapeHtml(entry.co_listing_agent)}`);
   row.innerHTML = `
     <div class="commission-main">
