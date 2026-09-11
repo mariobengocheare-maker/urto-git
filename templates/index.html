@@ -5291,6 +5291,30 @@ function splitCsvLine(line) {
   return fields.map(f => f.trim());
 }
 
+// Full-document RFC4180 parser (unlike splitCsvLine above, which only ever
+// sees one already-split line) — needed because a real CRM/lead export's
+// quoted Notes/Description field can contain LITERAL embedded newlines, and
+// splitting the whole paste on '\n' before parsing (the old approach) chops
+// one logical row into several garbled fragments. Walks the raw text once,
+// only treating an unquoted '\n' as a row break.
+function parseCsvRows(text) {
+  const s = (text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const rows = [];
+  let row = [], cur = '', inQuotes = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQuotes) {
+      if (c === '"') { if (s[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false; }
+      else cur += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { row.push(cur); cur = ''; }
+    else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+    else cur += c;
+  }
+  if (cur !== '' || row.length > 0) { row.push(cur); rows.push(row); }
+  return rows.map(r => r.map(f => f.trim()));
+}
+
 // Same column order as OUTPUT_FIELDS in input_parser.py — keep in sync if
 // that ever changes. Lets a bare paste/upload of URTO's own results CSV
 // (with or without its header row) parse into clean name/phone/address
@@ -5304,12 +5328,23 @@ const CSV_HEADER_ALIASES = {
 };
 
 function matchCsvHeader(fields) {
-  const norm = fields.map(f => f.toLowerCase());
+  const norm = fields.map(f => f.toLowerCase().trim());
   const colIndex = {};
   for (const [canon, aliases] of Object.entries(CSV_HEADER_ALIASES)) {
     for (const alias of aliases) {
       const idx = norm.indexOf(alias);
       if (idx !== -1) { colIndex[canon] = idx; break; }
+    }
+  }
+  // A real CRM/lead export commonly has SEVERAL numbered phone columns
+  // ("Phone 1", "Phone 2", ... "Phone 6") instead of one plain "Phone"
+  // column, which none of the exact aliases above match. Pick the FIRST
+  // (leftmost) one — Mario only ever wants the first phone number on file
+  // dialed, never a later one picked at random by whatever column order a
+  // given export happens to use.
+  if (colIndex.phone === undefined) {
+    for (let i = 0; i < norm.length; i++) {
+      if (/^phone\s*\d*$/.test(norm[i])) { colIndex.phone = i; break; }
     }
   }
   // Require at least a name-ish and phone-ish column — otherwise this is
@@ -5327,25 +5362,36 @@ function entryFromFreeformLine(line) {
 }
 
 function parseDialerText(text) {
-  const lines = (text || '').split('\n').map(l => l.trim()).filter(Boolean);
-  if (lines.length === 0) return [];
+  const raw = text || '';
+  if (!raw.trim()) return [];
 
-  // A recognizable header row (e.g. pasting a results CSV WITH its header)
-  // means every remaining line is that same shape — map by column position.
-  const header = matchCsvHeader(splitCsvLine(lines[0]));
-  if (header) {
-    const entries = [];
-    for (const line of lines.slice(1)) {
-      const f = splitCsvLine(line);
-      const phone = (f[header.phone] || '').trim();
-      if (!phone) continue;  // nothing to call — same rule as "From Last Lookup Results"
-      const address = header.address !== undefined ? (f[header.address] || '') : '';
-      entries.push({ name: f[header.name] || 'Unknown', phone, address, meta: address });
+  // Try the whole paste/upload as one real multi-line CSV document FIRST —
+  // required for a real CRM/lead export whose quoted Notes/Description
+  // field can contain literal embedded newlines; the old line-by-line
+  // approach below chopped a single logical row into many garbled
+  // fragments the instant one of those fields wrapped, which is exactly
+  // why a real lead export rendered as one giant text blob per "line"
+  // instead of a clean name/phone list.
+  const csvRows = parseCsvRows(raw);
+  if (csvRows.length > 1) {
+    const header = matchCsvHeader(csvRows[0]);
+    if (header) {
+      const entries = [];
+      for (const f of csvRows.slice(1)) {
+        if (f.every(v => v === '')) continue;  // a stray blank row (trailing newline, etc.)
+        const phone = (f[header.phone] || '').trim();
+        if (!phone) continue;  // nothing to call — same rule as "From Last Lookup Results"
+        const address = header.address !== undefined ? (f[header.address] || '') : '';
+        entries.push({ name: f[header.name] || 'Unknown', phone, address, meta: address });
+      }
+      return entries;
     }
-    return entries;
   }
 
-  // No header: handle each line on its own so a mixed paste (some plain
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return [];
+
+  // No recognized-header CSV: handle each line on its own so a mixed paste (some plain
   // "Name, Phone" lines, some full result-CSV rows) still works. A line
   // that splits into exactly the app's own 9-column results shape is
   // parsed by fixed position; anything else falls back to the original
