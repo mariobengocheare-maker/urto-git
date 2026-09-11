@@ -95,7 +95,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.13.12"
+APP_VERSION = "2.13.13"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -241,6 +241,28 @@ def heartbeat():
     return jsonify({"ok": True})
 
 
+# A plain same-tab reload (F5) fires the OLD document's pagehide/shutdown
+# beacon an instant before the RELOADED page has had any chance to parse
+# this whole file's one giant inline <script> and fire its own first
+# heartbeat — if that reload was the only open tab, the old fixed 0.2s exit
+# delay could easily win the race and kill the server before the new page
+# ever registered, so the reload lands on a dead process (Mario: "was able
+# to refresh once but now it does this"). SHUTDOWN_GRACE_SECONDS gives a
+# reloading page real time to land its immediate on-load heartbeat (see
+# STARTUP_GRACE_SECONDS/build order #49's same fix for the fresh-process
+# case) before the shutdown actually commits — `_delayed_shutdown_check()`
+# re-verifies `_active_tabs` is STILL empty when the timer fires, not just
+# when `/api/shutdown` was first called.
+SHUTDOWN_GRACE_SECONDS = 5
+
+
+def _delayed_shutdown_check():
+    with _active_tabs_lock:
+        any_tabs_left = bool(_active_tabs)
+    if not any_tabs_left and _safe_to_exit():
+        os._exit(0)
+
+
 @app.route("/api/shutdown", methods=["POST"])
 def shutdown():
     with _active_tabs_lock:
@@ -252,7 +274,7 @@ def shutdown():
     # could see zero active tabs and shut down the server on the new one.
     within_startup_grace = (time.time() - _server_started_at) < STARTUP_GRACE_SECONDS
     if not any_tabs_left and not within_startup_grace and _safe_to_exit():
-        threading.Timer(0.2, lambda: os._exit(0)).start()
+        threading.Timer(SHUTDOWN_GRACE_SECONDS, _delayed_shutdown_check).start()
     return jsonify({"ok": True})
 
 
