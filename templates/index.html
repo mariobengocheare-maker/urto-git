@@ -3579,6 +3579,15 @@ clientForm.addEventListener('submit', async (e) => {
   clientFormOverlay.classList.remove('show');
   loadClients();
 
+  // Editing a client from the Missed Follow-ups "no phone" banner link (see
+  // openClientDetail -> Edit) commonly means Mario just typed in the phone
+  // number that was missing -- refresh that source silently so the banner
+  // shrinks by one and the client shows up in the real dialable list
+  // immediately, with no need to re-click "Missed Follow-ups" to see it.
+  if (id && dialerActiveSource === dialerSourceMissedBtn) {
+    loadMissedFollowupsSource({ silent: true });
+  }
+
   if (id) {
     openClientDetail(id);
   } else if (clientFormOrigin === 'dialer') {
@@ -3853,6 +3862,32 @@ document.getElementById('cdCompleteFollowupBtn').addEventListener('click', async
   loadClients();
 });
 
+// Editing a client must never silently reset their follow-up cadence --
+// crm.py only ever stores the resolved (frequency_label, interval_days) on
+// a client row, not the original preset key Mario picked when setting the
+// schedule up, so the Edit form has to reverse-map interval_days back onto
+// cfFrequency itself before it's shown; a fixed-day custom entry falls back
+// to an exact-equivalent "N Days" custom value (round-trips exactly through
+// resolve_interval_days, unlike guessing weeks/months and rounding). Without
+// this, resetClientForm() left cfFrequency defaulted to "4_weeks", and a
+// plain re-save (even just adding a missing phone number) would silently
+// overwrite an existing schedule with a fresh one anchored on today --
+// which is exactly how a genuinely overdue client vanished from Missed
+// Follow-ups entirely instead of correctly staying overdue but now phoned.
+const FREQUENCY_DAYS_TO_KEY = { 14: '2_weeks', 21: '3_weeks', 28: '4_weeks', 60: '2_months', 180: '6_months' };
+function applyClientFrequencyToForm(c) {
+  if (!c.interval_days) {
+    cfFrequency.value = 'none';
+  } else if (FREQUENCY_DAYS_TO_KEY[c.interval_days]) {
+    cfFrequency.value = FREQUENCY_DAYS_TO_KEY[c.interval_days];
+  } else {
+    cfFrequency.value = 'custom';
+    cfCustomAmount.value = c.interval_days;
+    cfCustomUnit.value = 'days';
+  }
+  cfCustomRow.style.display = cfFrequency.value === 'custom' ? 'flex' : 'none';
+}
+
 document.getElementById('cdEditBtn').addEventListener('click', async () => {
   const res = await fetch(`/api/crm/clients/${currentClientId}`);
   const c = await res.json();
@@ -3864,6 +3899,7 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
   cfEmail.value = c.email || '';
   cfContact.value = c.contact_info || '';
   cfAddress.value = c.address || '';
+  applyClientFrequencyToForm(c);
   cfNotesRow.style.display = 'none'; // editing: notes are managed in the detail view
   renderCfListsBox(c.list_ids || []);
   clMembersReturnListId = null;
@@ -4840,7 +4876,9 @@ let dialerContactLists = [];
 let dialerCurrentListId = null;
 
 const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn, dialerSourceTodayBtn, dialerSourceMissedBtn, dialerSourceListBtn];
+let dialerActiveSource = null;
 function setDialerSourceActive(btn) {
+  dialerActiveSource = btn;
   for (const b of DIALER_SOURCE_BTNS) b.classList.toggle('active', b === btn);
   dialerPasteBox.style.display = btn === dialerSourcePasteBtn ? 'block' : 'none';
   dialerListBox.style.display = btn === dialerSourceListBtn ? 'block' : 'none';
@@ -4908,8 +4946,14 @@ function formatMissedDate(iso) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-dialerSourceMissedBtn.addEventListener('click', async () => {
-  setDialerSourceActive(dialerSourceMissedBtn);
+// Shared by the "Missed Follow-ups" button AND by a silent re-fetch right
+// after Mario adds a phone number to a client from the no-phone banner below
+// (see clientForm's submit handler) -- editing a client no longer requires
+// re-clicking the source button to see them drop out of the banner and
+// appear in the real dialable list; `silent` skips the "you're all caught
+// up" alert so an unrelated client save elsewhere never pops it unexpectedly.
+async function loadMissedFollowupsSource(opts = {}) {
+  const silent = !!opts.silent;
   const res = await fetch('/api/crm/followups/missed');
   const items = res.ok ? await res.json() : [];
   const withPhones = items.filter(i => i.phone && i.phone.trim());
@@ -4927,16 +4971,25 @@ dialerSourceMissedBtn.addEventListener('click', async () => {
     dialerNoPhoneNote.querySelectorAll('.dialer-no-phone-link').forEach(a => {
       a.addEventListener('click', (e) => { e.preventDefault(); openClientDetail(Number(a.getAttribute('data-id'))); });
     });
+  } else {
+    dialerNoPhoneNote.style.display = 'none';
+    dialerNoPhoneNote.innerHTML = '';
   }
 
   if (withPhones.length === 0) {
-    if (noPhone.length === 0) alert('No missed follow-ups — nice, you\'re caught up.');
+    if (!silent && noPhone.length === 0) alert('No missed follow-ups — nice, you\'re caught up.');
+    if (silent) loadDialerList([]);
     return;
   }
   loadDialerList(withPhones.map(i => ({
     name: i.client_name, phone: i.phone, clientId: i.client_id,
     meta: [i.address, `MISSED — was due ${formatMissedDate(i.missed_date)}`].filter(Boolean).join(' · '),
   })));
+}
+
+dialerSourceMissedBtn.addEventListener('click', async () => {
+  setDialerSourceActive(dialerSourceMissedBtn);
+  await loadMissedFollowupsSource();
 });
 
 dialerSourceListBtn.addEventListener('click', async () => {
