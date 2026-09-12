@@ -1392,6 +1392,7 @@
       <div id="recurringImportResult" style="display:none; margin-top:10px"></div>
     </div>
 
+    <input type="text" id="clientSearchInput" placeholder="🔍 Search clients by name, phone, or address…" style="width:100%; margin-bottom:12px">
     <div id="clientList" class="client-list"></div>
   </div>
 
@@ -3190,12 +3191,35 @@ function followupLabel(client) {
   return 'No automatic follow-up';
 }
 
-async function loadClients() {
-  const res = await fetch('/api/crm/clients');
-  const clients = await res.json();
+// Mario's real CRM can have hundreds of clients, and scrolling to find one
+// got old fast -- the whole list is fetched once per loadClients() call
+// (already cheap, same as before) and kept in `allClients` so the search
+// box can filter it instantly on every keystroke with zero extra network
+// round-trips, the same "fetch once, filter client-side" pattern already
+// used by the Contact List "Manage Members" picker's own search box.
+let allClients = [];
+const clientSearchInput = document.getElementById('clientSearchInput');
+
+function filterClients(query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return allClients;
+  const qDigits = q.replace(/\D/g, '');
+  return allClients.filter(c => {
+    if ((c.name || '').toLowerCase().includes(q)) return true;
+    if ((c.address || '').toLowerCase().includes(q)) return true;
+    // Phone matches digits-only so "305-555" finds "(305) 555-1212" —
+    // same normalization philosophy as normalizePhone()/find_client_by_phone().
+    if (qDigits && (c.phone || '').replace(/\D/g, '').includes(qDigits)) return true;
+    return false;
+  });
+}
+
+function renderClientList(clients) {
   clientList.innerHTML = '';
   if (clients.length === 0) {
-    clientList.innerHTML = '<div class="empty-state">No clients yet. Click "+ Add Client" to get started.</div>';
+    clientList.innerHTML = allClients.length === 0
+      ? '<div class="empty-state">No clients yet. Click "+ Add Client" to get started.</div>'
+      : '<div class="empty-state">No clients match your search.</div>';
     return;
   }
   for (const c of clients) {
@@ -3214,6 +3238,13 @@ async function loadClients() {
     clientList.appendChild(div);
   }
 }
+
+async function loadClients() {
+  const res = await fetch('/api/crm/clients');
+  allClients = await res.json();
+  renderClientList(filterClients(clientSearchInput.value));
+}
+clientSearchInput.addEventListener('input', () => renderClientList(filterClients(clientSearchInput.value)));
 
 async function renderCfListsBox(selectedIds) {
   const selected = new Set(selectedIds || []);
