@@ -3097,6 +3097,40 @@ def get_transaction(transaction_id: int) -> dict:
         TXN_DOC_JOIN_SELECT + " WHERE transaction_documents.transaction_id = ? ORDER BY transaction_documents.sort_order, transaction_documents.id",
         (transaction_id,),
     ).fetchall()
+    # Self-healing backfill (see build order #117/#119): a transaction
+    # created while its type's checklist was still empty has zero rows
+    # here, and build order #117's backfill in `add_document_type()` only
+    # catches documents added AFTER that fix shipped -- a document that
+    # was already sitting in the checklist from before (Mario's real case:
+    # "Purchase Contract" already existed on Buyer Representation, so
+    # nothing ever called `add_document_type()` again to trigger the old
+    # backfill) left an already-empty transaction stuck showing "no
+    # required documents defined" forever, with no future event that would
+    # ever fix it. Snapshotting here, on every read of a still-empty
+    # transaction, closes that gap regardless of when/how the checklist
+    # came to have documents -- exactly the same "nothing to lose or
+    # overwrite" case #117 already established (a transaction with even
+    # one existing document row is still never touched).
+    if not docs:
+        current_types = conn.execute(
+            "SELECT * FROM document_types WHERE transaction_type = ? ORDER BY sort_order, id",
+            (row["transaction_type"],),
+        ).fetchall()
+        if current_types:
+            for i, dt in enumerate(current_types):
+                conn.execute(
+                    "INSERT INTO transaction_documents (transaction_id, document_type_id, name, sort_order, is_offer_contract) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (transaction_id, dt["id"], dt["name"], i, dt["is_offer_contract"]),
+                )
+            conn.commit()
+            docs = conn.execute(
+                TXN_DOC_JOIN_SELECT + " WHERE transaction_documents.transaction_id = ? ORDER BY transaction_documents.sort_order, transaction_documents.id",
+                (transaction_id,),
+            ).fetchall()
+            conn.close()
+            on_data_changed("document checklist backfilled onto existing transaction")
+            return _transaction_to_dict(row, [dict(d) for d in docs])
     conn.close()
     return _transaction_to_dict(row, [dict(d) for d in docs])
 

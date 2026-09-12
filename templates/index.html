@@ -1565,7 +1565,7 @@
 
       <div class="row" style="gap:16px; flex-wrap:wrap; margin:16px 0; align-items:flex-end">
         <div class="form-group" style="margin-bottom:0">
-          <label for="txnSalePrice">Sale price ($)</label>
+          <label for="txnSalePrice" id="txnSalePriceLabel">Sale price ($)</label>
           <input type="number" id="txnSalePrice" min="0" step="0.01" style="width:150px">
         </div>
         <div class="form-group" style="margin-bottom:0">
@@ -5783,8 +5783,15 @@ const txnMoveArchiveBtn = document.getElementById('txnMoveArchiveBtn');
 const txnRestoreBtn = document.getElementById('txnRestoreBtn');
 const txnDeleteBtn = document.getElementById('txnDeleteBtn');
 const txnSalePrice = document.getElementById('txnSalePrice');
+const txnSalePriceLabel = document.getElementById('txnSalePriceLabel');
 const txnCommissionRate = document.getElementById('txnCommissionRate');
 const txnCommissionPreview = document.getElementById('txnCommissionPreview');
+// Rental Listing/Rental are rent deals, not sale deals -- the same
+// sale_price column stores either figure (a transaction only ever has one
+// price field), but the label Mario sees must say "Rent" for those two
+// types, matching the same "other side of the deal" relabeling philosophy
+// already used for Commission Tracker (COMMISSION_REP_FIELD_CONFIG).
+const TXN_RENTAL_TYPES = new Set(['rental_listing', 'rental']);
 
 function updateTxnCommissionPreview() {
   const price = parseFloat(txnSalePrice.value);
@@ -5889,6 +5896,7 @@ async function openTxnDetail(txnId) {
   txnDetailTitle.value = t.title;
   setTxnStatusButtons(t.status);
   txnDetailMeta.textContent = `${txnTypeLabel(t.transaction_type)} · created ${t.created_at.slice(0, 10)}`;
+  txnSalePriceLabel.textContent = TXN_RENTAL_TYPES.has(t.transaction_type) ? 'Rent price ($)' : 'Sale price ($)';
   txnSalePrice.value = t.sale_price != null ? t.sale_price : '';
   txnCommissionRate.value = t.commission_rate != null ? t.commission_rate : '';
   try {
