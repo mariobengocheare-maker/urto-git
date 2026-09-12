@@ -2770,6 +2770,20 @@ TRANSACTION_TYPES = [
 TRANSACTION_TYPE_KEYS = {k for k, _ in TRANSACTION_TYPES}
 TRANSACTION_STATUSES = {"active", "under_contract", "closed"}
 
+# Who Mario represents is fully determined by which of the four fixed
+# transaction types he picks (see build order #117) -- a Listing/Rental
+# Listing is always the LISTING side (seller/landlord), a Buyer
+# Representation/Rental is always the side being placed (buyer/tenant).
+# Kept as its own mapping (not re-derived ad hoc wherever it's needed) so
+# a transaction's `represented_as` and its `transaction_type` can never
+# silently disagree.
+TRANSACTION_TYPE_REPRESENTED_AS = {
+    "listing": "seller",
+    "rental_listing": "landlord",
+    "buyer_representation": "buyer",
+    "rental": "tenant",
+}
+
 
 def _store_upload(file_storage, dest_dir: Path) -> tuple:
     """Saves an uploaded file under a collision-safe generated name, keeping
@@ -2845,8 +2859,34 @@ def add_document_type(transaction_type: str, name: str) -> dict:
         "INSERT INTO document_types (transaction_type, name, sort_order, created_at) VALUES (?, ?, ?, ?)",
         (transaction_type, name, max_order + 1, now),
     )
+    new_doc_type_id = cur.lastrowid
+    # A transaction created while this type's checklist was still totally
+    # empty (only "Listing" is pre-seeded with any default documents --
+    # Buyer Representation/Rental/Rental Listing all start with zero, so
+    # this is guaranteed to happen the first time Mario creates one of
+    # those before customizing its checklist, see build order #117)
+    # snapshotted an empty document list at creation time — the existing
+    # "editing a checklist afterward never changes an already-populated
+    # transaction" guarantee only makes sense once there's something there
+    # to preserve. Backfill this new document onto every transaction of
+    # this type that STILL has zero documents (nothing to lose or
+    # overwrite there); a transaction that already has at least one row is
+    # left completely alone, exactly as before.
+    empty_txn_ids = [
+        r["id"] for r in conn.execute(
+            "SELECT t.id FROM transactions t WHERE t.transaction_type = ? "
+            "AND NOT EXISTS (SELECT 1 FROM transaction_documents WHERE transaction_id = t.id)",
+            (transaction_type,),
+        ).fetchall()
+    ]
+    for txn_id in empty_txn_ids:
+        conn.execute(
+            "INSERT INTO transaction_documents (transaction_id, document_type_id, name, sort_order, is_offer_contract) "
+            "VALUES (?, ?, ?, 0, 0)",
+            (txn_id, new_doc_type_id, name),
+        )
     conn.commit()
-    row = conn.execute("SELECT * FROM document_types WHERE id = ?", (cur.lastrowid,)).fetchone()
+    row = conn.execute("SELECT * FROM document_types WHERE id = ?", (new_doc_type_id,)).fetchone()
     conn.close()
     on_data_changed("document type added")
     return dict(row)
@@ -2990,19 +3030,21 @@ def list_transactions(folder: str = "active") -> list:
     return result
 
 
-def create_transaction(transaction_type: str, title: str, represented_as: str = "seller") -> dict:
+def create_transaction(transaction_type: str, title: str) -> dict:
     """Creates a transaction and snapshots the type's CURRENT document
     checklist into its own independent rows — later edits to the type's
     checklist (add/remove/rename) never retroactively change an already-
     created transaction, so an uploaded signed document is never orphaned
-    by someone editing the shared template afterward. `represented_as` is
-    a mandatory field on the "+ New Transaction" form (Mario: who he
-    represented on the deal — seller/buyer/landlord/tenant) and carries
-    through automatically to the commission entry auto-created when this
-    transaction is later marked Closed, rather than that entry always
-    defaulting to "seller" regardless of the actual deal."""
-    if represented_as not in _REPRESENTED_AS_VALUES:
-        represented_as = "seller"
+    by someone editing the shared template afterward. `represented_as`
+    (seller/buyer/landlord/tenant) used to be its own mandatory field on
+    the "+ New Transaction" form, alongside Transaction Type — Mario
+    pointed out that was redundant, since URTO's four fixed transaction
+    types already map 1:1 onto who's being represented (see build order
+    #117), so it's now derived automatically via
+    `TRANSACTION_TYPE_REPRESENTED_AS` and carries through the same way as
+    before into the commission entry auto-created when this transaction is
+    later marked Closed."""
+    represented_as = TRANSACTION_TYPE_REPRESENTED_AS.get(transaction_type, "seller")
     conn = get_conn()
     now = _now().isoformat(timespec="seconds")
     cur = conn.execute(

@@ -1571,15 +1571,6 @@
           <label for="txnCommissionRate">Commission rate (%)</label>
           <input type="number" id="txnCommissionRate" min="0" max="100" step="0.01" style="width:110px">
         </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label for="txnRepresented">Represented</label>
-          <select id="txnRepresented" style="width:130px">
-            <option value="seller">Seller</option>
-            <option value="buyer">Buyer</option>
-            <option value="landlord">Landlord</option>
-            <option value="tenant">Tenant</option>
-          </select>
-        </div>
         <div class="sub" id="txnCommissionPreview"></div>
       </div>
 
@@ -2174,15 +2165,6 @@
       <div class="form-group">
         <label for="txnNewType">Transaction Type *</label>
         <select id="txnNewType"></select>
-      </div>
-      <div class="form-group">
-        <label for="txnNewRepresented">Who did you represent? *</label>
-        <select id="txnNewRepresented" required>
-          <option value="seller">Seller</option>
-          <option value="buyer">Buyer</option>
-          <option value="landlord">Landlord</option>
-          <option value="tenant">Tenant</option>
-        </select>
       </div>
       <div class="modal-actions">
         <button type="button" class="ghost" id="txnNewCancelBtn">Cancel</button>
@@ -5771,7 +5753,6 @@ const txnRestoreBtn = document.getElementById('txnRestoreBtn');
 const txnDeleteBtn = document.getElementById('txnDeleteBtn');
 const txnSalePrice = document.getElementById('txnSalePrice');
 const txnCommissionRate = document.getElementById('txnCommissionRate');
-const txnRepresented = document.getElementById('txnRepresented');
 const txnCommissionPreview = document.getElementById('txnCommissionPreview');
 
 function updateTxnCommissionPreview() {
@@ -5879,7 +5860,6 @@ async function openTxnDetail(txnId) {
   txnDetailMeta.textContent = `${txnTypeLabel(t.transaction_type)} · created ${t.created_at.slice(0, 10)}`;
   txnSalePrice.value = t.sale_price != null ? t.sale_price : '';
   txnCommissionRate.value = t.commission_rate != null ? t.commission_rate : '';
-  txnRepresented.value = t.represented_as || 'seller';
   try {
     const settingsRes = await fetch('/api/crm/commission_settings');
     if (settingsRes.ok) window.commissionDefaultSplitPct = (await settingsRes.json()).default_split_pct;
@@ -5968,14 +5948,12 @@ async function saveTxnDetailFields() {
       title, status: txnDetailStatusValue,
       sale_price: txnSalePrice.value === '' ? null : parseFloat(txnSalePrice.value),
       commission_rate: txnCommissionRate.value === '' ? null : parseFloat(txnCommissionRate.value),
-      represented_as: txnRepresented.value,
     }),
   });
 }
 txnDetailTitle.addEventListener('blur', saveTxnDetailFields);
 txnSalePrice.addEventListener('blur', saveTxnDetailFields);
 txnCommissionRate.addEventListener('blur', saveTxnDetailFields);
-txnRepresented.addEventListener('change', saveTxnDetailFields);
 txnStatusBtns.querySelectorAll('.txn-status-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     setTxnStatusButtons(btn.getAttribute('data-status'));
@@ -6008,7 +5986,6 @@ const txnNewOverlay = document.getElementById('txnNewOverlay');
 const txnNewForm = document.getElementById('txnNewForm');
 const txnNewTitle = document.getElementById('txnNewTitle');
 const txnNewType = document.getElementById('txnNewType');
-const txnNewRepresented = document.getElementById('txnNewRepresented');
 const txnNewError = document.getElementById('txnNewError');
 
 txnNewBtn.addEventListener('click', async () => {
@@ -6030,7 +6007,7 @@ txnNewForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const res = await fetch('/api/txn/transactions', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transaction_type: txnNewType.value, title: txnNewTitle.value.trim(), represented_as: txnNewRepresented.value }),
+    body: JSON.stringify({ transaction_type: txnNewType.value, title: txnNewTitle.value.trim() }),
   });
   const data = await res.json();
   if (!res.ok) {

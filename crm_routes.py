@@ -540,14 +540,13 @@ def txn_create_transaction():
     data = request.get_json(force=True)
     txn_type = data.get("transaction_type", "")
     title = (data.get("title") or "").strip()
-    represented_as = data.get("represented_as", "")
     if txn_type not in crm.TRANSACTION_TYPE_KEYS:
         return jsonify({"error": "Unknown or missing transaction type"}), 400
     if not title:
         return jsonify({"error": "Title is required"}), 400
-    if represented_as not in ("seller", "buyer", "landlord", "tenant"):
-        return jsonify({"error": "Who you represented is required"}), 400
-    return jsonify(crm.create_transaction(txn_type, title, represented_as=represented_as))
+    # represented_as is no longer its own field -- it's derived 1:1 from
+    # the transaction type itself (see build order #117).
+    return jsonify(crm.create_transaction(txn_type, title))
 
 
 @crm_bp.route("/api/txn/transactions/<int:txn_id>")
@@ -569,12 +568,13 @@ def txn_update_transaction(txn_id):
         return jsonify({"error": "Invalid status"}), 400
     sale_price = data.get("sale_price")
     commission_rate = data.get("commission_rate")
-    represented_as = data.get("represented_as") or None
+    # represented_as is derived once at creation from the transaction type
+    # (see build order #117) and never independently edited afterward --
+    # `update_transaction()` always keeps whatever's already on the row.
     updated = crm.update_transaction(
         txn_id, title, status,
         sale_price=float(sale_price) if sale_price not in (None, "") else None,
         commission_rate=float(commission_rate) if commission_rate not in (None, "") else None,
-        represented_as=represented_as,
     )
     if not updated:
         abort(404)
