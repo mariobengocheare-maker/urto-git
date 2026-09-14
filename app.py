@@ -22,12 +22,24 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_file, url_for
-from playwright.sync_api import sync_playwright
 
 import crm
 import hosted_sync
 from input_parser import OUTPUT_FIELDS, build_output_row, load_rows
-from lookup_engine import FOREWARN_SEARCH_URL, process_row
+
+# `playwright.sync_api` (and lookup_engine.py/llc_lookup.py, which both
+# import it too) is deliberately NOT imported here at module load time --
+# see build order #120. It's a genuinely slow import (over a second on its
+# own), and every one of app.py's other routes (the hosted-sync proxy,
+# Skip Trace's own heartbeat/shutdown/version plumbing) is used constantly
+# without ever touching Skip Trace itself. Paying that cost on every single
+# server cold-start -- which happens on every "open URTO" now that the
+# auto-close feature shuts the process down between sessions -- made the
+# whole app feel slow to open even for someone who never runs a lookup.
+# `run_job()` below does the actual `from lookup_engine import ...` /
+# `from playwright.sync_api import sync_playwright` imports lazily, the
+# first time a Skip Trace job is actually started, so that one-time cost
+# only lands on the person actually using that feature, not every launch.
 
 app = Flask(__name__)
 
@@ -95,7 +107,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.13.18"
+APP_VERSION = "2.13.19"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -296,6 +308,10 @@ threading.Thread(target=_watchdog, daemon=True).start()
 
 
 def run_job(job_id, rows):
+    # Deliberately lazy -- see the comment on this file's imports up top.
+    from playwright.sync_api import sync_playwright
+    from lookup_engine import FOREWARN_SEARCH_URL, process_row
+
     job = JOBS[job_id]
     output_path = OUTPUT_DIR / f"{job_id}.csv"
     job["output_path"] = str(output_path)
