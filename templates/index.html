@@ -4482,7 +4482,7 @@ document.getElementById('calTodayBtn').addEventListener('click', () => {
 // date box -- defaults to today's date, same as every other field (date
 // included) already being freely editable in the form itself.
 document.getElementById('calAddEventBtn').addEventListener('click', () => {
-  openEventForm(new Date().toISOString().slice(0, 10), null);
+  openEventForm(todayIsoDate(), null); // local date, not toISOString()'s UTC one -- see renderCalendar()'s own comment
 });
 
 async function renderCalendar() {
@@ -4495,7 +4495,12 @@ async function renderCalendar() {
     (eventsByDay[e.date] = eventsByDay[e.date] || []).push(e);
   }
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  // NOT new Date().toISOString() -- that converts to UTC first, which is
+  // already on the NEXT calendar day for a good chunk of every evening in
+  // Miami (Eastern is behind UTC), silently highlighting tomorrow as
+  // "today" for hours before local midnight actually arrives. todayIsoDate()
+  // builds the ISO string from the browser's own LOCAL date fields instead.
+  const todayStr = todayIsoDate();
   const firstOfMonth = new Date(calYear, calMonth - 1, 1);
   const startWeekday = firstOfMonth.getDay(); // 0=Sun
   const daysInMonth = new Date(calYear, calMonth, 0).getDate();
