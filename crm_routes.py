@@ -571,10 +571,14 @@ def txn_update_transaction(txn_id):
     # represented_as is derived once at creation from the transaction type
     # (see build order #117) and never independently edited afterward --
     # `update_transaction()` always keeps whatever's already on the row.
+    # closing_date follows the None-vs-empty-string convention documented
+    # on update_transaction() itself: an absent key leaves it unchanged, an
+    # explicit "" clears it (see build order #121).
     updated = crm.update_transaction(
         txn_id, title, status,
         sale_price=float(sale_price) if sale_price not in (None, "") else None,
         commission_rate=float(commission_rate) if commission_rate not in (None, "") else None,
+        closing_date=data.get("closing_date"),
     )
     if not updated:
         abort(404)

@@ -37,7 +37,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.18.19-hosted"
+APP_VERSION = "1.19.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -467,6 +467,28 @@ def _morning_alert_watcher():
 
 
 threading.Thread(target=_morning_alert_watcher, daemon=True).start()
+
+
+# ===================== Closing-date auto-close + celebration (build order #121) =====================
+# Mario: give a transaction a real Closing Date, then let URTO handle the
+# rest -- automatically move it to Closed AND send a celebratory push,
+# both together at 8 PM Miami time on the closing date itself (not at
+# midnight the instant the date starts). All the actual state/timing logic
+# lives in crm.py (crm.process_due_closings()) since crm.py already owns
+# every other piece of transaction state; this watcher's only job is
+# calling it every tick and actually sending whatever it hands back --
+# crm.py has no way to send a push itself.
+def _closing_watcher():
+    while True:
+        time.sleep(60)
+        try:
+            for item in crm.process_due_closings():
+                _send_push_to_all("URTO — Closing Day! 🎉", item["message"], url="/")
+        except Exception:
+            pass  # never let a push/DB hiccup kill the watcher thread
+
+
+threading.Thread(target=_closing_watcher, daemon=True).start()
 
 
 # ===================== One-time data import =====================

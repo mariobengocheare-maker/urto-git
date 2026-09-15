@@ -1572,8 +1572,13 @@
           <label for="txnCommissionRate">Commission rate (%)</label>
           <input type="number" id="txnCommissionRate" min="0" max="100" step="0.01" style="width:110px">
         </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="txnClosingDate">Closing date</label>
+          <input type="date" id="txnClosingDate">
+        </div>
         <div class="sub" id="txnCommissionPreview"></div>
       </div>
+      <div class="sub" id="txnClosingNote" style="margin:-10px 0 16px"></div>
 
       <div class="txn-doc-table" id="txnDocTable"></div>
 
@@ -5786,6 +5791,8 @@ const txnSalePrice = document.getElementById('txnSalePrice');
 const txnSalePriceLabel = document.getElementById('txnSalePriceLabel');
 const txnCommissionRate = document.getElementById('txnCommissionRate');
 const txnCommissionPreview = document.getElementById('txnCommissionPreview');
+const txnClosingDate = document.getElementById('txnClosingDate');
+const txnClosingNote = document.getElementById('txnClosingNote');
 // Rental Listing/Rental are rent deals, not sale deals -- the same
 // sale_price column stores either figure (a transaction only ever has one
 // price field), but the label Mario sees must say "Rent" for those two
@@ -5803,6 +5810,23 @@ function updateTxnCommissionPreview() {
 }
 txnSalePrice.addEventListener('input', updateTxnCommissionPreview);
 txnCommissionRate.addEventListener('input', updateTxnCommissionPreview);
+
+// Explains what the Closing Date field actually does (see build order
+// #121) -- both the auto-close and the celebratory push fire together at
+// 8 PM Miami time on the closing date itself, not the instant the date
+// starts, so this is worth spelling out rather than leaving Mario to
+// guess at a bare date field's behavior.
+function renderTxnClosingNote(t) {
+  if (!t.closing_date) { txnClosingNote.textContent = ''; return; }
+  const dateLabel = new Date(t.closing_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  if (t.status === 'closed') {
+    txnClosingNote.textContent = t.closing_notified
+      ? `🎉 Closed on ${dateLabel} — celebratory notification already sent.`
+      : `Closed. The 8 PM celebratory notification for ${dateLabel} will go out tonight if it hasn't already.`;
+  } else {
+    txnClosingNote.textContent = `Will automatically move to Closed and send you a celebratory notification at 8 PM on ${dateLabel}.`;
+  }
+}
 
 txnListSubtabs.querySelectorAll('button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -5899,6 +5923,8 @@ async function openTxnDetail(txnId) {
   txnSalePriceLabel.textContent = TXN_RENTAL_TYPES.has(t.transaction_type) ? 'Rent price ($)' : 'Sale price ($)';
   txnSalePrice.value = t.sale_price != null ? t.sale_price : '';
   txnCommissionRate.value = t.commission_rate != null ? t.commission_rate : '';
+  txnClosingDate.value = t.closing_date || '';
+  renderTxnClosingNote(t);
   try {
     const settingsRes = await fetch('/api/crm/commission_settings');
     if (settingsRes.ok) window.commissionDefaultSplitPct = (await settingsRes.json()).default_split_pct;
@@ -5981,16 +6007,19 @@ async function saveTxnDetailFields() {
   if (!currentTxnId) return;
   const title = txnDetailTitle.value.trim();
   if (!title) return;
-  await fetch(`/api/txn/transactions/${currentTxnId}`, {
+  const res = await fetch(`/api/txn/transactions/${currentTxnId}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       title, status: txnDetailStatusValue,
       sale_price: txnSalePrice.value === '' ? null : parseFloat(txnSalePrice.value),
       commission_rate: txnCommissionRate.value === '' ? null : parseFloat(txnCommissionRate.value),
+      closing_date: txnClosingDate.value, // '' explicitly clears it — see crm.update_transaction()
     }),
   });
+  if (res.ok) renderTxnClosingNote(await res.json());
 }
 txnDetailTitle.addEventListener('blur', saveTxnDetailFields);
+txnClosingDate.addEventListener('change', saveTxnDetailFields);
 txnSalePrice.addEventListener('blur', saveTxnDetailFields);
 txnCommissionRate.addEventListener('blur', saveTxnDetailFields);
 txnStatusBtns.querySelectorAll('.txn-status-btn').forEach(btn => {

@@ -1341,6 +1341,17 @@ def init_db():
         conn.execute("ALTER TABLE transactions ADD COLUMN commission_rate REAL")
     if "represented_as" not in existing_cols:
         conn.execute("ALTER TABLE transactions ADD COLUMN represented_as TEXT NOT NULL DEFAULT 'seller'")
+    if "closing_date" not in existing_cols:
+        # See build order #121 -- an optional real closing date that drives
+        # two automatic behaviors: auto-moving the transaction to Closed
+        # and a celebratory push notification, both at 8 PM Miami time on
+        # the closing date itself (not the instant the date starts).
+        conn.execute("ALTER TABLE transactions ADD COLUMN closing_date TEXT")
+    if "closing_notified" not in existing_cols:
+        # Persisted (not in-memory) so the once-ever celebratory push
+        # survives a Render redeploy/restart without either re-firing or
+        # being silently lost -- see build order #121.
+        conn.execute("ALTER TABLE transactions ADD COLUMN closing_notified INTEGER NOT NULL DEFAULT 0")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transaction_documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3137,7 +3148,7 @@ def get_transaction(transaction_id: int) -> dict:
 
 def update_transaction(transaction_id: int, title: str, status: str,
                         sale_price: float = None, commission_rate: float = None,
-                        represented_as: str = None) -> dict:
+                        represented_as: str = None, closing_date: str = None) -> dict:
     conn = get_conn()
     existing = conn.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
     if not existing:
@@ -3146,15 +3157,42 @@ def update_transaction(transaction_id: int, title: str, status: str,
     if represented_as is not None and represented_as not in _REPRESENTED_AS_VALUES:
         represented_as = existing["represented_as"]
     final_represented_as = represented_as if represented_as is not None else existing["represented_as"]
+    # `closing_date` follows the same None-vs-empty-string convention as
+    # the optional Commission Tracker deal-detail fields (see
+    # `update_commission_entry()`'s docstring): omitting it (None) leaves
+    # whatever's already on the row alone -- what `_finalize_closing()`
+    # below relies on to flip status without disturbing the date that
+    # triggered it -- while an explicit empty string clears it. Unlike
+    # sale_price/commission_rate (which can only ever be changed, never
+    # cleared, an accepted existing limitation), a cleared closing_date is
+    # a real, meaningful state: the whole auto-close/celebration feature
+    # (build order #121) is simply off for a transaction with none set.
+    if closing_date is None:
+        final_closing_date = existing["closing_date"]
+    elif closing_date == "":
+        final_closing_date = None
+    else:
+        final_closing_date = closing_date
+    # Changing (or clearing) the closing date invalidates any past
+    # celebratory push for whatever used to be there -- re-arm
+    # closing_notified so a freshly-picked date can still notify. Left
+    # untouched when the date isn't actually changing (e.g. a plain status
+    # click, or `_finalize_closing()`'s own close-without-touching-date
+    # call), so the once-ever guarantee isn't reset by unrelated saves.
+    closing_notified = existing["closing_notified"]
+    if final_closing_date != existing["closing_date"]:
+        closing_notified = 0
     conn.execute(
-        "UPDATE transactions SET title = ?, status = ?, sale_price = ?, commission_rate = ?, represented_as = ? "
-        "WHERE id = ?",
+        "UPDATE transactions SET title = ?, status = ?, sale_price = ?, commission_rate = ?, "
+        "represented_as = ?, closing_date = ?, closing_notified = ? WHERE id = ?",
         (
             title,
             status,
             sale_price if sale_price is not None else existing["sale_price"],
             commission_rate if commission_rate is not None else existing["commission_rate"],
             final_represented_as,
+            final_closing_date,
+            closing_notified,
             transaction_id,
         ),
     )
@@ -3216,6 +3254,123 @@ def update_transaction(transaction_id: int, title: str, status: str,
                 on_data_changed("commission entry file updated")
                 _instant_document_mirror()
     return get_transaction(transaction_id)
+
+
+# ===================== Closing-date auto-close + celebration (build order #121) =====================
+# Mario: give me a closing date field so a transaction automatically moves
+# to Closed and I get a celebratory push, both at 8 PM Miami time on the
+# actual closing date (not the instant the date starts, i.e. midnight).
+# `mark_closing_notified()`/`closing_notified` is what makes the push a true
+# once-ever event, persisted rather than in-memory so it survives a Render
+# redeploy without either re-firing or silently disappearing.
+
+def mark_closing_notified(transaction_id: int):
+    conn = get_conn()
+    conn.execute("UPDATE transactions SET closing_notified = 1 WHERE id = ?", (transaction_id,))
+    conn.commit()
+    conn.close()
+
+
+def _finalize_closing(transaction_id: int):
+    """Closes the transaction if it isn't already (reusing every normal
+    closed-transition side effect via update_transaction() -- the auto
+    commission entry, the offer-contract copy, etc.) and marks its closing
+    notification handled either way. Deliberately does not touch
+    closing_date itself (leaves update_transaction()'s closing_date=None
+    default alone) -- a manual status change back to Closed later, or a
+    reopen/re-close cycle, must never accidentally re-arm or disturb the
+    date that drove this."""
+    existing = get_transaction(transaction_id)
+    if not existing:
+        return
+    if existing["status"] != "closed":
+        update_transaction(transaction_id, existing["title"], "closed")
+    mark_closing_notified(transaction_id)
+
+
+def _ordinal_word(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def get_closing_ordinal(transaction_id: int, closing_date_iso: str) -> int:
+    """This transaction's 1-indexed position among every transaction with a
+    closing_date in the same calendar year, ordered chronologically by
+    closing_date -- ties on the same closing_date (more than one deal
+    closing the same day) are broken by id so two same-day closings still
+    get two distinct, sequential ordinals rather than tying. Computed from
+    `closing_date` itself, not commission_entries, since a closing doesn't
+    strictly need a commission entry filled in yet at the moment this
+    fires."""
+    year = closing_date_iso[:4]
+    conn = get_conn()
+    count = conn.execute(
+        "SELECT COUNT(*) AS c FROM transactions WHERE closing_date IS NOT NULL "
+        "AND substr(closing_date, 1, 4) = ? "
+        "AND (closing_date < ? OR (closing_date = ? AND id <= ?))",
+        (year, closing_date_iso, closing_date_iso, transaction_id),
+    ).fetchone()["c"]
+    conn.close()
+    return count
+
+
+def get_closing_celebration_message(transaction: dict) -> str:
+    closing_date = transaction["closing_date"]
+    ordinal = get_closing_ordinal(transaction["id"], closing_date)
+    year = closing_date[:4]
+    return (
+        f"🎉 Congratulations on closing {transaction['title']}! "
+        f"This is your {_ordinal_word(ordinal)} closing of {year}."
+    )
+
+
+def process_due_closings() -> list:
+    """Runs both halves of the closing-date feature on every watcher tick
+    (see hosted_app.py's `_closing_watcher`). Returns a list of
+    {"transaction": ..., "message": ...} for anything that should get a
+    celebratory push sent for it right now -- crm.py has no push-sending
+    capability of its own (that lives in hosted_app.py), so the caller is
+    responsible for actually sending each message and nothing else.
+
+    Two categories, deliberately handled differently:
+    - A closing_date already BEFORE today that was never processed (e.g.
+      entered after the fact, or the server was down straight through its
+      own 8 PM window on the real day) is closed out silently, with NO
+      celebratory push -- there's no honest "closing day at 8 PM" moment
+      left for it.
+    - A closing_date of exactly today is only processed once it's
+      actually 8 PM Miami time or later (Mario's explicit ask: the
+      transaction moves to Closed and celebrates AT 8 PM on the day of
+      the closing, not at midnight the instant the date starts) -- and
+      only these get a celebratory push returned.
+    """
+    today_iso = _today().isoformat()
+    conn = get_conn()
+    stale_ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM transactions WHERE closing_date IS NOT NULL "
+        "AND closing_date < ? AND closing_notified = 0", (today_iso,),
+    ).fetchall()]
+    conn.close()
+    for txn_id in stale_ids:
+        _finalize_closing(txn_id)
+
+    to_celebrate = []
+    if _now().hour >= 20:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT * FROM transactions WHERE closing_date = ? AND closing_notified = 0",
+            (today_iso,),
+        ).fetchall()
+        conn.close()
+        for row in rows:
+            txn = dict(row)
+            message = get_closing_celebration_message(txn)
+            _finalize_closing(txn["id"])
+            to_celebrate.append({"transaction": txn, "message": message})
+    return to_celebrate
 
 
 def set_transaction_folder(transaction_id: int, folder: str) -> dict:
