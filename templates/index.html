@@ -1502,7 +1502,10 @@
            the dial entry so the note has somewhere to live. -->
       <div class="dictate-box" id="dictateBox">
         <div class="dictate-box-head">📝 Call note</div>
-        <button class="dictate-btn" id="dictateBtn">🎙 Dictate a call note</button>
+        <div class="row" style="gap:8px">
+          <button class="dictate-btn" id="dictateBtn">🎙 Dictate a call note</button>
+          <button class="ghost small" id="dictateTypeBtn">⌨️ Or type a note</button>
+        </div>
         <div class="dictate-hint" id="dictateHint">Click and speak your recap — it's typed out for you and saved as a call note. Free, no account.</div>
         <div class="dictate-live" id="dictateLive" style="display:none"></div>
         <div class="dictate-review" id="dictateReview" style="display:none">
@@ -5571,10 +5574,13 @@ let recognizing = false;
 let manualStop = false;
 let dictateFinalText = '';
 
+const dictateTypeBtn = document.getElementById('dictateTypeBtn');
+
 if (!SpeechRec) {
   // No browser speech support (e.g. Firefox): fall back to typing a note.
   dictateBtn.textContent = '➕ Add a note';
   dictateHint.textContent = 'Type a quick call note below.';
+  dictateTypeBtn.style.display = 'none';   // the main button already opens the type box
 }
 
 function resetDictation() {
@@ -5664,6 +5670,15 @@ dictateBtn.addEventListener('click', () => {
   } catch (e) {
     showDictateError('Could not start voice capture. You can type the note instead.');
   }
+});
+
+dictateTypeBtn.addEventListener('click', () => {
+  dictateError.style.display = 'none';
+  if (recognizing) { manualStop = true; try { recognition.stop(); } catch (e) {} }
+  recognizing = false;
+  dictateBtn.classList.remove('recording');
+  dictateBtn.textContent = SpeechRec ? '🎙 Dictate a call note' : '➕ Add a note';
+  openReview('');
 });
 
 document.getElementById('dictateSaveBtn').addEventListener('click', async () => {
