@@ -1461,6 +1461,31 @@
       <button class="ghost" id="dialerCompleteRoundBtn" style="display:none">✅ Mark this round as called</button>
     </div>
     <div class="dialer-hint" id="dialerListDueHint"></div>
+    <button type="button" class="ghost small" id="dialerListFreqToggleBtn" style="display:none; margin-top:6px">✏️ Change this list's schedule</button>
+    <div id="dialerListFreqPanel" style="display:none; margin-top:8px">
+      <select id="dialerListFrequency">
+        <option value="none">No automatic follow-up</option>
+        <option value="2_weeks">2 Weeks</option>
+        <option value="3_weeks">3 Weeks</option>
+        <option value="4_weeks">4 Weeks</option>
+        <option value="2_months">2 Months</option>
+        <option value="6_months">6 Months</option>
+        <option value="custom">Custom...</option>
+      </select>
+      <div class="row" id="dialerListCustomRow" style="display:none; margin-top:6px; gap:8px">
+        <input type="number" id="dialerListCustomAmount" min="1" value="30" style="width:80px">
+        <select id="dialerListCustomUnit">
+          <option value="days">Days</option>
+          <option value="weeks">Weeks</option>
+          <option value="months">Months</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:8px; gap:8px">
+        <button type="button" class="small" id="dialerListFreqSaveBtn">Save</button>
+        <button type="button" class="ghost small" id="dialerListFreqCancelBtn">Cancel</button>
+      </div>
+    </div>
+    <div id="dialerListFreqMsg" style="display:none; margin-top:6px; font-size:.85em; color:var(--gold)"></div>
   </div>
 
   <div class="card" id="dialerPasteBox">
@@ -1493,6 +1518,31 @@
         <div class="contact-line"><span class="lbl">Address</span><span id="dciAddress">—</span></div>
         <div class="contact-line"><span class="lbl">Last called (Miami Time)</span><span id="dciLastCalled">—</span> <a href="#" class="call-history-link" id="dciCallHistoryLink">Call History</a></div>
         <div id="dciFollowup" class="dialer-client-info-followup"></div>
+        <button type="button" class="ghost small" id="dciFreqToggleBtn" style="margin-top:6px">✏️ Change follow-up schedule</button>
+        <div id="dciFreqPanel" style="display:none; margin-top:8px">
+          <select id="dciFrequency">
+            <option value="none">No automatic follow-up</option>
+            <option value="2_weeks">2 Weeks</option>
+            <option value="3_weeks">3 Weeks</option>
+            <option value="4_weeks">4 Weeks</option>
+            <option value="2_months">2 Months</option>
+            <option value="6_months">6 Months</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <div class="row" id="dciCustomRow" style="display:none; margin-top:6px; gap:8px">
+            <input type="number" id="dciCustomAmount" min="1" value="30" style="width:80px">
+            <select id="dciCustomUnit">
+              <option value="days">Days</option>
+              <option value="weeks">Weeks</option>
+              <option value="months">Months</option>
+            </select>
+          </div>
+          <div class="row" style="margin-top:8px; gap:8px">
+            <button type="button" class="small" id="dciFreqSaveBtn">Save</button>
+            <button type="button" class="ghost small" id="dciFreqCancelBtn">Cancel</button>
+          </div>
+        </div>
+        <div id="dciFreqMsg" style="display:none; margin-top:6px; font-size:.85em; color:var(--gold)"></div>
         <div class="dialer-client-info-notes-head">Notes</div>
         <div id="dciNotes"></div>
         <button type="button" class="danger small" id="dciDeleteBtn" style="display:inline-block; margin-top:10px; background:var(--danger-fg)">Delete Client</button>
@@ -3905,17 +3955,25 @@ document.getElementById('cdCompleteFollowupBtn').addEventListener('click', async
 // which is exactly how a genuinely overdue client vanished from Missed
 // Follow-ups entirely instead of correctly staying overdue but now phoned.
 const FREQUENCY_DAYS_TO_KEY = { 14: '2_weeks', 21: '3_weeks', 28: '4_weeks', 60: '2_months', 180: '6_months' };
-function applyClientFrequencyToForm(c) {
-  if (!c.interval_days) {
-    cfFrequency.value = 'none';
-  } else if (FREQUENCY_DAYS_TO_KEY[c.interval_days]) {
-    cfFrequency.value = FREQUENCY_DAYS_TO_KEY[c.interval_days];
+// Generic version of the same reverse-mapping, so any OTHER form that edits a
+// client's or a Contact List's schedule (the Dialer's own frequency editor,
+// build order #129; the pre-existing "Edit Contact List" modal, which had
+// this exact same latent reset bug and never showed it) can reuse it instead
+// of re-deriving the mapping — see the big comment above for why this matters.
+function applyFrequencyToElements(intervalDays, selectEl, customRowEl, amountEl, unitEl) {
+  if (!intervalDays) {
+    selectEl.value = 'none';
+  } else if (FREQUENCY_DAYS_TO_KEY[intervalDays]) {
+    selectEl.value = FREQUENCY_DAYS_TO_KEY[intervalDays];
   } else {
-    cfFrequency.value = 'custom';
-    cfCustomAmount.value = c.interval_days;
-    cfCustomUnit.value = 'days';
+    selectEl.value = 'custom';
+    amountEl.value = intervalDays;
+    unitEl.value = 'days';
   }
-  cfCustomRow.style.display = cfFrequency.value === 'custom' ? 'flex' : 'none';
+  customRowEl.style.display = selectEl.value === 'custom' ? 'flex' : 'none';
+}
+function applyClientFrequencyToForm(c) {
+  applyFrequencyToElements(c.interval_days, cfFrequency, cfCustomRow, cfCustomAmount, cfCustomUnit);
 }
 
 document.getElementById('cdEditBtn').addEventListener('click', async () => {
@@ -3939,7 +3997,8 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
 
 document.getElementById('cdDeleteBtn').addEventListener('click', async () => {
   if (!confirm('Delete this client and all their notes? This cannot be undone.')) return;
-  await fetch(`/api/crm/clients/${currentClientId}`, { method: 'DELETE' });
+  const deletedId = currentClientId;
+  await fetch(`/api/crm/clients/${deletedId}`, { method: 'DELETE' });
   clMembersReturnListId = null;
   clientDetailOverlay.classList.remove('show');
   loadClients();
@@ -3949,6 +4008,9 @@ document.getElementById('cdDeleteBtn').addEventListener('click', async () => {
   // otherwise the blob still shows a name that's gone, and clicking it next
   // was a dead click with no explanation (see build order #113).
   if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
+  // A deleted client must vanish from any dialer list currently loaded too,
+  // not just the CRM tab -- see removeClientFromDialerList().
+  removeClientFromDialerList(deletedId);
 });
 
 /* ===================== Contact Lists ===================== */
@@ -4053,6 +4115,12 @@ async function openEditContactList(listId) {
   resetClForm();
   clFormTitle.textContent = 'Edit Contact List';
   clFormId.value = l.id;
+  // Must reverse-map the list's real schedule onto clFrequency before showing
+  // the form -- resetClForm()'s '2_weeks' default would otherwise silently
+  // win on save whenever the list's real schedule isn't already 2 weeks,
+  // exactly the client-form bug from build order #112, never previously
+  // caught here since nothing had exercised an edit on a non-default list.
+  applyFrequencyToElements(l.interval_days, clFrequency, clCustomRow, clCustomAmount, clCustomUnit);
   clName.value = l.name;
   clFormOverlay.classList.add('show');
 }
@@ -4915,6 +4983,7 @@ const dialerCompleteRoundBtn = document.getElementById('dialerCompleteRoundBtn')
 const dialerListDueHint = document.getElementById('dialerListDueHint');
 let dialerContactLists = [];
 let dialerCurrentListId = null;
+let dialerCurrentListData = null;
 
 const DIALER_SOURCE_BTNS = [dialerSourcePasteBtn, dialerSourceCrmBtn, dialerSourceLookupBtn, dialerSourceTodayBtn, dialerSourceMissedBtn, dialerSourceListBtn];
 let dialerActiveSource = null;
@@ -5037,6 +5106,10 @@ dialerSourceListBtn.addEventListener('click', async () => {
   setDialerSourceActive(dialerSourceListBtn);
   dialerCompleteRoundBtn.style.display = 'none';
   dialerListDueHint.textContent = '';
+  dialerCurrentListId = null;
+  dialerCurrentListData = null;
+  document.getElementById('dialerListFreqToggleBtn').style.display = 'none';
+  document.getElementById('dialerListFreqPanel').style.display = 'none';
   const res = await fetch('/api/crm/contact_lists');
   dialerContactLists = res.ok ? await res.json() : [];
   if (dialerContactLists.length === 0) {
@@ -5060,10 +5133,13 @@ document.getElementById('dialerLoadListBtn').addEventListener('click', async () 
     return;
   }
   dialerCurrentListId = listId;
+  dialerCurrentListData = list;
   dialerCompleteRoundBtn.style.display = list.interval_days ? 'inline-block' : 'none';
   dialerListDueHint.textContent = list.frequency_label
     ? `Shared schedule: ${listCallLabel(list)}`
     : '';
+  document.getElementById('dialerListFreqToggleBtn').style.display = 'inline-block';
+  document.getElementById('dialerListFreqPanel').style.display = 'none';
   await loadDialerList(withPhones.map(c => ({
     name: c.name, phone: c.phone, clientId: c.id,
     meta: [c.address, followupLabel(c)].filter(Boolean).join(' · '),
@@ -5076,7 +5152,62 @@ dialerCompleteRoundBtn.addEventListener('click', async () => {
   const res = await fetch(`/api/crm/contact_lists/${dialerCurrentListId}/complete_round`, { method: 'POST' });
   if (res.ok) {
     const list = await res.json();
+    dialerCurrentListData = list;
     dialerListDueHint.textContent = `Shared schedule: ${listCallLabel(list)}`;
+  }
+});
+
+/* ---- Change a loaded Contact List's own shared call schedule right from the
+   Dialer, mirroring the per-client editor above (build order #129) ---- */
+const dialerListFreqToggleBtn = document.getElementById('dialerListFreqToggleBtn');
+const dialerListFreqPanel = document.getElementById('dialerListFreqPanel');
+const dialerListFrequency = document.getElementById('dialerListFrequency');
+const dialerListCustomRow = document.getElementById('dialerListCustomRow');
+const dialerListCustomAmount = document.getElementById('dialerListCustomAmount');
+const dialerListCustomUnit = document.getElementById('dialerListCustomUnit');
+const dialerListFreqMsg = document.getElementById('dialerListFreqMsg');
+
+dialerListFreqToggleBtn.addEventListener('click', () => {
+  if (!dialerCurrentListData) return;
+  const opening = dialerListFreqPanel.style.display === 'none';
+  if (opening) {
+    applyFrequencyToElements(dialerCurrentListData.interval_days, dialerListFrequency, dialerListCustomRow, dialerListCustomAmount, dialerListCustomUnit);
+    dialerListFreqMsg.style.display = 'none';
+  }
+  dialerListFreqPanel.style.display = opening ? 'block' : 'none';
+});
+
+dialerListFrequency.addEventListener('change', () => {
+  dialerListCustomRow.style.display = dialerListFrequency.value === 'custom' ? 'flex' : 'none';
+});
+
+document.getElementById('dialerListFreqCancelBtn').addEventListener('click', () => {
+  dialerListFreqPanel.style.display = 'none';
+});
+
+document.getElementById('dialerListFreqSaveBtn').addEventListener('click', async () => {
+  if (!dialerCurrentListId || !dialerCurrentListData) return;
+  try {
+    const res = await fetch(`/api/crm/contact_lists/${dialerCurrentListId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: dialerCurrentListData.name,
+        frequency_key: dialerListFrequency.value,
+        custom_amount: dialerListCustomAmount.value,
+        custom_unit: dialerListCustomUnit.value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) { dialerListFreqMsg.textContent = data.error || 'Could not save the schedule.'; dialerListFreqMsg.style.display = 'block'; return; }
+    dialerCurrentListData = data;
+    dialerCompleteRoundBtn.style.display = data.interval_days ? 'inline-block' : 'none';
+    dialerListDueHint.textContent = data.frequency_label ? `Shared schedule: ${listCallLabel(data)}` : '';
+    dialerListFreqPanel.style.display = 'none';
+    dialerListFreqMsg.textContent = '✓ Schedule updated';
+    dialerListFreqMsg.style.display = 'block';
+  } catch (e) {
+    dialerListFreqMsg.textContent = 'Could not reach the server. Try again.';
+    dialerListFreqMsg.style.display = 'block';
   }
 });
 
@@ -5473,6 +5604,27 @@ async function loadDialerList(entries) {
   renderDialerCard();
 }
 
+// A deleted CRM client must disappear from any dialer list currently loaded
+// (Mario: "deleting the client should make them disappear everywhere
+// including the dialer... row, dialer option, all of it gone") -- called
+// from BOTH delete paths (the client detail view's cdDeleteBtn and the
+// Dialer panel's own dciDeleteBtn), since the dialer list persists across
+// tab switches and a client can be deleted from either place.
+function removeClientFromDialerList(clientId) {
+  if (!clientId) return;
+  const before = dialerList.length;
+  dialerList = dialerList.filter((e) => e.clientId !== clientId);
+  if (dialerList.length === before) return; // this list never had that client
+  if (dialerIndex >= dialerList.length) dialerIndex = Math.max(0, dialerList.length - 1);
+  dialerEmpty.style.display = dialerList.length ? 'none' : 'block';
+  dialerCardWrap.style.display = dialerList.length ? 'block' : 'none';
+  if (dialerList.length) {
+    renderDialerCard();
+  } else {
+    dialerListEl.innerHTML = '';
+  }
+}
+
 function normalizePhone(raw) {
   const justDigits = (raw || '').replace(/\D/g, '');
   if (!justDigits) return '';
@@ -5524,16 +5676,24 @@ dialerAddCrmBtn.addEventListener('click', () => {
   clientFormOverlay.classList.add('show');
 });
 
+let dialerCurrentClientData = null;
+
 async function updateDialerClientInfo(entry) {
   const token = ++dialerInfoToken;
   if (!entry.clientId) {
     dialerClientInfoEl.style.display = 'none';
+    dialerCurrentClientData = null;
     return;
   }
   const res = await fetch(`/api/crm/clients/${entry.clientId}`);
   if (token !== dialerInfoToken) return; // a newer entry was selected while this was loading
   if (!res.ok) { dialerClientInfoEl.style.display = 'none'; return; }
   const c = await res.json();
+  dialerCurrentClientData = c;
+  // Fresh entry, fresh editor -- never leave the frequency panel open (or
+  // showing a stale schedule) carried over from whoever was on screen before.
+  document.getElementById('dciFreqPanel').style.display = 'none';
+  document.getElementById('dciFreqMsg').style.display = 'none';
 
   document.getElementById('dciPhone').textContent = c.phone || '—';
   document.getElementById('dciContact').textContent = c.contact_info || '—';
@@ -5565,15 +5725,77 @@ document.getElementById('dciDeleteBtn').addEventListener('click', async () => {
   const entry = dialerList[dialerIndex];
   if (!entry || !entry.clientId) return;
   if (!confirm('Delete this client and all their notes? This cannot be undone.')) return;
-  await fetch(`/api/crm/clients/${entry.clientId}`, { method: 'DELETE' });
-  entry.clientId = null;  // the dial entry itself stays (still dialable), just unlinked from the CRM
-  dialerClientInfoEl.style.display = 'none';
-  dialerAddCrmBtn.style.display = 'inline-block';
+  const clientId = entry.clientId;
+  await fetch(`/api/crm/clients/${clientId}`, { method: 'DELETE' });
   loadClients();
   // Same "keep the Missed Follow-ups banner honest" refresh cdDeleteBtn already
   // does (build order #112/#113) — a delete from here can equally leave a
   // stale name in that banner if it's the active source.
   if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
+  // Mario: deleting a client should remove them from the dialer entirely --
+  // the row, the "In your CRM" panel, all of it -- not just unlink the entry
+  // (build order #128; superseding #127's original "unlink only" behavior).
+  removeClientFromDialerList(clientId);
+});
+
+/* ---- Change a linked client's follow-up frequency right from the Dialer,
+   no need to open their full card first (build order #129) ---- */
+const dciFreqToggleBtn = document.getElementById('dciFreqToggleBtn');
+const dciFreqPanel = document.getElementById('dciFreqPanel');
+const dciFrequency = document.getElementById('dciFrequency');
+const dciCustomRow = document.getElementById('dciCustomRow');
+const dciCustomAmount = document.getElementById('dciCustomAmount');
+const dciCustomUnit = document.getElementById('dciCustomUnit');
+const dciFreqMsg = document.getElementById('dciFreqMsg');
+
+dciFreqToggleBtn.addEventListener('click', () => {
+  if (!dialerCurrentClientData) return;
+  const opening = dciFreqPanel.style.display === 'none';
+  if (opening) {
+    applyFrequencyToElements(dialerCurrentClientData.interval_days, dciFrequency, dciCustomRow, dciCustomAmount, dciCustomUnit);
+    dciFreqMsg.style.display = 'none';
+  }
+  dciFreqPanel.style.display = opening ? 'block' : 'none';
+});
+
+dciFrequency.addEventListener('change', () => {
+  dciCustomRow.style.display = dciFrequency.value === 'custom' ? 'flex' : 'none';
+});
+
+document.getElementById('dciFreqCancelBtn').addEventListener('click', () => {
+  dciFreqPanel.style.display = 'none';
+});
+
+document.getElementById('dciFreqSaveBtn').addEventListener('click', async () => {
+  const entry = dialerList[dialerIndex];
+  const c = dialerCurrentClientData;
+  if (!entry || !entry.clientId || !c) return;
+  // This route is a full replace (see hosted_sync/crm_routes gotchas on
+  // update_client) -- every other field has to be sent back unchanged along
+  // with the new schedule, or it would silently blank them out.
+  try {
+    const res = await fetch(`/api/crm/clients/${entry.clientId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: c.name, phone: c.phone, contact_info: c.contact_info, address: c.address, email: c.email,
+        frequency_key: dciFrequency.value,
+        custom_amount: dciCustomAmount.value,
+        custom_unit: dciCustomUnit.value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) { dciFreqMsg.textContent = data.error || 'Could not save the schedule.'; dciFreqMsg.style.display = 'block'; return; }
+    loadClients();
+    // updateDialerClientInfo() resets/hides this same panel+message as part
+    // of its normal refresh, so the confirmation must be shown AFTER it runs,
+    // not before -- otherwise it would just get immediately hidden again.
+    if (dialerList[dialerIndex] === entry) await updateDialerClientInfo(entry);
+    dciFreqMsg.textContent = '✓ Schedule updated';
+    dciFreqMsg.style.display = 'block';
+  } catch (e) {
+    dciFreqMsg.textContent = 'Could not reach the server. Try again.';
+    dciFreqMsg.style.display = 'block';
+  }
 });
 
 /* ===================== Dictated call notes (free, in-browser) ===================== */
