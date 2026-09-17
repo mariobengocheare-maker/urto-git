@@ -1495,6 +1495,7 @@
         <div id="dciFollowup" class="dialer-client-info-followup"></div>
         <div class="dialer-client-info-notes-head">Notes</div>
         <div id="dciNotes"></div>
+        <button type="button" class="danger small" id="dciDeleteBtn" style="display:inline-block; margin-top:10px; background:var(--danger-fg)">Delete Client</button>
       </div>
 
       <!-- Call notes work for ANY dialer entry, in your CRM or not. For a lead
@@ -5559,6 +5560,21 @@ async function updateDialerClientInfo(entry) {
 
   dialerClientInfoEl.style.display = 'block';
 }
+
+document.getElementById('dciDeleteBtn').addEventListener('click', async () => {
+  const entry = dialerList[dialerIndex];
+  if (!entry || !entry.clientId) return;
+  if (!confirm('Delete this client and all their notes? This cannot be undone.')) return;
+  await fetch(`/api/crm/clients/${entry.clientId}`, { method: 'DELETE' });
+  entry.clientId = null;  // the dial entry itself stays (still dialable), just unlinked from the CRM
+  dialerClientInfoEl.style.display = 'none';
+  dialerAddCrmBtn.style.display = 'inline-block';
+  loadClients();
+  // Same "keep the Missed Follow-ups banner honest" refresh cdDeleteBtn already
+  // does (build order #112/#113) — a delete from here can equally leave a
+  // stale name in that banner if it's the active source.
+  if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
+});
 
 /* ===================== Dictated call notes (free, in-browser) ===================== */
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
