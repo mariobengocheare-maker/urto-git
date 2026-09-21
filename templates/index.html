@@ -2859,6 +2859,34 @@ if (!HOSTED) {
       navigator.sendBeacon('/api/shutdown', new Blob([JSON.stringify({ tab_id: URTO_TAB_ID })], { type: 'application/json' }));
     }
   });
+
+  // Mario: "make it so that i can refresh the page and update urto" (build
+  // order #131) -- previously the only auto-update check ran before a fresh
+  // server START (launch_desktop.pyw's check_for_auto_update()), so simply
+  // refreshing an already-open tab never checked anything. Runs the same
+  // check on every desktop page load instead; if the server reports a newer
+  // version is available, it's already spawned a separate process to kill
+  // itself and relaunch with the new files (see app.py's /api/check_update),
+  // and this just needs to wait for that to finish, then reload for real.
+  fetch('/api/check_update', { method: 'POST' }).then(r => r.json()).then(data => {
+    if (!data || !data.update_available) return;
+    const banner = document.createElement('div');
+    banner.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:9999; padding:10px 16px; text-align:center; font-size:.9em; background:var(--gold); color:#0b1220; font-weight:600;';
+    banner.textContent = `🔄 Updating URTO to v${data.version}... this page will reload automatically.`;
+    document.body.appendChild(banner);
+    let sawServerDown = false;
+    let attempts = 0;
+    const poll = () => {
+      attempts++;
+      if (attempts > 90) { banner.textContent = 'Taking longer than expected — try reloading the page yourself.'; return; }
+      fetch('/api/version', { cache: 'no-store' }).then(r => {
+        if (!r.ok) { sawServerDown = true; setTimeout(poll, 1000); return; }
+        if (sawServerDown) { location.reload(); return; }
+        setTimeout(poll, 1000);
+      }).catch(() => { sawServerDown = true; setTimeout(poll, 1000); });
+    };
+    setTimeout(poll, 1000);
+  }).catch(() => {});
 }
 
 const backupStatusText = document.getElementById('backupStatusText');

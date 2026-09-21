@@ -14,8 +14,12 @@ automation, driven from your own machine.
 import csv
 import io
 import os
+import re
+import subprocess
+import sys
 import threading
 import time
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -85,7 +89,7 @@ def hosted_setup():
     )
 
 
-_UNGATED_ENDPOINTS = {"hosted_setup", "static", "heartbeat", "shutdown", "api_version"}
+_UNGATED_ENDPOINTS = {"hosted_setup", "static", "heartbeat", "shutdown", "api_version", "api_check_update"}
 
 
 @app.before_request
@@ -93,9 +97,9 @@ def _require_hosted_setup():
     # Every page needs URTO Cloud connected before it's useful (CRM/Dialer/
     # Transactions all proxy there now) -- force the one-time setup form
     # first rather than letting Mario land on a broken-looking CRM tab.
-    # Skip Trace's own infrastructure routes (heartbeat/shutdown/version)
-    # are desktop-only plumbing unrelated to hosted sync and must keep
-    # working regardless of setup status.
+    # Skip Trace's own infrastructure routes (heartbeat/shutdown/version/
+    # check_update) are desktop-only plumbing unrelated to hosted sync and
+    # must keep working regardless of setup status.
     if request.endpoint in _UNGATED_ENDPOINTS or (request.endpoint or "").startswith("proxy"):
         return None
     if not hosted_sync.is_configured():
@@ -107,9 +111,14 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.17.0"
+APP_VERSION = "2.18.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
+
+# Kept in sync with launch_desktop.pyw's own copy of this same URL (see
+# build order #131's "refresh the page to update" feature) -- update both if
+# the branch ever changes.
+REPO_RAW_APP_URL = "https://raw.githubusercontent.com/mariobengocheare-maker/urto-git/claude/context-window-dgen3k/app.py"
 
 
 def _get_last_updated_display() -> str:
@@ -392,6 +401,64 @@ def api_version():
     # "something's already on this port, but it's a stale pre-update process"
     # and self-heal instead of just opening a browser tab to the old code.
     return jsonify({"version": APP_VERSION})
+
+
+def _remote_app_version():
+    """Same lightweight "read APP_VERSION out of the raw GitHub source, no
+    zip download yet" trick launch_desktop.pyw's own _remote_version()
+    already uses (see build order #123) — duplicated here rather than
+    imported, since importing a .pyw file needs the same explicit-loader
+    dance that module already exists to demonstrate, and this is a handful
+    of lines. Returns None on any failure (no internet, GitHub hiccup) —
+    an update check must never be able to break a normal page load."""
+    try:
+        with urllib.request.urlopen(REPO_RAW_APP_URL, timeout=6) as r:
+            text = r.read().decode("utf-8", errors="replace")
+        m = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', text)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+@app.route("/api/check_update", methods=["POST"])
+def api_check_update():
+    """Mario: "make it so that i can refresh the page and update urto" —
+    see build order #131. Previously the only auto-update trigger was
+    launch_desktop.pyw's check_for_auto_update(), which only ever runs
+    before a FRESH server start (nothing already up) — a plain browser
+    refresh against an already-running server never checked anything.
+    This route runs the same GitHub version check on every page load
+    instead, and if a newer version exists, spawns launch_desktop.pyw as a
+    separate DETACHED process to actually perform the kill+update+relaunch.
+
+    That has to happen in a genuinely separate process, not inline here:
+    urto_updater.pyw's run_update() (which check_for_auto_update() calls)
+    starts by killing whatever's running app.py from this folder, matched
+    on command line — which is THIS exact process. Running that update
+    logic directly inside the request that's asking for it would kill
+    itself mid-update, before the download/install ever finished.
+
+    Never fires while a real Skip Trace scrape is running (_job_in_progress())
+    — a hard external process-kill has no chance to write a partial-results
+    file the way Stop-button/heartbeat-timeout shutdowns already take care
+    to do; the next page load after the scrape finishes will pick the
+    update back up."""
+    if _job_in_progress():
+        return jsonify({"update_available": False, "deferred": True})
+    remote = _remote_app_version()
+    if not remote or remote == APP_VERSION:
+        return jsonify({"update_available": False})
+    here = os.path.dirname(os.path.abspath(__file__))
+    creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.join(here, "launch_desktop.pyw"), "--relaunch"],
+            cwd=here, creationflags=creationflags,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+        )
+    except Exception:
+        return jsonify({"update_available": False})
+    return jsonify({"update_available": True, "version": remote})
 
 
 @app.route("/api/upload", methods=["POST"])

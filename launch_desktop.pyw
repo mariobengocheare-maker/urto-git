@@ -172,6 +172,34 @@ def start_server():
     )
 
 
+def relaunch_after_update():
+    """Spawned by app.py's own /api/check_update route (see build order
+    #131) when Mario just refreshes his already-open browser tab and a
+    newer version turns out to be available on GitHub — he no longer has
+    to fully close URTO and re-open the desktop icon first for an update
+    to apply. This has to run as its OWN separate process rather than
+    inline inside app.py: check_for_auto_update() -> run_update() kills
+    whatever's currently running app.py by matching its command line,
+    which at the moment app.py spawns this would be app.py itself — doing
+    that update logic inside that same live process would kill itself
+    mid-download, before ever finishing. Here, running as a distinct
+    process, the kill only ever targets the OTHER (old) process.
+
+    Unlike main()'s normal flow, this unconditionally runs the update
+    check regardless of whether something's already up (app.py already
+    confirmed a newer version exists before spawning this at all), and
+    deliberately never opens a browser tab -- Mario's existing tab is
+    already polling /api/version waiting for the server to come back, and
+    will reload itself the instant it does."""
+    check_for_auto_update()
+    if not is_up():
+        start_server()
+        for _ in range(30):
+            if is_up():
+                break
+            time.sleep(0.5)
+
+
 def main():
     if not is_up():
         check_for_auto_update()
@@ -187,4 +215,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--relaunch" in sys.argv:
+        relaunch_after_update()
+    else:
+        main()
