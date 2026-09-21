@@ -1233,6 +1233,12 @@ def init_db():
             called_at TEXT NOT NULL
         )
     """)
+    # Migration for a call_log table from before "skip" entries existed (see
+    # build order #130) -- every pre-existing row is a real logged call, so
+    # the ADD COLUMN's own DEFAULT backfills them all as 'call' for free.
+    call_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(call_log)").fetchall()}
+    if "kind" not in call_log_cols:
+        conn.execute("ALTER TABLE call_log ADD COLUMN kind TEXT NOT NULL DEFAULT 'call'")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1878,17 +1884,34 @@ def merge_clients(keep_id, remove_ids) -> dict:
     return client_to_dict(row)
 
 
+def _reset_followup_schedule(conn, row) -> None:
+    """Pushes a client's next_followup_date to exactly one interval from
+    TODAY, whatever it currently is -- shared by log_call()/skip_followup()
+    (see build order #130). Deliberately unconditional: an earlier version
+    only did this when the existing due date was already overdue/due-today,
+    which meant a client called (or skipped) EARLY -- before their
+    scheduled date -- kept their original, now-stale due date untouched and
+    could still show back up as "today's follow-up" days later even though
+    Mario had genuinely just followed up with them. Always landing on
+    today+interval both fixes that and still satisfies the original
+    "stacked missed follow-ups fully clear in one action" guarantee from
+    build order #65, since today+interval can never itself be in the past."""
+    if not row["interval_days"]:
+        return
+    new_due = _today() + timedelta(days=row["interval_days"])
+    conn.execute("UPDATE clients SET next_followup_date = ? WHERE id = ?", (new_due.isoformat(), row["id"]))
+
+
 def log_call(client_id) -> dict:
     """Stamps a client as called just now — fired whenever Mario actually
     places a call from the Dialer (there's no reliable way to detect a
     tel: link's call was answered/completed, so 'clicked to call' is the
     same approximation the rest of the Dialer already uses). Every call is
-    also appended to call_log (full history), not just the latest
-    timestamp — see list_call_history().
+    also appended to call_log (full history, kind='call'), not just the
+    latest timestamp — see list_call_history().
 
-    If the client's automatic follow-up was overdue or due today at the
-    moment of the call, this also advances next_followup_date the same way
-    complete_followup() does — this is what makes a client drop off the
+    Also always advances next_followup_date to today+interval (see
+    _reset_followup_schedule) — this is what makes a client drop off the
     Dialer's "Missed Follow-ups"/"Today's Follow-ups" sources the instant
     Mario actually calls them, instead of staying listed until he separately
     opens the client card and hits "Mark Follow-up Complete"."""
@@ -1899,26 +1922,38 @@ def log_call(client_id) -> dict:
         return None
     now = _now().isoformat(timespec="seconds")
     conn.execute("UPDATE clients SET last_called_at = ? WHERE id = ?", (now, client_id))
-    conn.execute("INSERT INTO call_log (client_id, called_at) VALUES (?, ?)", (client_id, now))
-    if row["interval_days"] and row["next_followup_date"]:
-        current_due = date.fromisoformat(row["next_followup_date"])
-        today = _today()
-        if current_due <= today:
-            # Catch the schedule all the way up to the next date that isn't
-            # itself already in the past -- a single +interval hop (what the
-            # client-detail "Mark Follow-up Complete" button does) isn't
-            # enough here: a client missed for several stacked intervals
-            # would still show up overdue by less than one interval and
-            # never actually leave the Dialer's "Missed Follow-ups" list.
-            # Calling them must always clear the overdue status outright.
-            new_due = current_due
-            while new_due <= today:
-                new_due += timedelta(days=row["interval_days"])
-            conn.execute("UPDATE clients SET next_followup_date = ? WHERE id = ?", (new_due.isoformat(), client_id))
+    conn.execute("INSERT INTO call_log (client_id, called_at, kind) VALUES (?, ?, 'call')", (client_id, now))
+    _reset_followup_schedule(conn, row)
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
     on_data_changed("call logged")
+    return client_to_dict(row)
+
+
+def skip_followup(client_id) -> dict:
+    """Mario, going down a Dialer list, deliberately choosing NOT to call
+    someone this round rather than actually calling them (see build order
+    #130) -- a manual, explicitly-clicked action, never automatic. Advances
+    the schedule exactly the same way log_call() does (so a skipped client
+    also drops off Missed/Today's Follow-ups instead of nagging again
+    tomorrow), but deliberately does NOT touch last_called_at -- that field
+    means "the last time Mario actually spoke to/dialed this person," which
+    a skip explicitly isn't. Logged into the same call_log table as a real
+    call (kind='skip') so it shows up in the same Call History Mario already
+    knows to check, distinguished from a real call there."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    now = _now().isoformat(timespec="seconds")
+    conn.execute("INSERT INTO call_log (client_id, called_at, kind) VALUES (?, ?, 'skip')", (client_id, now))
+    _reset_followup_schedule(conn, row)
+    conn.commit()
+    row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    conn.close()
+    on_data_changed("follow-up skipped")
     return client_to_dict(row)
 
 
@@ -1945,7 +1980,7 @@ def get_missed_followups() -> list:
 def list_call_history(client_id) -> list:
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id, called_at FROM call_log WHERE client_id = ? ORDER BY called_at DESC, id DESC",
+        "SELECT id, called_at, kind FROM call_log WHERE client_id = ? ORDER BY called_at DESC, id DESC",
         (client_id,),
     ).fetchall()
     conn.close()

@@ -137,6 +137,14 @@ def crm_log_call(client_id):
     return jsonify(client)
 
 
+@crm_bp.route("/api/crm/clients/<int:client_id>/skip_followup", methods=["POST"])
+def crm_skip_followup(client_id):
+    client = crm.skip_followup(client_id)
+    if not client:
+        abort(404)
+    return jsonify(client)
+
+
 @crm_bp.route("/api/crm/clients/<int:client_id>/call_history", methods=["GET"])
 def crm_call_history(client_id):
     if not crm.get_client(client_id):

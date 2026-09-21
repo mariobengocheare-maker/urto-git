@@ -1518,7 +1518,11 @@
         <div class="contact-line"><span class="lbl">Address</span><span id="dciAddress">—</span></div>
         <div class="contact-line"><span class="lbl">Last called (Miami Time)</span><span id="dciLastCalled">—</span> <a href="#" class="call-history-link" id="dciCallHistoryLink">Call History</a></div>
         <div id="dciFollowup" class="dialer-client-info-followup"></div>
-        <button type="button" class="ghost small" id="dciFreqToggleBtn" style="margin-top:6px">✏️ Change follow-up schedule</button>
+        <div class="row" style="gap:8px; margin-top:6px">
+          <button type="button" class="ghost small" id="dciFreqToggleBtn">✏️ Change follow-up schedule</button>
+          <button type="button" class="ghost small" id="dciSkipFollowupBtn">⏭ Skip Follow-up</button>
+        </div>
+        <div id="dciSkipMsg" style="display:none; margin-top:6px; font-size:.85em; color:var(--gold)"></div>
         <div id="dciFreqPanel" style="display:none; margin-top:8px">
           <select id="dciFrequency">
             <option value="none">No automatic follow-up</option>
@@ -3755,7 +3759,7 @@ async function openCallHistory(clientId, clientName) {
     chList.innerHTML = '<div class="empty-state">No calls logged yet.</div>';
     return;
   }
-  chList.innerHTML = history.map(h => `<div class="ch-item">${escapeHtml(formatNoteTime(h.called_at))}</div>`).join('');
+  chList.innerHTML = history.map(h => `<div class="ch-item">${escapeHtml(formatNoteTime(h.called_at))}${h.kind === 'skip' ? ' <span class="status-pill SKIPPED">Skipped</span>' : ''}</div>`).join('');
 }
 
 document.getElementById('callHistoryCloseBtn').addEventListener('click', () => callHistoryOverlay.classList.remove('show'));
@@ -5694,6 +5698,7 @@ async function updateDialerClientInfo(entry) {
   // showing a stale schedule) carried over from whoever was on screen before.
   document.getElementById('dciFreqPanel').style.display = 'none';
   document.getElementById('dciFreqMsg').style.display = 'none';
+  document.getElementById('dciSkipMsg').style.display = 'none';
 
   document.getElementById('dciPhone').textContent = c.phone || '—';
   document.getElementById('dciContact').textContent = c.contact_info || '—';
@@ -5795,6 +5800,34 @@ document.getElementById('dciFreqSaveBtn').addEventListener('click', async () => 
   } catch (e) {
     dciFreqMsg.textContent = 'Could not reach the server. Try again.';
     dciFreqMsg.style.display = 'block';
+  }
+});
+
+/* ---- Skip a follow-up from the Dialer instead of calling (build order
+   #130) -- a deliberate, manually-clicked action while going down a list;
+   never fires on its own. Advances the schedule the same way an actual
+   logged call does (so the client drops off Missed/Today's Follow-ups
+   instead of nagging again tomorrow) but is logged separately from a real
+   call, distinguished in Call History. ---- */
+const dciSkipFollowupBtn = document.getElementById('dciSkipFollowupBtn');
+const dciSkipMsg = document.getElementById('dciSkipMsg');
+
+dciSkipFollowupBtn.addEventListener('click', async () => {
+  const entry = dialerList[dialerIndex];
+  if (!entry || !entry.clientId) return;
+  try {
+    const res = await fetch(`/api/crm/clients/${entry.clientId}/skip_followup`, { method: 'POST' });
+    if (!res.ok) { dciSkipMsg.textContent = 'Could not skip this follow-up. Try again.'; dciSkipMsg.style.display = 'block'; return; }
+    if (dialerList[dialerIndex] === entry) await updateDialerClientInfo(entry);
+    dciSkipMsg.textContent = '✓ Follow-up skipped';
+    dciSkipMsg.style.display = 'block';
+    // Same "keep Missed Follow-ups honest" refresh every other mutation from
+    // this panel already does (build order #112/#113) -- a skip can just as
+    // easily leave a stale name in that banner if it's the active source.
+    if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
+  } catch (e) {
+    dciSkipMsg.textContent = 'Could not reach the server. Try again.';
+    dciSkipMsg.style.display = 'block';
   }
 });
 
