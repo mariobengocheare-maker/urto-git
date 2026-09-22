@@ -16,6 +16,7 @@ import shutil
 import string
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1128,28 +1129,53 @@ def list_available_snapshots() -> list:
     return results
 
 
+def _read_data_health_counts():
+    current = _count_clients_in_db(DB_PATH) or 0
+    mirrors = [
+        s for s in list_available_snapshots()
+        if s["filename"] == LATEST_NAME and s["client_count"] is not None
+    ]
+    best = max((s["client_count"] for s in mirrors), default=current)
+    return current, best
+
+
 def check_data_health() -> dict:
     """Compares the LIVE database's client count against the most recent
     known backup mirror (urto_crm_latest.db, whichever destination has the
     newest one) — under normal operation these two should always be in
-    lockstep, since on_data_changed() rewrites the mirror the instant
+    lockstep, since on_data_changed() rewrites the mirror shortly after
     anything changes (client added/edited/deleted). If the live DB somehow
     has FEWER clients than that mirror, something bypassed the normal
     save-and-mirror path entirely — e.g. a stale or freshly-recreated
     database file got swapped into place (exactly what happened to Mario:
     contacts added while running one URTO folder never carried over when a
     different folder/location ended up being the one actually running
-    later). A genuine, intentional deletion by Mario is invisible to this
-    check, since the mirror would already have been updated to match at the
-    same moment the deletion happened."""
-    current_count = _count_clients_in_db(DB_PATH) or 0
-    mirrors = [
-        s for s in list_available_snapshots()
-        if s["filename"] == LATEST_NAME and s["client_count"] is not None
-    ]
-    if not mirrors:
-        return {"ok": True, "current_count": current_count, "best_known_count": current_count}
-    best = max(s["client_count"] for s in mirrors)
+    later).
+
+    A genuine, intentional deletion by Mario is *usually* invisible to this
+    check, since the mirror gets updated to match right away — but since
+    build order #83 moved on_data_changed()'s mirror write onto a
+    background thread (so a real Google Drive API round-trip can never
+    block the save itself), there's now a real — if normally brief —
+    window right after any edit/deletion where the live DB has already
+    moved but the mirror hasn't caught up yet, especially if a PRIOR
+    change's own backup pass is still mid-flight on a slow network call
+    (both share _backup_lock). A mismatch caught in exactly that window
+    would otherwise look like a false "some data may be missing" alarm for
+    a delete Mario just did on purpose. `_dirty` is true for exactly that
+    window (set the instant a change happens, cleared only once the
+    corresponding backup pass finishes), so a mismatch found while it's
+    still true gets a brief bounded wait-and-recheck before ever being
+    reported, rather than declaring data loss off a stale mirror read."""
+    current_count, best = _read_data_health_counts()
+    if current_count >= best:
+        return {"ok": True, "current_count": current_count, "best_known_count": best}
+
+    for _ in range(15):
+        if not _dirty:
+            break
+        time.sleep(0.2)
+    current_count, best = _read_data_health_counts()
     return {"ok": current_count >= best, "current_count": current_count, "best_known_count": best}
 
 
