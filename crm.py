@@ -1661,6 +1661,39 @@ def client_to_dict(row) -> dict:
     return d
 
 
+def _repair_stale_followup_schedule(conn, d: dict) -> bool:
+    """Self-heals a client's schedule against a real bug that shipped before
+    build order #130's fix: log_call() used to only advance
+    next_followup_date when the client was ALREADY overdue/due-today at the
+    moment of the call, so a call placed EARLY (before the scheduled date)
+    left the stale due date completely untouched -- exactly what happened to
+    "Luis Gilgorri" (called Sep 17, schedule anchor still sitting on Sep 21
+    from an Aug 10 Outlook import, so it kept showing "overdue" days after
+    he'd genuinely just been called). The code fix alone only prevents this
+    for FUTURE calls -- it can't retroactively fix a schedule a call from
+    before the fix already left stuck, so this recomputes it the same way
+    the FIXED log_call() would have at the time, using the call's own real
+    date as the anchor (never today's date) -- a client genuinely never
+    called since is completely untouched, and an already-correct schedule is
+    a pure no-op every time after the first correction. Same self-healing-
+    on-read pattern already established for get_transaction()'s document-
+    checklist backfill (build order #119) -- only ever moves the due date
+    FORWARD, never invents or backdates anything."""
+    if not d["interval_days"] or not d["next_followup_date"] or not d["last_called_at"]:
+        return False
+    try:
+        last_call_date = date.fromisoformat(d["last_called_at"][:10])
+    except ValueError:
+        return False
+    candidate = last_call_date + timedelta(days=d["interval_days"])
+    current_due = date.fromisoformat(d["next_followup_date"])
+    if candidate <= current_due:
+        return False
+    conn.execute("UPDATE clients SET next_followup_date = ? WHERE id = ?", (candidate.isoformat(), d["id"]))
+    d["next_followup_date"] = candidate.isoformat()
+    return True
+
+
 def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None, start_date=None, email=None) -> dict:
     dup = find_client_by_phone(phone)
     if dup:
@@ -1720,9 +1753,18 @@ def _attach_list_followups(conn, clients: list):
 def list_clients() -> list:
     conn = get_conn()
     rows = conn.execute("SELECT * FROM clients ORDER BY name COLLATE NOCASE").fetchall()
-    clients = [client_to_dict(r) for r in rows]
+    dicts = [dict(r) for r in rows]
+    # A plain generator passed to any() short-circuits on the first True and
+    # would silently skip repairing every client after the first stale one --
+    # each call here is a real DB write with a side effect, so every row must
+    # actually run, hence the list comprehension instead of a lazy generator.
+    repaired = any([_repair_stale_followup_schedule(conn, d) for d in dicts])
+    conn.commit()
+    clients = [client_to_dict(d) for d in dicts]
     _attach_list_followups(conn, clients)
     conn.close()
+    if repaired:
+        on_data_changed("follow-up schedule self-healed")
     return clients
 
 
@@ -1732,9 +1774,14 @@ def get_client(client_id) -> dict:
     if not row:
         conn.close()
         return None
-    client = client_to_dict(row)
+    d = dict(row)
+    repaired = _repair_stale_followup_schedule(conn, d)
+    conn.commit()
+    client = client_to_dict(d)
     _attach_list_followups(conn, [client])
     conn.close()
+    if repaired:
+        on_data_changed("follow-up schedule self-healed")
     return client
 
 
