@@ -8,8 +8,10 @@ keep correct, not two copies that can drift apart.
 """
 
 import json
+from urllib.parse import urlparse
 
-from flask import Blueprint, abort, jsonify, request, send_file
+import requests
+from flask import Blueprint, abort, jsonify, make_response, request, send_file
 
 import crm
 
@@ -952,3 +954,92 @@ def commission_download_file(entry_id):
         as_attachment=bool(request.args.get("download")),
         download_name=entry.get("file_original_name") or "attachment",
     )
+
+
+_ZILLOW_PROXY_ALLOWED_HOSTS = {"www.zillow.com", "zillow.com"}
+_ZILLOW_PROXY_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _zillow_proxy_message(text):
+    # A plain, self-contained HTML page (not a bare error status) so a
+    # failure renders as a readable message INSIDE the iframe, matching the
+    # modal's own "may be blocking it" disclaimer above it, rather than the
+    # browser's own blank/generic network-error page.
+    html = f"""<!doctype html><html><body style="margin:0;height:100vh;display:flex;
+    align-items:center;justify-content:center;background:#111827;color:#cbd5e1;
+    font-family:-apple-system,Segoe UI,Arial,sans-serif;text-align:center;padding:24px;
+    box-sizing:border-box;"><div>{text}</div></body></html>"""
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp
+
+
+@crm_bp.route("/api/crm/zillow_proxy")
+def zillow_proxy():
+    """Fetches a Zillow page server-side and re-serves it with Zillow's own
+    framing-block headers stripped, so the Dialer's preview modal can show
+    it in an iframe -- Zillow (like most listing sites) sends
+    X-Frame-Options/CSP headers that make a normal browser refuse to embed
+    its pages directly (see build order #134/#135). Only ever proxies an
+    actual zillow.com URL (never an arbitrary caller-supplied one -- that
+    would make this an open proxy/SSRF vector). This is a best-effort
+    workaround, not a guarantee: Zillow is known to aggressively challenge/
+    block traffic that doesn't look like a real browser, so a plain
+    server-side fetch may still get refused or served a bot-check page
+    instead of the real listing -- if that keeps happening, the honest fix
+    is dropping this and keeping just the plain "Open in Zillow" link,
+    which always works regardless."""
+    target = request.args.get("url", "")
+    parsed = urlparse(target)
+    if parsed.scheme != "https" or parsed.netloc not in _ZILLOW_PROXY_ALLOWED_HOSTS:
+        abort(400)
+
+    try:
+        upstream = requests.get(
+            target,
+            headers={
+                "User-Agent": _ZILLOW_PROXY_USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+            timeout=12,
+        )
+    except requests.exceptions.RequestException:
+        return _zillow_proxy_message(
+            "Couldn't reach Zillow right now — use “Open in Zillow” below instead."
+        )
+
+    content_type = upstream.headers.get("Content-Type", "")
+    if upstream.status_code != 200 or "text/html" not in content_type:
+        return _zillow_proxy_message(
+            "Zillow didn't return a normal page here (it may be blocking automated "
+            "requests) — use “Open in Zillow” below instead."
+        )
+
+    html = upstream.text
+    # The browser resolves this response's relative URLs (assets, links,
+    # even some fetch()/XHR calls) against wherever it was ACTUALLY fetched
+    # from -- URTO's own domain -- not the real zillow.com URL it represents.
+    # Injecting <base> fixes plain relative links/asset paths; it does NOT
+    # fix same-origin API calls the page's own JS makes (those still resolve
+    # against zillow.com and are subject to normal CORS, so some dynamic
+    # content on the page may simply not load -- an accepted limitation of
+    # this workaround, not a bug to chase further).
+    base_tag = '<base href="https://www.zillow.com/">'
+    lower_html = html.lower()
+    head_idx = lower_html.find("<head")
+    if head_idx != -1:
+        gt = html.find(">", head_idx)
+        insert_at = gt + 1 if gt != -1 else head_idx
+    else:
+        insert_at = 0
+    html = html[:insert_at] + base_tag + html[insert_at:]
+
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    # Deliberately never forwards Zillow's own X-Frame-Options/CSP headers --
+    # not doing so is the entire point of this proxy.
+    return resp

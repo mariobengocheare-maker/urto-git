@@ -5694,9 +5694,16 @@ function normalizePhone(raw) {
    a strong match. Mario explicitly chose the in-app iframe-preview option
    (over a plain link-only button or a scraped photo/price card) knowing
    Zillow, like most listing sites, may block being framed by another
-   site -- hence the "may not load" note and the always-working "Open in
-   Zillow" link in the modal, which works regardless of whether the iframe
-   itself renders. ---- */
+   site -- confirmed on his real PC (build order #135), so the iframe now
+   loads through /api/crm/zillow_proxy (crm_routes.py), which fetches the
+   real page server-side and strips the framing-block headers before
+   re-serving it. This is a best-effort workaround, not a guarantee --
+   Zillow may still refuse/challenge a plain server-side fetch -- hence the
+   "may not load" note and the always-working "Open in Zillow" link (which
+   points at the REAL zillow.com URL, never the proxy) staying in the
+   modal regardless. If this keeps not working well, the honest fix is
+   dropping the proxy/iframe entirely and keeping just a plain button that
+   opens Zillow directly -- Mario's own explicit fallback instruction. ---- */
 function buildZillowUrl(address) {
   const clean = (address || '').replace(/[,#]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) return null;
@@ -5724,7 +5731,10 @@ dialerZillowBtn.addEventListener('click', () => {
 
 function openZillowPreview(url) {
   document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
-  zillowPreviewFrame.src = url;
+  // The iframe loads through the proxy (strips Zillow's framing-block
+  // headers); the Open-in-Zillow link stays pointed at the REAL zillow.com
+  // URL so it always works regardless of whether the proxy/iframe does.
+  zillowPreviewFrame.src = '/api/crm/zillow_proxy?url=' + encodeURIComponent(url);
   zillowPreviewOpenLink.href = url;
   zillowPreviewOverlay.classList.add('show');
 }
