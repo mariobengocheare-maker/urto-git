@@ -2253,24 +2253,6 @@
   </div>
 </div>
 
-<!-- Zillow preview for a dialer entry's address -- an in-app iframe attempt.
-     Zillow is a third-party site and (per Mario's own choice, aware of the
-     tradeoff) may block being framed -- see the "may not load" note and the
-     always-available "Open in Zillow" link, which works regardless. -->
-<div class="modal-overlay" id="zillowPreviewOverlay">
-  <div class="modal" style="max-width:900px">
-    <div class="modal-head">
-      <h2 id="zillowPreviewTitle">🏠 Zillow</h2>
-      <button class="modal-close" id="zillowPreviewCloseBtn">&times;</button>
-    </div>
-    <div style="font-size:.85em; color:var(--text-secondary); margin:-6px 0 10px">If the preview below doesn't load, Zillow may be blocking it from showing inside another site — use "Open in Zillow" below.</div>
-    <iframe id="zillowPreviewFrame" src="about:blank" style="width:100%; height:70vh; border:0; border-radius:8px; background:#fff;"></iframe>
-    <div class="modal-actions">
-      <a id="zillowPreviewOpenLink" class="ghost small" href="#" target="_blank" rel="noopener" style="text-decoration:none; display:inline-flex; align-items:center; padding:6px 12px; border-radius:7px;">Open in Zillow ↗</a>
-    </div>
-  </div>
-</div>
-
 <!-- Edit Commission Entry modal -->
 <div class="modal-overlay" id="commissionEditOverlay">
   <div class="modal">
@@ -5684,26 +5666,20 @@ function normalizePhone(raw) {
   return '+' + justDigits;
 }
 
-/* ---- Zillow preview for whatever address is on file for the current
-   dialer entry (Mario: "for every contact it preloads the zillow link to
-   their address... and shows a preview i can click into"). Zillow has no
-   free public API for a single-address lookup, so the link is built from
-   its well-known "/homes/<address>_rb/" quick-search URL pattern -- no
-   account, no key, no scraping needed just to construct it, and it
-   generally resolves straight to the matching property page when there's
-   a strong match. Mario explicitly chose the in-app iframe-preview option
-   (over a plain link-only button or a scraped photo/price card) knowing
-   Zillow, like most listing sites, may block being framed by another
-   site -- confirmed on his real PC (build order #135), so the iframe now
-   loads through /api/crm/zillow_proxy (crm_routes.py), which fetches the
-   real page server-side and strips the framing-block headers before
-   re-serving it. This is a best-effort workaround, not a guarantee --
-   Zillow may still refuse/challenge a plain server-side fetch -- hence the
-   "may not load" note and the always-working "Open in Zillow" link (which
-   points at the REAL zillow.com URL, never the proxy) staying in the
-   modal regardless. If this keeps not working well, the honest fix is
-   dropping the proxy/iframe entirely and keeping just a plain button that
-   opens Zillow directly -- Mario's own explicit fallback instruction. ---- */
+/* ---- Zillow link for whatever address is on file for the current dialer
+   entry (Mario: "for every contact it preloads the zillow link to their
+   address"). Zillow has no free public API for a single-address lookup, so
+   the link is built from its well-known "/homes/<address>_rb/" quick-
+   search URL pattern -- no account, no key, no scraping needed just to
+   construct it, and it generally resolves straight to the matching
+   property page when there's a strong match. An in-app iframe preview
+   (build order #134) and then a server-side header-stripping proxy (build
+   order #135) were both tried and confirmed NOT working on Mario's real
+   PC -- Zillow blocks being framed by another site and a plain server-side
+   fetch didn't get past that either. Per his own explicit instruction,
+   this is now just a plain link -- clicking it opens the real Zillow page
+   in a new tab, nothing in-app. Don't reintroduce an iframe/proxy attempt
+   here without a new explicit ask -- both were tried and dropped. ---- */
 function buildZillowUrl(address) {
   const clean = (address || '').replace(/[,#]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) return null;
@@ -5711,9 +5687,6 @@ function buildZillowUrl(address) {
 }
 
 const dialerZillowBtn = document.getElementById('dialerZillowBtn');
-const zillowPreviewOverlay = document.getElementById('zillowPreviewOverlay');
-const zillowPreviewFrame = document.getElementById('zillowPreviewFrame');
-const zillowPreviewOpenLink = document.getElementById('zillowPreviewOpenLink');
 let dialerZillowUrl = null;
 
 // Called with the best address known for the CURRENT entry -- entry.address
@@ -5726,22 +5699,7 @@ function setDialerZillowAddress(address) {
 }
 
 dialerZillowBtn.addEventListener('click', () => {
-  if (dialerZillowUrl) openZillowPreview(dialerZillowUrl);
-});
-
-function openZillowPreview(url) {
-  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
-  // The iframe loads through the proxy (strips Zillow's framing-block
-  // headers); the Open-in-Zillow link stays pointed at the REAL zillow.com
-  // URL so it always works regardless of whether the proxy/iframe does.
-  zillowPreviewFrame.src = '/api/crm/zillow_proxy?url=' + encodeURIComponent(url);
-  zillowPreviewOpenLink.href = url;
-  zillowPreviewOverlay.classList.add('show');
-}
-
-document.getElementById('zillowPreviewCloseBtn').addEventListener('click', () => {
-  zillowPreviewOverlay.classList.remove('show');
-  zillowPreviewFrame.src = 'about:blank'; // stop it actually loading in the background once closed
+  if (dialerZillowUrl) window.open(dialerZillowUrl, '_blank', 'noopener');
 });
 
 const dialerClientInfoEl = document.getElementById('dialerClientInfo');
