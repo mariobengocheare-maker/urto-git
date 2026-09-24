@@ -1510,6 +1510,7 @@
       <div class="dialer-name" id="dialerName"></div>
       <a href="#" class="dialer-phone" id="dialerPhone"></a>
       <div class="dialer-meta" id="dialerMeta"></div>
+      <button type="button" class="ghost small" id="dialerZillowBtn" style="display:none; margin-top:4px">🏠 View on Zillow</button>
       <button class="dialer-add-crm" id="dialerAddCrmBtn" style="display:none">+ Add to CRM</button>
       <div id="dialerClientInfo" class="dialer-client-info" style="display:none">
         <div class="dialer-client-info-head">📇 In your CRM</div>
@@ -2248,6 +2249,24 @@
     <div id="filePreviewBody"></div>
     <div class="modal-actions">
       <a id="filePreviewDownloadLink" class="ghost small" href="#" style="text-decoration:none; display:inline-flex; align-items:center; padding:6px 12px; border-radius:7px;">⬇ Download</a>
+    </div>
+  </div>
+</div>
+
+<!-- Zillow preview for a dialer entry's address -- an in-app iframe attempt.
+     Zillow is a third-party site and (per Mario's own choice, aware of the
+     tradeoff) may block being framed -- see the "may not load" note and the
+     always-available "Open in Zillow" link, which works regardless. -->
+<div class="modal-overlay" id="zillowPreviewOverlay">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-head">
+      <h2 id="zillowPreviewTitle">🏠 Zillow</h2>
+      <button class="modal-close" id="zillowPreviewCloseBtn">&times;</button>
+    </div>
+    <div style="font-size:.85em; color:var(--text-secondary); margin:-6px 0 10px">If the preview below doesn't load, Zillow may be blocking it from showing inside another site — use "Open in Zillow" below.</div>
+    <iframe id="zillowPreviewFrame" src="about:blank" style="width:100%; height:70vh; border:0; border-radius:8px; background:#fff;"></iframe>
+    <div class="modal-actions">
+      <a id="zillowPreviewOpenLink" class="ghost small" href="#" target="_blank" rel="noopener" style="text-decoration:none; display:inline-flex; align-items:center; padding:6px 12px; border-radius:7px;">Open in Zillow ↗</a>
     </div>
   </div>
 </div>
@@ -5665,6 +5684,56 @@ function normalizePhone(raw) {
   return '+' + justDigits;
 }
 
+/* ---- Zillow preview for whatever address is on file for the current
+   dialer entry (Mario: "for every contact it preloads the zillow link to
+   their address... and shows a preview i can click into"). Zillow has no
+   free public API for a single-address lookup, so the link is built from
+   its well-known "/homes/<address>_rb/" quick-search URL pattern -- no
+   account, no key, no scraping needed just to construct it, and it
+   generally resolves straight to the matching property page when there's
+   a strong match. Mario explicitly chose the in-app iframe-preview option
+   (over a plain link-only button or a scraped photo/price card) knowing
+   Zillow, like most listing sites, may block being framed by another
+   site -- hence the "may not load" note and the always-working "Open in
+   Zillow" link in the modal, which works regardless of whether the iframe
+   itself renders. ---- */
+function buildZillowUrl(address) {
+  const clean = (address || '').replace(/[,#]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return null;
+  return `https://www.zillow.com/homes/${encodeURIComponent(clean.replace(/ /g, '-'))}_rb/`;
+}
+
+const dialerZillowBtn = document.getElementById('dialerZillowBtn');
+const zillowPreviewOverlay = document.getElementById('zillowPreviewOverlay');
+const zillowPreviewFrame = document.getElementById('zillowPreviewFrame');
+const zillowPreviewOpenLink = document.getElementById('zillowPreviewOpenLink');
+let dialerZillowUrl = null;
+
+// Called with the best address known for the CURRENT entry -- entry.address
+// immediately (whatever the dialer source itself carries), then overridden
+// once a CRM match resolves with that client's own address on file, which
+// is the authoritative source Mario actually asked for.
+function setDialerZillowAddress(address) {
+  dialerZillowUrl = buildZillowUrl(address);
+  dialerZillowBtn.style.display = dialerZillowUrl ? 'inline-block' : 'none';
+}
+
+dialerZillowBtn.addEventListener('click', () => {
+  if (dialerZillowUrl) openZillowPreview(dialerZillowUrl);
+});
+
+function openZillowPreview(url) {
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  zillowPreviewFrame.src = url;
+  zillowPreviewOpenLink.href = url;
+  zillowPreviewOverlay.classList.add('show');
+}
+
+document.getElementById('zillowPreviewCloseBtn').addEventListener('click', () => {
+  zillowPreviewOverlay.classList.remove('show');
+  zillowPreviewFrame.src = 'about:blank'; // stop it actually loading in the background once closed
+});
+
 const dialerClientInfoEl = document.getElementById('dialerClientInfo');
 let dialerInfoToken = 0;
 
@@ -5676,6 +5745,7 @@ function renderDialerCard() {
   dialerPhoneEl.textContent = entry.phone || '—';
   dialerPhoneEl.href = 'tel:' + normalizePhone(entry.phone);
   dialerMetaEl.textContent = entry.meta || '';
+  setDialerZillowAddress(entry.address);
 
   dialerListEl.innerHTML = '';
   dialerList.forEach((e, i) => {
@@ -5722,6 +5792,11 @@ async function updateDialerClientInfo(entry) {
   if (!res.ok) { dialerClientInfoEl.style.display = 'none'; return; }
   const c = await res.json();
   dialerCurrentClientData = c;
+  // The CRM's own address on file is more authoritative than whatever the
+  // dialer source line happened to carry (e.g. the "CRM Clients" source
+  // never even sets entry.address, only folds it into the meta text) --
+  // override once the real record resolves.
+  setDialerZillowAddress(c.address);
   // Fresh entry, fresh editor -- never leave the frequency panel open (or
   // showing a stale schedule) carried over from whoever was on screen before.
   document.getElementById('dciFreqPanel').style.display = 'none';
