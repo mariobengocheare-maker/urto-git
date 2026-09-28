@@ -43,12 +43,22 @@ def normalize(text: str) -> str:
     return " ".join(tokens)
 
 
-def address_tokens(address: str, city: str, state: str, zip_code: str) -> set:
+def address_tokens(address: str, zip_code: str) -> set:
     """Key tokens that must all appear in a candidate address for it to count
-    as a match: house number, street-name words, and zip code. Unit/apt
-    numbers are deliberately NOT required, since the same person can be
-    listed with or without a unit across records."""
-    norm = normalize(f"{address} {city} {state} {zip_code}")
+    as a match: house number, street-name words, and zip code. City/state are
+    deliberately EXCLUDED -- FOREWARN (like most data providers) labels many
+    unincorporated Miami-Dade addresses under "Miami" regardless of the
+    county's own incorporated-municipality name (Palmetto Bay, Cutler Bay,
+    etc.), so requiring the input row's raw city name to appear verbatim on
+    FOREWARN's own page silently rejected real, correct matches (a real row
+    proved this: FOREWARN showed "...MIAMI FL 33158" for an address whose
+    county record said "PALMETTO BAY", and the old code required "PALMETTO"/
+    "BAY" to appear literally in that page's text, which they never would).
+    House number + street name + zip is already unique enough on its own to
+    identify one specific real-world address. Unit/apt numbers are
+    deliberately NOT required either, since the same person can be listed
+    with or without a unit across records."""
+    norm = normalize(f"{address} {zip_code}")
     tokens = set(norm.split())
     drop = set()
     tlist = norm.split()
@@ -175,11 +185,9 @@ def _run_forewarn_search(page, row: dict, debug: bool = False) -> dict:
     first_name = row["first_name"].strip()
     last_name = row["last_name"].strip()
     address = row["address"].strip()
-    city = row.get("city", "").strip()
-    state = row.get("state", "").strip()
     zip_code = row["zip"].strip()
 
-    required_tokens = address_tokens(address, city, state, zip_code)
+    required_tokens = address_tokens(address, zip_code)
 
     result = {"phone": "", "status": "NOT_FOUND", "notes": ""}
 
