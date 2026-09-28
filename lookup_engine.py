@@ -153,18 +153,27 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         # "owner" that was actually searched — same as for an individual.
         row["first_name"] = primary["first_name"]
         row["last_name"] = primary["last_name"]
+        search_zip = primary.get("zip") or None
         entity_note = (f"Resolved via Sunbiz ({primary['resolved_via']}): "
-                        f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}. ")
+                        f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}"
+                        + (f" (searching FOREWARN under their own zip {search_zip}, "
+                           f"not the property's {row['zip'].strip()})" if search_zip and search_zip != row["zip"].strip() else "")
+                        + ". ")
+    else:
+        search_zip = None
 
-    result = _run_forewarn_search(page, row, debug=debug)
+    result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip)
 
     if candidates and result["status"] == "NOT_FOUND":
         for fallback in candidates[1:]:
             row["first_name"] = fallback["first_name"]
             row["last_name"] = fallback["last_name"]
+            search_zip = fallback.get("zip") or None
             entity_note += (f"No FOREWARN match for that name — retrying via Sunbiz "
-                             f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}. ")
-            result = _run_forewarn_search(page, row, debug=debug)
+                             f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}"
+                             + (f" (zip {search_zip})" if search_zip and search_zip != row["zip"].strip() else "")
+                             + ". ")
+            result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip)
             if result["status"] != "NOT_FOUND":
                 break
 
@@ -172,7 +181,7 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
     return result
 
 
-def _run_forewarn_search(page, row: dict, debug: bool = False) -> dict:
+def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str = None) -> dict:
     # Counts once per actual FOREWARN search attempt — this function is only
     # ever reached for rows that weren't skipped (at input-parsing time or,
     # for an entity row, by a failed Sunbiz resolution), so it's an accurate
@@ -187,11 +196,20 @@ def _run_forewarn_search(page, row: dict, debug: bool = False) -> dict:
     address = row["address"].strip()
     zip_code = row["zip"].strip()
 
+    # The SEARCH is run under `search_zip` when one was given (a Sunbiz-
+    # resolved person's own zip, which is very often different from the
+    # subject property's — a registered agent/officer usually lives
+    # somewhere else entirely, see build order #138) -- but MATCH
+    # VERIFICATION always stays anchored to the property's own real
+    # address/zip regardless of what zip was used to find the person, since
+    # that's still the address we're actually trying to prove they're
+    # connected to.
     required_tokens = address_tokens(address, zip_code)
+    effective_search_zip = (search_zip or zip_code).strip()
 
     result = {"phone": "", "status": "NOT_FOUND", "notes": ""}
 
-    run_search(page, first_name, last_name, zip_code)
+    run_search(page, first_name, last_name, effective_search_zip)
     count = wait_for_results_or_none(page)
 
     if count == 0:

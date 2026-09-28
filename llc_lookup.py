@@ -40,9 +40,17 @@ NEXT_SECTION_LABEL = re.compile(
     re.IGNORECASE,
 )
 
+# A 5-digit zip (optionally +4) inside a Sunbiz address block — used so a
+# FOREWARN search for a Sunbiz-resolved person can be run under THEIR OWN
+# zip code, not the subject property's, since a registered agent/officer
+# very often lives somewhere else entirely (see build order #138).
+ZIP_RE = re.compile(r"\b(\d{5})(?:-\d{4})?\b")
+
 # Common registered-agent *service* companies (not a real person) — checked
 # in addition to the generic entity-suffix check, since firms like these
 # often don't contain a token like "LLC"/"INC" in their commercial name.
+# These are professional registrars, not another link in a real ownership
+# chain — never worth recursing into (see _is_agent_service_firm below).
 AGENT_SERVICE_KEYWORDS = [
     "REGISTERED AGENT", "CORPORATION SERVICE COMPANY", "CT CORPORATION",
     "COGENCY GLOBAL", "INCORP SERVICES", "NORTHWEST REGISTERED",
@@ -50,12 +58,29 @@ AGENT_SERVICE_KEYWORDS = [
     "ROCKET LAWYER", "HARBOR COMPLIANCE", "RASI",
 ]
 
+# How many extra Sunbiz entities we'll follow when a registered agent or
+# officer/manager turns out to be itself another company (e.g. an LLC's
+# manager is another LLC) rather than an individual. Bounded so a chain of
+# holding companies (or two entities that name each other) can't turn one
+# input row into an unbounded number of real Sunbiz page loads.
+MAX_ENTITY_RESOLUTION_DEPTH = 2
+
+
+def _extract_zip(text: str) -> str:
+    """First 5-digit zip found in a block of Sunbiz address text, or ''."""
+    m = ZIP_RE.search(text)
+    return m.group(1) if m else ""
+
+
+def _is_agent_service_firm(name: str) -> bool:
+    return any(kw in name.upper() for kw in AGENT_SERVICE_KEYWORDS)
+
 
 def _looks_like_company(name: str) -> bool:
     from input_parser import ENTITY_TOKENS  # local import avoids a cycle at module load
 
     upper = name.upper()
-    if any(kw in upper for kw in AGENT_SERVICE_KEYWORDS):
+    if _is_agent_service_firm(upper):
         return True
     # Strip periods WITHOUT inserting a space first, so a dotted abbreviation
     # like "P.A." or "L.L.C." collapses to "PA"/"LLC" instead of splitting
@@ -140,25 +165,34 @@ def _first_nonblank_line(text: str) -> str:
     return ""
 
 
-def _officer_candidate_names(section_text: str) -> list:
+def _officer_candidate_blocks(section_text: str) -> list:
     """Sunbiz's Authorized Person(s)/Officer section repeats short blocks of
     (Title, Name, Address...) lines per person — a title line is a short
     one/two-letter code (MGR, AMBR, P, VP, S, D, T, CP...), and the name is
-    the next non-blank line after it. Best-effort: collects every line that
-    immediately follows something that looks like a title code."""
+    the next non-blank line after it. Returns (name, block_text) pairs —
+    block_text is that person's own trailing lines (their address, notably
+    their own zip) up to the next title code, so a zip can be attributed to
+    THE RIGHT specific officer rather than anywhere in a section that can
+    list several people with different addresses."""
     lines = [l.strip() for l in section_text.splitlines()]
     title_re = re.compile(r"^(Title\s*)?[A-Z]{1,4}$")
-    names = []
-    i = 0
-    while i < len(lines):
+    blocks = []
+    i, n = 0, len(lines)
+    while i < n:
         if lines[i] and title_re.match(lines[i]):
-            for j in range(i + 1, len(lines)):
-                if lines[j]:
-                    names.append(lines[j])
-                    i = j
-                    break
+            j = i + 1
+            while j < n and not lines[j]:
+                j += 1
+            if j < n:
+                name = lines[j]
+                k = j + 1
+                while k < n and not (lines[k] and title_re.match(lines[k])):
+                    k += 1
+                blocks.append((name, "\n".join(lines[j + 1:k])))
+                i = k
+                continue
         i += 1
-    return names
+    return blocks
 
 
 def _click_best_match(page, entity_name: str) -> bool:
@@ -189,13 +223,48 @@ def _click_best_match(page, entity_name: str) -> bool:
     return True
 
 
-def resolve_entity_owner(page, entity_name: str, debug: bool = False) -> dict:
+def _resolve_nested_company(page, company_name: str, debug: bool, visited: set, depth: int) -> list:
+    """Recurses into a company found as a registered agent or officer/
+    manager (e.g. an LLC's own manager is another LLC), so a real person can
+    still be found further down the ownership chain instead of giving up the
+    moment the first name found isn't a person. Bounded by
+    MAX_ENTITY_RESOLUTION_DEPTH and a `visited` set of already-seen entity
+    names (both per the module docstring's shared caution: don't guess, and
+    don't let a cycle between two entities that name each other loop
+    forever). Returns a (possibly empty) list of candidate dicts, each
+    tagged with the chain it came through."""
+    if depth >= MAX_ENTITY_RESOLUTION_DEPTH or _is_agent_service_firm(company_name):
+        return []
+    key = re.sub(r"[^A-Z0-9]", "", company_name.upper())
+    if not key or key in visited:
+        return []
+    visited.add(key)
+    nested = resolve_entity_owner(page, company_name, debug=debug, _visited=visited, _depth=depth + 1)
+    if nested["skip_reason"]:
+        return []
+    tagged = []
+    for c in nested.get("candidates") or []:
+        tagged.append({**c, "resolved_via": f"{c['resolved_via']}, via nested entity '{company_name}'"})
+    return tagged
+
+
+def resolve_entity_owner(page, entity_name: str, debug: bool = False,
+                          _visited: set = None, _depth: int = 0) -> dict:
     """Attempts to resolve `entity_name` to a real person via Sunbiz.
 
     Returns {"first_name", "last_name", "resolved_via", "skip_reason"} —
     skip_reason is set (and the name fields blank) whenever resolution
-    can't be done with confidence.
+    can't be done with confidence. Each entry in "candidates" also carries
+    a "zip" (the person's own address zip on file with Sunbiz, when one
+    could be read) — the caller should search FOREWARN under THAT zip
+    rather than the subject property's, since a registered agent/officer
+    very often lives somewhere else entirely (see build order #138).
+
+    `_visited`/`_depth` are internal recursion state for following a
+    registered agent or officer/manager that's itself another company —
+    callers should never pass these themselves.
     """
+    visited = _visited if _visited is not None else set()
     try:
         page.goto(SUNBIZ_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
 
@@ -273,7 +342,7 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False) -> dict:
             parsed = _split_person_name(agent_name)
             if parsed["ok"]:
                 candidate = {"first_name": parsed["first_name"], "last_name": parsed["last_name"],
-                             "resolved_via": "registered agent"}
+                             "resolved_via": "registered agent", "zip": _extract_zip(agent_section)}
                 return {"first_name": candidate["first_name"], "last_name": candidate["last_name"],
                         "resolved_via": candidate["resolved_via"], "skip_reason": "",
                         "candidates": [candidate]}
@@ -291,19 +360,31 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False) -> dict:
             pa_person = _try_extract_pa_person(agent_name)
             if pa_person["ok"]:
                 candidates.append({"first_name": pa_person["first_name"], "last_name": pa_person["last_name"],
-                                    "resolved_via": "PA/PLLC name"})
+                                    "resolved_via": "PA/PLLC name", "zip": _extract_zip(agent_section)})
 
         for label in OFFICER_SECTION_LABELS:
             officer_section = _section_text(body_text, label)
             if not officer_section:
                 continue
-            for candidate_name in _officer_candidate_names(officer_section):
+            for candidate_name, block_text in _officer_candidate_blocks(officer_section):
                 if _looks_like_company(candidate_name):
+                    # A manager/authorized person that's itself another
+                    # company (e.g. an LLC managed by another LLC) isn't a
+                    # dead end the way a registered-agent-service firm is --
+                    # there's still a real person somewhere behind IT too.
+                    candidates.extend(_resolve_nested_company(page, candidate_name, debug, visited, _depth))
                     continue
                 parsed = _split_person_name(candidate_name)
                 if parsed["ok"]:
                     candidates.append({"first_name": parsed["first_name"], "last_name": parsed["last_name"],
-                                        "resolved_via": "officer/manager"})
+                                        "resolved_via": "officer/manager", "zip": _extract_zip(block_text)})
+
+        # The registered agent itself being a company is the same situation,
+        # just one level up -- follow it too, unless it's a known agent-
+        # service firm (a professional registrar has no further real person
+        # behind it, it's a dead end by definition).
+        if agent_name and _looks_like_company(agent_name):
+            candidates.extend(_resolve_nested_company(page, agent_name, debug, visited, _depth))
 
         # De-dupe — the same person sometimes shows up as both the PA-name
         # match and an officer — while preserving priority order.
