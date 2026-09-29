@@ -295,14 +295,27 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
     try:
         page.goto(SUNBIZ_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
 
-        # Best-effort search-box locator — label text first, falling back to
-        # the first visible text input if Sunbiz's markup doesn't expose a
-        # matching label.
+        # A slow client-side render (not just the initial HTML) could still
+        # be filling in the search form after domcontentloaded fires — give
+        # it a real chance to settle before giving up on finding an input.
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except PWTimeoutError:
+            pass
+
+        # Best-effort search-box locator — label text and known ids first,
+        # falling back progressively to any visible input Sunbiz's markup
+        # exposes, regardless of its exact type/attributes (see build order
+        # #147 — a real live-site skip Mario hit here with every one of the
+        # narrower selectors below coming up empty).
         search_box = None
         for getter in (
             lambda: page.get_by_label(re.compile("entity name", re.IGNORECASE)),
             lambda: page.locator("#SearchTerm"),
-            lambda: page.locator("input[type=text]").first,
+            lambda: page.get_by_role("textbox").first,
+            lambda: page.locator("input[type=search]:visible").first,
+            lambda: page.locator("input[type=text]:visible").first,
+            lambda: page.locator("input:visible").first,
         ):
             try:
                 loc = getter()
@@ -312,8 +325,20 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
             except Exception:
                 continue
         if search_box is None:
+            # A black-box "couldn't find it" with no further detail meant
+            # every future occurrence needed Mario to reproduce it live and
+            # screenshot it before anything could be fixed. Capturing what
+            # Sunbiz actually served instead (a CAPTCHA/rate-limit
+            # interstitial, a cookie-consent overlay, a maintenance notice,
+            # or genuinely changed markup) turns this into something
+            # diagnosable straight from the results CSV's own Notes column.
+            try:
+                diag = (f"page title: '{page.title()}', url: {page.url}, "
+                        f"body starts: '{page.inner_text('body')[:200].strip()}'")
+            except Exception:
+                diag = "(could not read the page itself for diagnostics)"
             return {"first_name": "", "last_name": "", "resolved_via": "",
-                    "skip_reason": "Could not find Sunbiz's search box (page layout may have changed)"}
+                    "skip_reason": f"Could not find Sunbiz's search box (page layout may have changed) — {diag}"}
 
         if debug:
             page.pause()
@@ -365,26 +390,37 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
         agent_section = _section_text(body_text, REGISTERED_AGENT_LABEL)
         agent_name = _first_nonblank_line(agent_section)
 
+        # Build every candidate Sunbiz can possibly surface for this entity
+        # before ever giving up — see build order #147, Mario's explicit
+        # ask to exhaust every name/zip combination rather than settling
+        # for a single guess. This used to return immediately with ONLY the
+        # registered agent once it parsed as a real person, never even
+        # looking at the officers/managers section — meaning a NOT_FOUND on
+        # FOREWARN for that one name ended the whole row right there, even
+        # when a different, equally real person (an officer/manager) was
+        # sitting right there on the same Sunbiz page the whole time.
+        candidates = []
         if agent_name and not _looks_like_company(agent_name):
             parsed = _split_person_name(agent_name)
             if parsed["ok"]:
-                candidate = {"first_name": parsed["first_name"], "last_name": parsed["last_name"],
-                             "resolved_via": "registered agent", "zip": _extract_zip(agent_section),
-                             "address": _clean_address_block(_strip_first_line(agent_section, agent_name))}
-                return {"first_name": candidate["first_name"], "last_name": candidate["last_name"],
-                        "resolved_via": candidate["resolved_via"], "skip_reason": "",
-                        "candidates": [candidate]}
+                candidates.append({"first_name": parsed["first_name"], "last_name": parsed["last_name"],
+                                    "resolved_via": "registered agent", "zip": _extract_zip(agent_section),
+                                    "address": _clean_address_block(_strip_first_line(agent_section, agent_name))})
 
-        # Registered agent is a company (or unparseable). A PA/PLLC/PC-style
-        # entity is itself required (Florida) to be named after the actual
-        # licensed professional running it — search FOREWARN under that
-        # embedded name FIRST (faster, usually correct) rather than only
-        # going through the officers/managers list below — but still keep
-        # that list as a fallback candidate too: a same-named PA occasionally
+        # PA/PLLC extraction is tried whenever the agent's own comma-parse
+        # above didn't already give us a candidate — covers BOTH a name
+        # that plainly looks like a company (PLLC/PA/PC/...) AND one that
+        # merely carries a PA_STYLE_SUFFIXES token ENTITY_TOKENS doesn't
+        # separately recognize as a company (e.g. a trailing "PL"/"CHTD")
+        # but that also isn't a plain comma-formatted individual name.
+        # Florida requires a PA/PLLC/PC-style entity to be named after the
+        # actual licensed professional running it — search FOREWARN under
+        # that embedded name FIRST (faster, usually correct) rather than
+        # only going through the officers/managers list below — but still
+        # keep that list as a fallback too: a same-named PA occasionally
         # isn't run by that exact person, so trying both raises the odds of
         # landing on the right one instead of committing to just one guess.
-        candidates = []
-        if agent_name:
+        if agent_name and not candidates:
             pa_person = _try_extract_pa_person(agent_name)
             if pa_person["ok"]:
                 candidates.append({"first_name": pa_person["first_name"], "last_name": pa_person["last_name"],
@@ -430,7 +466,7 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
         if not candidates:
             return {"first_name": "", "last_name": "", "resolved_via": "",
                     "skip_reason": f"Found '{entity_name}' on Sunbiz but couldn't confidently resolve it to a person "
-                                    f"(registered agent is a company, and no officer/manager parsed as an individual)",
+                                    f"(registered agent didn't parse as an individual, and no officer/manager did either)",
                     "candidates": []}
 
         primary = candidates[0]
