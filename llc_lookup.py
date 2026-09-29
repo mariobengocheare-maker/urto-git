@@ -37,14 +37,59 @@ SUNBIZ_SEARCH_URL = "https://search.sunbiz.org/Inquiry/CorporationSearch/ByName"
 CLOUDFLARE_CHALLENGE_MARKERS = ("just a moment", "checking your browser", "verify you are human")
 
 
+# Cloudflare Turnstile's simplest mode is a plain "I am human" checkbox
+# inside an iframe — Mario reported having to click this by hand (see build
+# order #153). This is genuinely different from the automatic, self-
+# resolving JS challenge _wait_out_bot_challenge() already waits out below:
+# it's a real interactive widget, and this is a best-effort attempt to click
+# it, not a CAPTCHA-solving service — it only ever looks for a plain
+# checkbox and clicks it once, it makes no attempt at a harder image/puzzle
+# challenge. Whether this actually gets past Cloudflare is genuinely
+# unconfirmed: Turnstile is specifically built to fingerprint automated
+# browsers (Playwright's own CDP connection, `navigator.webdriver`, etc.)
+# regardless of whether the window is headed or headless, so it may still
+# refuse the click even in Mario's own real, visible Chromium window — the
+# only way to know is a real retry on his PC.
+_TURNSTILE_FRAME_SELECTORS = [
+    "iframe[src*='challenges.cloudflare.com']",
+    "iframe[title*='Cloudflare' i]",
+    "iframe[title*='challenge' i]",
+    "iframe[title*='human' i]",
+]
+
+
+def _try_click_bot_challenge_checkbox(page) -> bool:
+    """Looks for a Turnstile-style checkbox inside a known challenge iframe
+    and clicks it once. Returns whether it found (and clicked) anything —
+    never raises, since a failed attempt here should just fall through to
+    the normal "challenge didn't clear" skip_reason, not crash the row."""
+    for sel in _TURNSTILE_FRAME_SELECTORS:
+        try:
+            frame = page.frame_locator(sel)
+            checkbox = frame.locator("input[type='checkbox'], [role='checkbox']").first
+            checkbox.wait_for(state="visible", timeout=1000)
+            checkbox.click(timeout=3000)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _wait_out_bot_challenge(page, max_wait_seconds: float = 25) -> bool:
     """Polls the page's title for up to max_wait_seconds, returning True once
     it no longer looks like a Cloudflare-style bot-check interstitial (or
-    never did). False means it's still showing after the wait — most likely
-    a genuinely interactive challenge (a real CAPTCHA/Turnstile checkbox)
-    that automation can't click through on its own, rather than the
-    automatic kind."""
+    never did). Most of these clear on their own within a few seconds (the
+    automatic JS challenge, see build order #150) — but if it's still
+    showing partway through the wait, makes ONE attempt to click through a
+    plain Turnstile checkbox (see _try_click_bot_challenge_checkbox above)
+    before continuing to wait out whatever's left of the budget, in case
+    that click's own redirect/reload takes a moment to settle. False means
+    it's still showing after all of that — most likely a harder challenge
+    (an image puzzle) that no amount of waiting or a plain checkbox click
+    can get through."""
     deadline = time.time() + max_wait_seconds
+    click_after = time.time() + min(8.0, max_wait_seconds / 2)
+    click_attempted = False
     while True:
         try:
             title = page.title().strip().lower()
@@ -52,7 +97,13 @@ def _wait_out_bot_challenge(page, max_wait_seconds: float = 25) -> bool:
             return True  # can't read the page at all -- let the normal flow's own diagnostics handle it
         if not any(marker in title for marker in CLOUDFLARE_CHALLENGE_MARKERS):
             return True
-        if time.time() >= deadline:
+        now = time.time()
+        if not click_attempted and now >= click_after:
+            click_attempted = True
+            if _try_click_bot_challenge_checkbox(page):
+                time.sleep(2.0)  # let a real click's own redirect/reload settle
+                continue
+        if now >= deadline:
             return False
         time.sleep(1.5)
 

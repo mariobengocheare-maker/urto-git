@@ -58,11 +58,39 @@ PROPERTY_SEARCH_URL = "https://www.miamidade.gov/Apps/PA/PropertySearch/"
 BOT_CHALLENGE_MARKERS = ("just a moment", "checking your browser", "verify you are human")
 
 
+_TURNSTILE_FRAME_SELECTORS = [
+    "iframe[src*='challenges.cloudflare.com']",
+    "iframe[title*='Cloudflare' i]",
+    "iframe[title*='challenge' i]",
+    "iframe[title*='human' i]",
+]
+
+
+def _try_click_bot_challenge_checkbox(page) -> bool:
+    """See llc_lookup.py's identical helper (build order #153) for the full
+    rationale — a best-effort attempt at a plain Turnstile checkbox, never a
+    real CAPTCHA solve, and never raises on failure."""
+    for sel in _TURNSTILE_FRAME_SELECTORS:
+        try:
+            frame = page.frame_locator(sel)
+            checkbox = frame.locator("input[type='checkbox'], [role='checkbox']").first
+            checkbox.wait_for(state="visible", timeout=1000)
+            checkbox.click(timeout=3000)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _wait_out_bot_challenge(page, max_wait_seconds: float = 25) -> bool:
     """See llc_lookup.py's identical helper for the full rationale. Returns
     True once the page's title no longer looks like a bot-check interstitial
-    (or never did), False if it's still showing after max_wait_seconds."""
+    (or never did), False if it's still showing after max_wait_seconds. Makes
+    one attempt at a plain Turnstile checkbox partway through the wait if the
+    automatic-challenge case (the common one) hasn't already cleared it."""
     deadline = time.time() + max_wait_seconds
+    click_after = time.time() + min(8.0, max_wait_seconds / 2)
+    click_attempted = False
     while True:
         try:
             title = page.title().strip().lower()
@@ -70,7 +98,13 @@ def _wait_out_bot_challenge(page, max_wait_seconds: float = 25) -> bool:
             return True
         if not any(marker in title for marker in BOT_CHALLENGE_MARKERS):
             return True
-        if time.time() >= deadline:
+        now = time.time()
+        if not click_attempted and now >= click_after:
+            click_attempted = True
+            if _try_click_bot_challenge_checkbox(page):
+                time.sleep(2.0)
+                continue
+        if now >= deadline:
             return False
         time.sleep(1.5)
 
