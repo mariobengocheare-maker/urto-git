@@ -155,12 +155,17 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         row["last_name"] = primary["last_name"]
         search_zip = primary.get("zip") or None
         entity_note = (f"Resolved via Sunbiz ({primary['resolved_via']}): "
-                        f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}"
-                        + (f" (searching FOREWARN under their own zip {search_zip}, "
-                           f"not the property's {row['zip'].strip()})" if search_zip and search_zip != row["zip"].strip() else "")
-                        + ". ")
+                        f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}. ")
     else:
-        search_zip = None
+        # A row can carry the OWNER's own mailing zip straight from the
+        # input file (e.g. a "Tax - Owner - Postal Code" column on a
+        # foreclosure/tax-roll export) even when they're an individual, not
+        # an entity — a defendant in a foreclosure very often no longer
+        # lives at the property being foreclosed on, same underlying reason
+        # a Sunbiz-resolved registered agent usually doesn't either (see
+        # build order #138). `_run_forewarn_search()` explains the
+        # substitution in its own notes whenever it's actually used.
+        search_zip = row.get("owner_zip") or None
 
     result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip)
 
@@ -170,9 +175,7 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
             row["last_name"] = fallback["last_name"]
             search_zip = fallback.get("zip") or None
             entity_note += (f"No FOREWARN match for that name — retrying via Sunbiz "
-                             f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}"
-                             + (f" (zip {search_zip})" if search_zip and search_zip != row["zip"].strip() else "")
-                             + ". ")
+                             f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}. ")
             result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip)
             if result["status"] != "NOT_FOUND":
                 break
@@ -206,6 +209,9 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
     # connected to.
     required_tokens = address_tokens(address, zip_code)
     effective_search_zip = (search_zip or zip_code).strip()
+    zip_note = (f"Searched FOREWARN under zip {effective_search_zip} instead of the "
+                f"property's {zip_code} (that's where this person's own address is on file). "
+                if effective_search_zip and effective_search_zip != zip_code else "")
 
     result = {"phone": "", "status": "NOT_FOUND", "notes": ""}
 
@@ -213,7 +219,7 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
     count = wait_for_results_or_none(page)
 
     if count == 0:
-        result["notes"] = "No results returned by FOREWARN for this name/zip."
+        result["notes"] = zip_note + "No results returned by FOREWARN for this name/zip."
         return result
 
     n = get_result_cards(page).count()
@@ -243,10 +249,10 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
             if phone:
                 result["phone"] = phone
                 result["status"] = "FOUND"
-                result["notes"] = "Matched in address history."
+                result["notes"] = zip_note + "Matched in address history."
                 return result
             result["status"] = "FOUND_NO_PHONE"
-            result["notes"] = "Address matched in history but no phone on record."
+            result["notes"] = zip_note + "Address matched in history but no phone on record."
             return result
         else:
             human_pause(0.3, 0.8)
@@ -254,5 +260,5 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
             page.go_back()  # -> results list
             human_pause(0.3, 0.7)
 
-    result["notes"] = f"Checked {n} candidate(s), none matched the target address."
+    result["notes"] = zip_note + f"Checked {n} candidate(s), none matched the target address."
     return result

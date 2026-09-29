@@ -97,7 +97,8 @@ DATE_TOKEN_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$|^\d{4}$")
 HEADER_ALIASES = {
     "first_name": ["first name", "fname", "given name", "first"],
     "last_name": ["last name", "lname", "surname", "last"],
-    "owner_name": ["owner name 1", "owner name", "owner", "owner 1", "name"],
+    "owner_name": ["owner name 1", "owner name", "owner", "owner 1", "name",
+                   "tax owner name 1", "tax owner name"],
     "address": ["situs address", "site address", "property address", "physical address",
                 "address", "street address", "full address"],
     "house_number": ["house number", "street number", "housenum", "house no", "property house number"],
@@ -113,6 +114,16 @@ HEADER_ALIASES = {
     "state": ["situs state", "site state", "property state", "state", "state abbreviation", "st"],
     "zip": ["situs zip", "site zip", "property zip", "property zip code", "zip code", "zip",
             "zipcode", "postal code", "zip5", "postal", "postal zip code"],
+    # The OWNER's own mailing zip — a genuinely different concept from the
+    # property zip above. A foreclosure defendant/owner very often no longer
+    # lives at the property being looked up (see build order #139), so
+    # FOREWARN's own name+zip search needs to be run under THIS zip to have
+    # any real chance of finding them — while the property's own address/zip
+    # (the "zip" field above) stays the target that a match is verified
+    # against. Never let this alias collide with the "zip" list above (the
+    # "mailing" exclusion in resolve_headers() doesn't apply here since this
+    # one is deliberately meant to be a mailing-type address).
+    "owner_zip": ["tax owner postal code", "owner postal code", "owner zip code", "owner zip"],
 }
 
 
@@ -353,6 +364,7 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
         "city": _get(raw_row, headers.get("city")),
         "state": _get(raw_row, headers.get("state")),
         "zip": _clean_zip(_get(raw_row, headers.get("zip"))),
+        "owner_zip": _clean_zip(_get(raw_row, headers.get("owner_zip"))),
         "skip_reason": "",
     }
 
