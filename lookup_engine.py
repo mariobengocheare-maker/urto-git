@@ -140,7 +140,13 @@ def extract_first_phone(page) -> str:
 
 
 def process_row(page, row: dict, debug: bool = False) -> dict:
-    entity_note = ""
+    # A note input_parser.py may have already attached at parse time (e.g.
+    # the owner name was recovered from the case's own Defendant field, or
+    # the property address was rebuilt from a homesteaded owner's own
+    # mailing address — see build order #141) — surfaced up front so Mario
+    # sees exactly what stood in for missing data, same transparency
+    # principle as the entity-resolution/zip-substitution notes below.
+    entity_note = row.get("parse_note", "")
     candidates = None
     if row.get("is_entity"):
         entity_name = row.get("entity_name", "")
@@ -163,8 +169,8 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         row["first_name"] = primary["first_name"]
         row["last_name"] = primary["last_name"]
         search_zip = primary.get("zip") or None
-        entity_note = (f"Resolved via Sunbiz ({primary['resolved_via']}): "
-                        f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}. ")
+        entity_note += (f"Resolved via Sunbiz ({primary['resolved_via']}): "
+                         f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}. ")
     else:
         # A row can carry the OWNER's own mailing zip straight from the
         # input file (e.g. a "Tax - Owner - Postal Code" column on a

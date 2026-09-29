@@ -124,7 +124,35 @@ HEADER_ALIASES = {
     # "mailing" exclusion in resolve_headers() doesn't apply here since this
     # one is deliberately meant to be a mailing-type address).
     "owner_zip": ["tax owner postal code", "owner postal code", "owner zip code", "owner zip"],
+    # A foreclosure suit's own list of named parties — the actual person
+    # being foreclosed on is always named first, with co-defendants (HOAs,
+    # junior lienholders, banks, "United States of America") joined after.
+    # Used ONLY as a fallback owner name when the primary owner-name column
+    # is blank (see build order #141 — some rows have their Tax-Owner block
+    # redacted for confidentiality, but the case's own Defendant field still
+    # names the real person).
+    "defendant_name": ["defendant 1", "defendant"],
+    # The rest of these describe the OWNER's own on-file mailing address
+    # (as opposed to "address"/"city"/"state"/"zip" above, which are the
+    # PROPERTY's own address) — used only to rebuild a property's address
+    # when it's missing entirely AND the owner is confirmed to live there
+    # (see _maybe_use_homesteaded_owner_address / build order #141).
+    "owner_house_number": ["tax owner house number"],
+    "owner_prefix_direction": ["tax owner pre dir"],
+    "owner_street_name": ["tax owner street name"],
+    "owner_street_type": ["tax owner street type"],
+    "owner_suffix_direction": ["tax owner suffix dir"],
+    "owner_unit_number": ["tax owner unit"],
+    "owner_city": ["tax owner city"],
+    "owner_state": ["tax owner state"],
+    "homesteaded": ["homesteaded property", "homestead exemption"],
 }
+
+# Values a "Homesteaded Property" column uses for "yes" — Florida's homestead
+# exemption legally requires the property to be the owner's own permanent
+# residence, so when this is true, the owner's own on-file mailing address
+# IS the property's address, not just a similar one.
+_HOMESTEADED_TRUE_VALUES = {"t", "true", "y", "yes", "1"}
 
 
 def _normalize_header(h: str) -> str:
@@ -353,6 +381,62 @@ def _detect_name_order(fieldnames) -> str:
     return "last_first"
 
 
+def _maybe_use_homesteaded_owner_address(out: dict, raw_row: dict, headers: dict) -> None:
+    """Some rows on an aggregator export (see build order #141) have their
+    OWN property-address/city/zip columns entirely blank, even though a
+    real address exists on file — just under the "Tax - Owner" mailing
+    columns instead. That's only safe to treat as the property's own
+    address when the county's own "Homesteaded Property" flag confirms the
+    owner actually lives there (Florida's homestead exemption legally
+    requires it to be their permanent residence) AND that mailing address
+    is genuinely in Florida — a homestead flag paired with an out-of-state
+    mailing address is a real, observed data inconsistency in this kind of
+    export and must never be trusted as the property's own address.
+    Deliberately skipped for an entity-owned row (`out["is_entity"]`) —an
+    LLC/Inc can't hold a homestead exemption at all, so a "t" flag there is
+    itself a sign of bad/miscoded data, and Sunbiz resolution (a much more
+    precise path) already exists for entity rows regardless."""
+    if out["is_entity"]:
+        return
+
+    homesteaded = _get(raw_row, headers.get("homesteaded")).strip().lower()
+    if homesteaded not in _HOMESTEADED_TRUE_VALUES:
+        return
+
+    owner_state = _get(raw_row, headers.get("owner_state")).strip().upper()
+    if owner_state != "FL":
+        return
+
+    owner_house = _strip_float_artifacts(_get(raw_row, headers.get("owner_house_number")))
+    owner_street = _get(raw_row, headers.get("owner_street_name"))
+    owner_zip = _clean_zip(_get(raw_row, headers.get("owner_zip")))
+    if not (owner_house and owner_street and owner_zip):
+        return
+
+    parts = [
+        owner_house,
+        _get(raw_row, headers.get("owner_prefix_direction")),
+        owner_street,
+        _get(raw_row, headers.get("owner_street_type")),
+        _get(raw_row, headers.get("owner_suffix_direction")),
+    ]
+    address = " ".join(p for p in parts if p)
+    unit = _strip_float_artifacts(_get(raw_row, headers.get("owner_unit_number")))
+    if unit:
+        address = f"{address} {unit}".strip()
+
+    out["address"] = address
+    out["city"] = _get(raw_row, headers.get("owner_city")) or out["city"]
+    out["state"] = owner_state
+    out["zip"] = owner_zip
+    out["parse_note"] = (
+        out.get("parse_note", "")
+        + "Property address/zip were blank on file — used the homesteaded "
+          "owner's own on-file mailing address instead, which is the same "
+          "address since they occupy the property. "
+    )
+
+
 def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") -> dict:
     out = {
         "owner_name_raw": "",
@@ -378,6 +462,25 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
             out["skip_reason"] = "Missing first or last name"
     else:
         owner_raw = _get(raw_row, headers.get("owner_name"))
+        used_defendant_fallback = False
+        if not owner_raw and headers.get("defendant_name"):
+            # The tax roll's own owner-name block is sometimes blanked out
+            # entirely for a confidential/protected owner (law enforcement,
+            # a domestic-violence protection, etc. — the "Legal Description"
+            # column typically reads "CONFIDENTIAL" on these rows), but the
+            # foreclosure case itself still names the real person as its
+            # first defendant. Confirmed against a real row: Tax-Owner-Name-1
+            # blank, Defendant 1 = "COWARD ANNA;MALIBU BAY COMMUNITY
+            # ASSOCIATION INC;...", and on every OTHER row in the same file
+            # where Tax-Owner-Name-1 IS populated, it always exactly matches
+            # Defendant 1's first semicolon segment — strong evidence the
+            # real owner is always listed first, with HOAs/lienholders/banks/
+            # government joined after.
+            defendant_raw = _get(raw_row, headers["defendant_name"])
+            first_segment = defendant_raw.split(";")[0].strip()
+            if first_segment:
+                owner_raw = first_segment
+                used_defendant_fallback = True
         out["owner_name_raw"] = owner_raw
         parsed = parse_owner_name(owner_raw, name_order)
         out["first_name"] = parsed["first_name"]
@@ -385,12 +488,20 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
         out["is_entity"] = parsed["is_entity"]
         out["entity_name"] = parsed["entity_name"]
         out["skip_reason"] = parsed["skip_reason"]
+        if used_defendant_fallback and not out["skip_reason"]:
+            out["parse_note"] = (
+                out.get("parse_note", "")
+                + "Owner name was blank on the tax roll (often a confidentiality "
+                  "flag) — used the foreclosure case's own named defendant instead. "
+            )
 
     if out["skip_reason"]:
         return out
 
     if "address" in headers:
         out["address"] = _strip_float_artifacts(_get(raw_row, headers["address"]))
+        if not out["address"] and not out["zip"]:
+            _maybe_use_homesteaded_owner_address(out, raw_row, headers)
     else:
         house = _strip_float_artifacts(_get(raw_row, headers.get("house_number")))
         prefix = _get(raw_row, headers.get("prefix_direction"))
