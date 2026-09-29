@@ -21,10 +21,40 @@ owner-name columns (see input_parser.py).
 """
 
 import re
+import time
 
 from playwright.sync_api import TimeoutError as PWTimeoutError
 
 SUNBIZ_SEARCH_URL = "https://search.sunbiz.org/Inquiry/CorporationSearch/ByName"
+
+# Sunbiz sits behind Cloudflare, which can serve a "Just a moment..." bot-
+# check interstitial instead of the real page — confirmed live (see build
+# order #150, a real skip Mario hit reading exactly this page's title/body).
+# Most of these are Cloudflare's automatic, time-based JS challenge (no
+# human action needed, just a few seconds for its own script to run and
+# redirect) rather than an interactive CAPTCHA, so it's worth waiting out
+# rather than giving up on the very first check.
+CLOUDFLARE_CHALLENGE_MARKERS = ("just a moment", "checking your browser", "verify you are human")
+
+
+def _wait_out_bot_challenge(page, max_wait_seconds: float = 25) -> bool:
+    """Polls the page's title for up to max_wait_seconds, returning True once
+    it no longer looks like a Cloudflare-style bot-check interstitial (or
+    never did). False means it's still showing after the wait — most likely
+    a genuinely interactive challenge (a real CAPTCHA/Turnstile checkbox)
+    that automation can't click through on its own, rather than the
+    automatic kind."""
+    deadline = time.time() + max_wait_seconds
+    while True:
+        try:
+            title = page.title().strip().lower()
+        except Exception:
+            return True  # can't read the page at all -- let the normal flow's own diagnostics handle it
+        if not any(marker in title for marker in CLOUDFLARE_CHALLENGE_MARKERS):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(1.5)
 
 # Sunbiz's own long-stable section headers on an entity detail page. Text-
 # anchored extraction (rather than CSS classes/ids we can't verify) so this
@@ -303,6 +333,17 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
         except PWTimeoutError:
             pass
 
+        # Sunbiz can answer with a Cloudflare "Just a moment..." bot-check
+        # instead of the real search page — give its own automatic JS
+        # challenge a real chance to clear before ever looking for a search
+        # box that genuinely isn't there yet (see build order #150).
+        cleared = _wait_out_bot_challenge(page)
+        if cleared:
+            try:
+                page.wait_for_load_state("networkidle", timeout=8000)
+            except PWTimeoutError:
+                pass
+
         # Best-effort search-box locator — label text and known ids first,
         # falling back progressively to any visible input Sunbiz's markup
         # exposes, regardless of its exact type/attributes (see build order
@@ -333,10 +374,17 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
             # or genuinely changed markup) turns this into something
             # diagnosable straight from the results CSV's own Notes column.
             try:
-                diag = (f"page title: '{page.title()}', url: {page.url}, "
+                title = page.title()
+                diag = (f"page title: '{title}', url: {page.url}, "
                         f"body starts: '{page.inner_text('body')[:200].strip()}'")
             except Exception:
+                title = ""
                 diag = "(could not read the page itself for diagnostics)"
+            if not cleared or any(m in title.strip().lower() for m in CLOUDFLARE_CHALLENGE_MARKERS):
+                return {"first_name": "", "last_name": "", "resolved_via": "",
+                        "skip_reason": f"Sunbiz showed a bot-check page that didn't clear in time (this is Sunbiz's "
+                                       f"own Cloudflare protection, not a real code problem) — try this row again "
+                                       f"later, or on its own in a smaller batch — {diag}"}
             return {"first_name": "", "last_name": "", "resolved_via": "",
                     "skip_reason": f"Could not find Sunbiz's search box (page layout may have changed) — {diag}"}
 

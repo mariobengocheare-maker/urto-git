@@ -43,10 +43,36 @@ same lesson build order #147 already learned the hard way for Sunbiz.
 """
 
 import re
+import time
 
 from playwright.sync_api import TimeoutError as PWTimeoutError
 
 PROPERTY_SEARCH_URL = "https://www.miamidade.gov/Apps/PA/PropertySearch/"
+
+# Sunbiz turned out to sit behind a Cloudflare bot-check that could serve a
+# "Just a moment..." interstitial instead of the real page (confirmed live,
+# see build order #150) -- this site's own bot-defenses (if any) have never
+# been seen at all, so the same defensive wait is applied here too rather
+# than waiting for Mario to hit the identical failure a second time on a
+# different site before it gets the same treatment.
+BOT_CHALLENGE_MARKERS = ("just a moment", "checking your browser", "verify you are human")
+
+
+def _wait_out_bot_challenge(page, max_wait_seconds: float = 25) -> bool:
+    """See llc_lookup.py's identical helper for the full rationale. Returns
+    True once the page's title no longer looks like a bot-check interstitial
+    (or never did), False if it's still showing after max_wait_seconds."""
+    deadline = time.time() + max_wait_seconds
+    while True:
+        try:
+            title = page.title().strip().lower()
+        except Exception:
+            return True
+        if not any(marker in title for marker in BOT_CHALLENGE_MARKERS):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(1.5)
 
 # A full address embedded in the page's own text: house number + street,
 # then city, then "FL" and a 5-digit zip (optionally +4). Text-anchored
@@ -164,11 +190,25 @@ def find_property_by_owner_name(page, owner_name: str, subject_address: str = No
     except PWTimeoutError:
         pass
 
+    cleared = _wait_out_bot_challenge(page)
+    if cleared:
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except PWTimeoutError:
+            pass
+
     if debug:
         page.pause()
 
     search_box = _find_owner_search_box(page)
     if search_box is None:
+        try:
+            still_challenged = any(m in page.title().strip().lower() for m in BOT_CHALLENGE_MARKERS)
+        except Exception:
+            still_challenged = False
+        if not cleared or still_challenged:
+            return {"skip_reason": "Miami-Dade Property Appraiser showed a bot-check page that didn't clear in "
+                                    f"time — try this row again later, or on its own in a smaller batch — {_diag(page)}"}
         return {"skip_reason": "Could not find Property Appraiser's owner-name search box "
                                 f"(page layout may have changed) — {_diag(page)}"}
 
