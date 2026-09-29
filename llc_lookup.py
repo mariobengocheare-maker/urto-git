@@ -650,9 +650,47 @@ def find_person_zip_via_sunbiz_officer_search(page, first_name: str, last_name: 
     person, extracts THEIR OWN on-file address/zip from it -- the same way
     `resolve_entity_owner()` already extracts a registered agent's address,
     just reached by searching a person's name directly instead of an
-    entity's. Returns {"zip", "address"} on success, or {"skip_reason": ...}
-    when nothing usable is found -- a failure here is never fatal to the
-    row, it just means this fallback had nothing new to offer."""
+    entity's. Returns {"zip", "address"} on success (plus "swapped": True
+    when it was the swapped order that actually worked), or
+    {"skip_reason": ...} when nothing usable is found under EITHER name
+    order -- a failure here is never fatal to the row, it just means this
+    fallback had nothing new to offer.
+
+    Mario's own real case (build order #151) was a plain individual owner
+    findable on Sunbiz despite no LLC anywhere in the input CSV -- but
+    Sunbiz's own Last Name/First Name fields are two SEPARATE inputs, so if
+    this file's name order is reversed (build order #152's own reason for
+    existing), searching them straight fills the wrong field with the wrong
+    half of the name and can miss a real Sunbiz record entirely. Applying
+    the exact same "try it swapped before giving up" philosophy here (see
+    build order #155) closes that gap -- a swapped match still has to pass
+    the identical exact-name confirmation check as the first attempt, so
+    this can never produce a wrong-person result, only recover a genuine
+    miss caused by guessing the wrong field order."""
+    first_name = (first_name or "").strip()
+    last_name = (last_name or "").strip()
+    result = _officer_search_attempt(page, first_name, last_name, debug=debug)
+    if result.get("zip"):
+        return result
+    first_reason = result.get("skip_reason", "")
+    if first_name.lower() == last_name.lower() or not first_name or not last_name:
+        return result
+    swapped = _officer_search_attempt(page, last_name, first_name, debug=debug)
+    if swapped.get("zip"):
+        swapped["swapped"] = True
+        return swapped
+    second_reason = swapped.get("skip_reason", "")
+    return {"skip_reason": (f"Checked Sunbiz's officer/registered-agent index under both "
+                             f"'{first_name} {last_name}' and '{last_name} {first_name}' (in case this "
+                             f"file's name order is reversed) — neither turned up a usable address. "
+                             f"({first_reason} / {second_reason})")}
+
+
+def _officer_search_attempt(page, first_name: str, last_name: str, debug: bool = False) -> dict:
+    """One single-order Sunbiz officer/registered-agent search attempt --
+    see `find_person_zip_via_sunbiz_officer_search()` above, which tries
+    this once as given and once more with first/last swapped before
+    giving up."""
     target = _name_key(last_name, first_name)
     if not target:
         return {"skip_reason": "No name to search Sunbiz's officer/registered-agent index with"}

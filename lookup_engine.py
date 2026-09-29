@@ -253,13 +253,28 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
                 page, current_first, current_last, debug=debug)
             candidate_zip = sunbiz_person.get("zip")
             already_tried_zips = {z for z in (search_zip, row["zip"].strip()) if z}
+            swap_clause = (" (found under the reversed name order)"
+                            if sunbiz_person.get("swapped") else "")
             if candidate_zip and candidate_zip not in already_tried_zips:
                 entity_note += (f"FOREWARN found nothing under the zip(s) already tried for "
                                  f"'{current_first} {current_last}' — found them listed on a Sunbiz business "
-                                 f"record with an on-file address in zip {candidate_zip} instead; retrying "
-                                 f"FOREWARN under that zip. ")
+                                 f"record{swap_clause} with an on-file address in zip {candidate_zip} instead; "
+                                 f"retrying FOREWARN under that zip. ")
                 result = _run_forewarn_search(page, row, debug=debug, search_zip=candidate_zip,
                                                match_address=sunbiz_person.get("address"))
+            elif candidate_zip:
+                # Sunbiz does list a record for this name, but at a zip
+                # already tried and already failed -- nothing new to search
+                # under, but say so plainly rather than leaving this whole
+                # step invisible in the notes (see build order #155, Mario's
+                # own question: "did URTO check every possible zip code").
+                entity_note += (f"Also checked Sunbiz's officer/registered-agent index for "
+                                 f"'{current_first} {current_last}'{swap_clause} — it lists a record, but at "
+                                 f"zip {candidate_zip}, already tried above. ")
+            else:
+                entity_note += (f"Also checked Sunbiz's officer/registered-agent index directly for "
+                                 f"'{current_first} {current_last}' (both name orders) — "
+                                 f"{sunbiz_person.get('skip_reason', 'no additional matching record found')}. ")
 
     result["notes"] = entity_note + result["notes"]
     return result
