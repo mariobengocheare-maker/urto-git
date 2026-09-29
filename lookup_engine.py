@@ -10,7 +10,7 @@ import time
 from playwright.sync_api import TimeoutError as PWTimeoutError
 
 import crm
-from llc_lookup import resolve_entity_owner
+from llc_lookup import resolve_entity_owner, find_person_zip_via_sunbiz_officer_search
 from property_appraiser import find_property_by_owner_name
 
 FOREWARN_SEARCH_URL = "https://app.forewarn.com/search"
@@ -234,6 +234,32 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
                                            match_address=match_address)
             if result["status"] != "NOT_FOUND":
                 break
+
+    # Last resort before giving up entirely: Mario's own real case (build
+    # order #151) — a plain individual owner whose FOREWARN search under
+    # every zip already tried came back NOT_FOUND can still be found on
+    # Sunbiz under a business record they're an officer/registered agent
+    # of, with their own on-file address there, even though nothing in the
+    # input CSV pointed at that entity at all. Only spends this extra
+    # Sunbiz search once nothing else has worked, and only retries FOREWARN
+    # if it turns up a genuinely different zip than what's already failed —
+    # a match found here is verified against THIS on-file address, same
+    # reasoning as an entity-resolved candidate (see build order #142).
+    if result["status"] == "NOT_FOUND":
+        current_first = row["first_name"].strip()
+        current_last = row["last_name"].strip()
+        if current_first and current_last:
+            sunbiz_person = find_person_zip_via_sunbiz_officer_search(
+                page, current_first, current_last, debug=debug)
+            candidate_zip = sunbiz_person.get("zip")
+            already_tried_zips = {z for z in (search_zip, row["zip"].strip()) if z}
+            if candidate_zip and candidate_zip not in already_tried_zips:
+                entity_note += (f"FOREWARN found nothing under the zip(s) already tried for "
+                                 f"'{current_first} {current_last}' — found them listed on a Sunbiz business "
+                                 f"record with an on-file address in zip {candidate_zip} instead; retrying "
+                                 f"FOREWARN under that zip. ")
+                result = _run_forewarn_search(page, row, debug=debug, search_zip=candidate_zip,
+                                               match_address=sunbiz_person.get("address"))
 
     result["notes"] = entity_note + result["notes"]
     return result

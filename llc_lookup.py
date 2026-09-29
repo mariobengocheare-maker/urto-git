@@ -527,3 +527,189 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
     except Exception as e:
         return {"first_name": "", "last_name": "", "resolved_via": "",
                 "skip_reason": f"Sunbiz lookup error: {e}"}
+
+
+# Sunbiz's own "Search by Officer/Registered Agent Name" index -- a
+# genuinely different search than resolve_entity_owner() above, which
+# searches BY ENTITY NAME. This one searches directly by a PERSON's name to
+# find any business record listing them, used only as a last-resort
+# fallback (see build order #151) once every zip already tried for a name
+# has come back NOT_FOUND on FOREWARN -- Mario's own real case: a plain
+# individual owner ("Molly Reichman") whose property-zip FOREWARN search
+# found nobody, but who turned out to have her own address on file on an
+# LLC's Sunbiz page he found by searching her name directly. Never
+# confirmed against the live site -- same caveat as everything else in this
+# file -- built defensively with real diagnostics on any failure.
+SUNBIZ_OFFICER_SEARCH_URL = "https://search.sunbiz.org/Inquiry/CorporationSearch/ByOfficerRA"
+
+
+def _page_diag(page) -> str:
+    try:
+        return (f"page title: '{page.title()}', url: {page.url}, "
+                f"body starts: '{page.inner_text('body')[:200].strip()}'")
+    except Exception:
+        return "(could not read the page itself for diagnostics)"
+
+
+def _name_key(last_name: str, first_name: str) -> str:
+    return re.sub(r"[^A-Z]", "", f"{last_name}{first_name}".upper())
+
+
+def find_person_zip_via_sunbiz_officer_search(page, first_name: str, last_name: str, debug: bool = False) -> dict:
+    """Searches Sunbiz's officer/registered-agent name index for
+    `first_name`/`last_name` and, if a business record lists that exact
+    person, extracts THEIR OWN on-file address/zip from it -- the same way
+    `resolve_entity_owner()` already extracts a registered agent's address,
+    just reached by searching a person's name directly instead of an
+    entity's. Returns {"zip", "address"} on success, or {"skip_reason": ...}
+    when nothing usable is found -- a failure here is never fatal to the
+    row, it just means this fallback had nothing new to offer."""
+    target = _name_key(last_name, first_name)
+    if not target:
+        return {"skip_reason": "No name to search Sunbiz's officer/registered-agent index with"}
+    try:
+        page.goto(SUNBIZ_OFFICER_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except PWTimeoutError:
+            pass
+        cleared = _wait_out_bot_challenge(page)
+        if cleared:
+            try:
+                page.wait_for_load_state("networkidle", timeout=8000)
+            except PWTimeoutError:
+                pass
+
+        if debug:
+            page.pause()
+
+        last_box = None
+        for getter in (
+            lambda: page.get_by_label(re.compile("last name", re.IGNORECASE)),
+            lambda: page.locator("#LastName"),
+            lambda: page.get_by_role("textbox").first,
+        ):
+            try:
+                loc = getter()
+                if loc.count() > 0:
+                    last_box = loc.first
+                    break
+            except Exception:
+                continue
+        if last_box is None:
+            return {"skip_reason": "Could not find Sunbiz's officer/registered-agent name search fields "
+                                    f"(page layout may have changed) — {_page_diag(page)}"}
+        first_box = None
+        for getter in (
+            lambda: page.get_by_label(re.compile("first name", re.IGNORECASE)),
+            lambda: page.locator("#FirstName"),
+        ):
+            try:
+                loc = getter()
+                if loc.count() > 0:
+                    first_box = loc.first
+                    break
+            except Exception:
+                continue
+
+        last_box.click()
+        last_box.fill(last_name)
+        if first_box is not None:
+            first_box.click()
+            first_box.fill(first_name)
+
+        clicked_search = False
+        for getter in (
+            lambda: page.get_by_role("button", name=re.compile("search", re.IGNORECASE)),
+            lambda: page.get_by_text(re.compile(r"^\s*search\s*$", re.IGNORECASE)),
+        ):
+            try:
+                loc = getter()
+                if loc.count() > 0:
+                    loc.first.click()
+                    clicked_search = True
+                    break
+            except Exception:
+                continue
+        if not clicked_search:
+            last_box.press("Enter")
+
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except PWTimeoutError:
+            pass
+        _wait_out_bot_challenge(page)
+
+        if debug:
+            page.pause()
+
+        body_text = page.inner_text("body")
+
+        # A single unique match can go straight to an entity detail page
+        # with no results list at all -- only click through a results link
+        # when we're actually still looking at one (no registered-agent/
+        # officer section present yet on the current page).
+        if not REGISTERED_AGENT_LABEL.search(body_text) and not any(
+            label.search(body_text) for label in OFFICER_SECTION_LABELS
+        ):
+            links = page.get_by_role("link")
+            count = links.count()
+            best_idx, best_score = -1, 0.0
+            for i in range(min(count, 60)):
+                try:
+                    text = links.nth(i).inner_text().strip()
+                except Exception:
+                    continue
+                if not text or len(text) < 3:
+                    continue
+                candidate = re.sub(r"[^A-Z]", "", text.upper())
+                if not candidate:
+                    continue
+                if candidate == target:
+                    best_idx, best_score = i, 1.0
+                    break
+                if target in candidate or candidate in target:
+                    score = min(len(target), len(candidate)) / max(len(target), len(candidate))
+                    if score > best_score:
+                        best_idx, best_score = i, score
+            if best_idx < 0 or best_score < 0.5:
+                return {"skip_reason": f"No Sunbiz officer/registered-agent record found for "
+                                        f"'{first_name} {last_name}' — {_page_diag(page)}"}
+            links.nth(best_idx).click()
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except PWTimeoutError:
+                pass
+            body_text = page.inner_text("body")
+
+        # Confirm THIS exact person (not some other name on the same page)
+        # and pull their own address block -- check the registered-agent
+        # line first, then every officer/manager block.
+        agent_section = _section_text(body_text, REGISTERED_AGENT_LABEL)
+        agent_name = _first_nonblank_line(agent_section)
+        if agent_name:
+            parsed = _split_person_name(agent_name)
+            if parsed["ok"] and _name_key(parsed["last_name"], parsed["first_name"]) == target:
+                zip_code = _extract_zip(agent_section)
+                if zip_code:
+                    return {"zip": zip_code,
+                            "address": _clean_address_block(_strip_first_line(agent_section, agent_name))}
+
+        for label in OFFICER_SECTION_LABELS:
+            officer_section = _section_text(body_text, label)
+            if not officer_section:
+                continue
+            for candidate_name, block_text in _officer_candidate_blocks(officer_section):
+                parsed = _split_person_name(candidate_name)
+                if not parsed["ok"] or _name_key(parsed["last_name"], parsed["first_name"]) != target:
+                    continue
+                zip_code = _extract_zip(block_text)
+                if zip_code:
+                    return {"zip": zip_code, "address": _clean_address_block(block_text)}
+
+        return {"skip_reason": f"Found a Sunbiz record but couldn't confirm "
+                                f"'{first_name} {last_name}' own address on it — {_page_diag(page)}"}
+    except PWTimeoutError:
+        return {"skip_reason": "Sunbiz officer/registered-agent search timed out"}
+    except Exception as e:
+        return {"skip_reason": f"Sunbiz officer/registered-agent search failed: {e}"}
