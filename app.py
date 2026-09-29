@@ -111,7 +111,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.32.0"
+APP_VERSION = "2.33.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -237,11 +237,45 @@ def _request_in_progress() -> bool:
         return _active_requests["count"] > 0
 
 
+# A job stuck at "starting"/"awaiting_login" (a closed/abandoned Chromium
+# window, or nobody ever clicking login-confirm — see build order #144/#145)
+# would otherwise block every future lookup, the auto-updater, AND the
+# auto-close watchdog forever, with no way out short of killing python in
+# Task Manager. A real login takes seconds to a couple minutes at most, so
+# anything stuck this long is treated as abandoned (see build order #146).
+STUCK_JOB_TIMEOUT_SECONDS = 20 * 60
+
+
+def _force_stop_job(job):
+    """Same wake the Stop button already used (see stop()) — sets both
+    events so a thread genuinely blocked at job["login_event"].wait()
+    notices and exits cleanly (closes the browser, marks itself stopped)
+    on its own."""
+    job["stop_event"].set()
+    job["login_event"].set()
+
+
+def _expire_stale_jobs_locked():
+    """Directly marks a too-long-stuck job "stopped" (not just waking its
+    events) so _job_in_progress() clears even if the background thread is
+    truly hung somewhere before it ever reaches login_event.wait() (e.g. a
+    broken Chromium launch) and never notices the wake at all — the thread
+    harmlessly overwrites this with the same "stopped" status if/when it
+    does eventually catch up. Assumes JOBS_LOCK is already held."""
+    now = time.time()
+    for job in JOBS.values():
+        if job["status"] in ("starting", "awaiting_login") and now - job.get("created_at", now) > STUCK_JOB_TIMEOUT_SECONDS:
+            _force_stop_job(job)
+            job["status"] = "stopped"
+            job["error"] = "Automatically stopped after sitting idle too long waiting for FOREWARN login."
+
+
 def _job_in_progress() -> bool:
     """Never auto-close mid-lookup — a real headed Chromium window may be
     scraping FOREWARN in a background thread, and killing the process would
     abandon that run with no partial-results file ever written."""
     with JOBS_LOCK:
+        _expire_stale_jobs_locked()
         return any(j["status"] in ("starting", "awaiting_login", "running") for j in JOBS.values())
 
 
@@ -464,6 +498,10 @@ def api_check_update():
 @app.route("/api/upload", methods=["POST"])
 def upload():
     with JOBS_LOCK:
+        # A truly abandoned job (stuck long past STUCK_JOB_TIMEOUT_SECONDS)
+        # is cleared automatically here — see build order #146 — so most of
+        # the time this never even reaches the stuck_job_id branch below.
+        _expire_stale_jobs_locked()
         # A job can end up genuinely orphaned -- its Chromium window closed
         # or abandoned while stuck at awaiting_login (e.g. build order
         # #144's now-fixed stuck-disabled login button), with the PAGE that
@@ -517,6 +555,7 @@ def upload():
         "delay": delay,
         "output_path": None,
         "error": None,
+        "created_at": time.time(),
     }
 
     thread = threading.Thread(target=run_job_safe, args=(job_id, rows), daemon=True)
@@ -539,10 +578,7 @@ def stop(job_id):
     job = JOBS.get(job_id)
     if not job:
         abort(404)
-    job["stop_event"].set()
-    # In case it's paused waiting on login confirmation, wake it so it can
-    # exit cleanly instead of hanging forever.
-    job["login_event"].set()
+    _force_stop_job(job)
     return jsonify({"ok": True})
 
 
