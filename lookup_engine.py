@@ -315,8 +315,31 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
     run_search(page, first_name, last_name, effective_search_zip)
     count = wait_for_results_or_none(page)
 
+    # Mario: "it is putting last name first name into forewarn... how can we
+    # make this smart enough to know if the given data is in reverse" (see
+    # build order #152). Rather than trying to GUESS a file's name order up
+    # front (exactly the per-row/per-file guessing this codebase has always
+    # refused to do -- see input_parser.py's own standing caution), this
+    # applies Mario's own "try every combination... until you get a number"
+    # philosophy to name order too: if the name AS GIVEN returns literally
+    # nothing, try it with first/last swapped before giving up. This can
+    # never cause a wrong-person match -- every candidate this search turns
+    # up (in either order) still has to pass the exact same Address History
+    # verification below -- it only ever turns a genuine zero-result miss
+    # into a chance at a real match when this particular file's owner-name
+    # column turned out to be in the opposite order from what was assumed.
+    swap_note = ""
+    if count == 0 and first_name and last_name and first_name.lower() != last_name.lower():
+        run_search(page, last_name, first_name, effective_search_zip)
+        count = wait_for_results_or_none(page)
+        if count > 0:
+            first_name, last_name = last_name, first_name
+            swap_note = (f"'{row['first_name']} {row['last_name']}' returned nothing on FOREWARN — retried "
+                         f"with first/last swapped ('{first_name} {last_name}') in case this file's name "
+                         f"order is reversed, and that's what actually returned results. ")
+
     if count == 0:
-        result["notes"] = zip_note + "No results returned by FOREWARN for this name/zip."
+        result["notes"] = swap_note + zip_note + "No results returned by FOREWARN for this name/zip."
         return result
 
     n = get_result_cards(page).count()
@@ -343,13 +366,18 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
             human_pause(0.3, 0.8)
             page.go_back()  # -> summary page
             phone = extract_first_phone(page)
+            if swap_note:
+                # The swapped order is what actually worked -- correct the
+                # row's own names so build_output_row() shows the real name,
+                # not the original (apparently reversed) guess.
+                row["first_name"], row["last_name"] = first_name, last_name
             if phone:
                 result["phone"] = phone
                 result["status"] = "FOUND"
-                result["notes"] = zip_note + "Matched in address history."
+                result["notes"] = swap_note + zip_note + "Matched in address history."
                 return result
             result["status"] = "FOUND_NO_PHONE"
-            result["notes"] = zip_note + "Address matched in history but no phone on record."
+            result["notes"] = swap_note + zip_note + "Address matched in history but no phone on record."
             return result
         else:
             human_pause(0.3, 0.8)
@@ -357,5 +385,5 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
             page.go_back()  # -> results list
             human_pause(0.3, 0.7)
 
-    result["notes"] = zip_note + f"Checked {n} candidate(s), none matched the target address."
+    result["notes"] = swap_note + zip_note + f"Checked {n} candidate(s), none matched the target address."
     return result
