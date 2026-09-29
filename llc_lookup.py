@@ -88,6 +88,26 @@ AGENT_SERVICE_KEYWORDS = [
     "ROCKET LAWYER", "HARBOR COMPLIANCE", "RASI",
 ]
 
+# A Sunbiz-extracted "person" name that's actually a law firm/practice name
+# (e.g. a PA/PLLC name like "Valdes Firm" that _try_extract_pa_person happily
+# parses as First="Firm" Last="Valdes", since "FIRM" isn't a registered-
+# entity suffix ENTITY_TOKENS would ever catch) — not a real person to spend
+# a FOREWARN search on. Deliberately narrow (Mario's own two examples) and
+# only ever used to drop ONE candidate out of the list `resolve_entity_owner`
+# builds, never to skip the whole entity by itself — if Sunbiz also lists a
+# real individual (an officer/manager, a different PA name, ...), that
+# person is still tried exactly as before (see build order #153, and Mario's
+# own explicit correction: an entity with one law-firm-shaped name AND one
+# real officer name should still resolve via the real one, which it already
+# did — this only closes the gap where the firm-shaped name was the ONLY
+# candidate and would otherwise have been searched on FOREWARN for nothing).
+FIRM_NAME_TOKENS = {"FIRM", "LAW"}
+
+
+def _looks_like_firm_name(first_name: str, last_name: str) -> bool:
+    return bool({first_name.strip().upper(), last_name.strip().upper()} & FIRM_NAME_TOKENS)
+
+
 # How many extra Sunbiz entities we'll follow when a registered agent or
 # officer/manager turns out to be itself another company (e.g. an LLC's
 # manager is another LLC) rather than an individual. Bounded so a chain of
@@ -511,7 +531,25 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
             deduped.append(c)
         candidates = deduped
 
+        # Mario: "if a prop is owned only by a law firm... if the ONLY name
+        # in the Sunbiz says 'firm' or 'law' then skip it" — but explicitly
+        # NOT when a real individual is also available (his own example: an
+        # entity with one law-firm-shaped candidate name and one genuine
+        # officer name should still resolve via the real one, exactly as it
+        # already did). So this only ever drops the firm-shaped candidate(s)
+        # from the list — it can never cause a skip on its own unless doing
+        # so empties the list entirely.
+        firm_candidates = [c for c in candidates if _looks_like_firm_name(c["first_name"], c["last_name"])]
+        candidates = [c for c in candidates if not _looks_like_firm_name(c["first_name"], c["last_name"])]
+
         if not candidates:
+            if firm_candidates:
+                firm_name = f"{firm_candidates[0]['first_name']} {firm_candidates[0]['last_name']}"
+                return {"first_name": "", "last_name": "", "resolved_via": "",
+                        "skip_reason": f"Found '{entity_name}' on Sunbiz, but the only resolvable name "
+                                        f"('{firm_name}') looks like a law firm/practice, not an individual — "
+                                        f"skipping rather than searching FOREWARN for a non-person name",
+                        "candidates": []}
             return {"first_name": "", "last_name": "", "resolved_via": "",
                     "skip_reason": f"Found '{entity_name}' on Sunbiz but couldn't confidently resolve it to a person "
                                     f"(registered agent didn't parse as an individual, and no officer/manager did either)",
