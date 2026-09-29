@@ -2647,6 +2647,8 @@ startBtn.addEventListener('click', async () => {
   stopBtn.style.display = 'inline-block';
   stopBtn.disabled = false;
   stopBtn.textContent = 'Stop';
+  loginBtn.disabled = false;
+  loginBox.style.display = 'none';
   pollTimer = setInterval(poll, 1500);
 });
 
@@ -2698,6 +2700,7 @@ async function poll() {
 
   if (data.status === 'awaiting_login') {
     loginBox.style.display = 'block';
+    loginBtn.disabled = false;
     statusDiv.textContent = 'Waiting for you to log into FOREWARN...';
   } else if (data.status === 'running') {
     loginBox.style.display = 'none';
