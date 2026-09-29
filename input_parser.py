@@ -525,8 +525,16 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
             address = f"{address} {unit_type} {unit_num}".strip()
         out["address"] = address
 
-    if not out["zip"]:
-        out["skip_reason"] = "No zip code given"
+    # A missing zip is NOT an immediate skip anymore (see build order #148,
+    # Mario's explicit ask: "if no zip code is provided plug the property
+    # into miami dade property appraiser until you get the zip code") —
+    # convert_row() has no browser/page access to actually run that lookup
+    # itself, so a still-blank zip is deliberately left as-is here and
+    # handled downstream by lookup_engine.process_row(), which DOES have a
+    # page and can attempt a Property Appraiser owner-name search before
+    # ever giving up on the row. Don't reintroduce a hard skip here — that
+    # would skip every one of these rows before the new lookup ever gets a
+    # chance to run.
 
     return out
 

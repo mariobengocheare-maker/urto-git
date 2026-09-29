@@ -11,6 +11,7 @@ from playwright.sync_api import TimeoutError as PWTimeoutError
 
 import crm
 from llc_lookup import resolve_entity_owner
+from property_appraiser import find_property_by_owner_name
 
 FOREWARN_SEARCH_URL = "https://app.forewarn.com/search"
 
@@ -194,6 +195,29 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         # historical connection to the property they themselves own.
         search_zip = row.get("owner_zip") or None
         match_address = None
+
+    # input_parser.py deliberately no longer skips a row just for missing a
+    # zip (see build order #148) — it has no page/browser access to do
+    # anything about it. This is the one place that DOES, so a still-blank
+    # zip gets one real shot at a Miami-Dade Property Appraiser owner-name
+    # search before the row is given up on. `match_address` doubles as the
+    # tiebreaker here for an entity row: it's already the Sunbiz-resolved
+    # candidate's own registered address (see above), exactly the address
+    # Mario said to prefer when the property itself isn't already known.
+    if not row["zip"].strip():
+        owner_name_for_pa = (row["entity_name"] if row.get("is_entity")
+                              else f"{row['last_name']} {row['first_name']}".strip())
+        pa_result = find_property_by_owner_name(
+            page, owner_name_for_pa, subject_address=row.get("address") or None,
+            tiebreaker_address=match_address, debug=debug,
+        )
+        if pa_result.get("skip_reason"):
+            return {"phone": "", "status": "SKIPPED", "notes": entity_note + pa_result["skip_reason"]}
+        row["address"] = pa_result["address"]
+        row["city"] = pa_result["city"]
+        row["state"] = pa_result["state"]
+        row["zip"] = pa_result["zip"]
+        entity_note += pa_result.get("note", "")
 
     result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip,
                                    match_address=match_address)
