@@ -111,7 +111,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.41.0"
+APP_VERSION = "2.42.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -647,6 +647,21 @@ def download(job_id):
 
 @app.route("/api/lookup/weekly_count")
 def lookup_weekly_count():
+    return jsonify(crm.get_weekly_lookup_count())
+
+
+@app.route("/api/lookup/accounts")
+def lookup_accounts():
+    return jsonify({"accounts": crm.LOOKUP_ACCOUNTS, "active": crm.get_active_lookup_account()})
+
+
+@app.route("/api/lookup/account", methods=["POST"])
+def set_lookup_account():
+    account = (request.get_json(silent=True) or {}).get("account", "")
+    try:
+        crm.set_active_lookup_account(account)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     return jsonify(crm.get_weekly_lookup_count())
 
 

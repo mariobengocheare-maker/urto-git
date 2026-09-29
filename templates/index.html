@@ -526,6 +526,12 @@
   }
   .weekly-count-bar .count { color: var(--gold-bright); font-weight: 700; font-size: .95rem; }
   .weekly-count-bar .range { color: var(--text-secondary); }
+  .lookup-account-toggle { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .lookup-account-toggle button {
+    background: rgba(19,28,46,.5); color: var(--text-secondary); border: 1px solid var(--border);
+    padding: 4px 12px; font-size: .78rem; border-radius: 6px;
+  }
+  .lookup-account-toggle button.active { background: linear-gradient(180deg, var(--navy-light), var(--navy)); color: #fff; border-color: var(--gold); box-shadow: 0 0 12px rgba(201,162,39,.25); }
   .crm-subtabs { display: flex; gap: 8px; margin-bottom: 18px; }
   .crm-subtabs button { background: rgba(19,28,46,.5); color: var(--text-secondary); border: 1px solid var(--border); }
   .crm-subtabs button.active { background: linear-gradient(180deg, var(--navy-light), var(--navy)); color: #fff; border-color: var(--gold); box-shadow: 0 0 16px rgba(201,162,39,.25); }
@@ -1260,6 +1266,7 @@
   <div class="weekly-count-bar">
     📊 <span class="count" id="weeklyLookupCount">—</span> <span id="weeklyLookupLabel">lookups this week</span>
     <span class="range" id="weeklyLookupRange"></span>
+    <div class="lookup-account-toggle" id="lookupAccountToggle"></div>
   </div>
 
   <div class="card">
@@ -2588,6 +2595,7 @@ const catScene = document.getElementById('catScene');
 const weeklyLookupCountEl = document.getElementById('weeklyLookupCount');
 const weeklyLookupLabelEl = document.getElementById('weeklyLookupLabel');
 const weeklyLookupRangeEl = document.getElementById('weeklyLookupRange');
+const lookupAccountToggleEl = document.getElementById('lookupAccountToggle');
 
 function formatWeekRange(startIso, endIso) {
   const opts = { month: 'short', day: 'numeric' };
@@ -2596,18 +2604,55 @@ function formatWeekRange(startIso, endIso) {
   return `(${start} – ${end})`;
 }
 
+function renderWeeklyLookupData(data) {
+  weeklyLookupCountEl.textContent = data.count;
+  weeklyLookupLabelEl.textContent = data.count === 1 ? 'lookup this week' : 'lookups this week';
+  weeklyLookupRangeEl.textContent = formatWeekRange(data.week_start, data.week_end);
+  if (data.account) {
+    lookupAccountToggleEl.querySelectorAll('button').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.account === data.account);
+    });
+  }
+}
+
+async function switchLookupAccount(account) {
+  try {
+    const res = await fetch('/api/lookup/account', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account }),
+    });
+    if (!res.ok) return;
+    renderWeeklyLookupData(await res.json());
+  } catch (e) { /* non-critical display — ignore transient fetch errors */ }
+}
+
+async function initLookupAccountToggle() {
+  try {
+    const res = await fetch('/api/lookup/accounts');
+    if (!res.ok) return;
+    const data = await res.json();
+    lookupAccountToggleEl.innerHTML = '';
+    for (const account of data.accounts) {
+      const btn = document.createElement('button');
+      btn.textContent = account;
+      btn.dataset.account = account;
+      if (account === data.active) btn.classList.add('active');
+      btn.addEventListener('click', () => switchLookupAccount(account));
+      lookupAccountToggleEl.appendChild(btn);
+    }
+  } catch (e) { /* non-critical display — ignore transient fetch errors */ }
+}
+
 async function refreshWeeklyLookupCount() {
   try {
     const res = await fetch('/api/lookup/weekly_count');
     if (!res.ok) return;
-    const data = await res.json();
-    weeklyLookupCountEl.textContent = data.count;
-    weeklyLookupLabelEl.textContent = data.count === 1 ? 'lookup this week' : 'lookups this week';
-    weeklyLookupRangeEl.textContent = formatWeekRange(data.week_start, data.week_end);
+    renderWeeklyLookupData(await res.json());
   } catch (e) { /* non-critical display — ignore transient fetch errors */ }
 }
 
 refreshWeeklyLookupCount();
+initLookupAccountToggle();
 
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });

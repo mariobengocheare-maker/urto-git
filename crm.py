@@ -1318,10 +1318,37 @@ def init_db():
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS lookup_stats (
-            week_start TEXT PRIMARY KEY,
-            count INTEGER NOT NULL DEFAULT 0
+            week_start TEXT NOT NULL,
+            account TEXT NOT NULL DEFAULT 'Mario',
+            count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (week_start, account)
         )
     """)
+    # Mario: "switch forewarn accounts for the lookups this week counter...
+    # toggle between Mario and Abel" (see build order #154) -- the ORIGINAL
+    # table had a plain `week_start TEXT PRIMARY KEY`, since there was only
+    # ever one implicit account. SQLite can't ALTER a table's PRIMARY KEY in
+    # place, so this rebuilds the table when the old single-column-PK shape
+    # is detected: every pre-existing row (all real lookups counted before
+    # this feature existed) is carried forward tagged as 'Mario', the same
+    # account that was always implicitly the only one -- never silently
+    # dropped or reset to zero.
+    lookup_stats_cols = {row["name"] for row in conn.execute("PRAGMA table_info(lookup_stats)").fetchall()}
+    if "account" not in lookup_stats_cols:
+        conn.execute("ALTER TABLE lookup_stats RENAME TO lookup_stats_old")
+        conn.execute("""
+            CREATE TABLE lookup_stats (
+                week_start TEXT NOT NULL,
+                account TEXT NOT NULL DEFAULT 'Mario',
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (week_start, account)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO lookup_stats (week_start, account, count)
+            SELECT week_start, 'Mario', count FROM lookup_stats_old
+        """)
+        conn.execute("DROP TABLE lookup_stats_old")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS document_types (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1590,31 +1617,60 @@ def _monday_of(d: date) -> date:
     return d - timedelta(days=d.weekday())  # date.weekday(): Monday == 0
 
 
-def get_weekly_lookup_count() -> dict:
-    """Current Monday-to-Sunday week's lookup count. Keyed by that Monday's
-    date, so the count "resets" naturally when the week rolls over — no
-    explicit reset needed, a new week just hasn't got a row yet."""
+# Mario: "I can toggle between 'Mario' and 'Abel' (a second account that
+# will count its own lookups this week)" — see build order #154. A fixed
+# pair, the same pattern as this file's other small fixed lists (the four
+# TRANSACTION_TYPES, the three EOS rocks) rather than an open-ended "add an
+# account" UI, since Mario asked for exactly these two names, not a general
+# multi-account feature.
+LOOKUP_ACCOUNTS = ["Mario", "Abel"]
+_LOOKUP_ACCOUNT_SETTING_KEY = "active_lookup_account"
+
+
+def get_active_lookup_account() -> str:
+    return _get_setting(_LOOKUP_ACCOUNT_SETTING_KEY) or LOOKUP_ACCOUNTS[0]
+
+
+def set_active_lookup_account(account: str):
+    if account not in LOOKUP_ACCOUNTS:
+        raise ValueError(f"Unknown lookup account '{account}' — must be one of {LOOKUP_ACCOUNTS}")
+    _set_setting(_LOOKUP_ACCOUNT_SETTING_KEY, account)
+
+
+def get_weekly_lookup_count(account: str = None) -> dict:
+    """Current Monday-to-Sunday week's lookup count for one account (the
+    currently active one, if not given). Keyed by that Monday's date, so
+    the count "resets" naturally when the week rolls over — no explicit
+    reset needed, a new week just hasn't got a row yet."""
+    account = account or get_active_lookup_account()
     week_start = _monday_of(_today())
     week_end = week_start + timedelta(days=6)
     conn = get_conn()
-    row = conn.execute("SELECT count FROM lookup_stats WHERE week_start = ?", (week_start.isoformat(),)).fetchone()
+    row = conn.execute(
+        "SELECT count FROM lookup_stats WHERE week_start = ? AND account = ?",
+        (week_start.isoformat(), account),
+    ).fetchone()
     conn.close()
     return {
         "week_start": week_start.isoformat(),
         "week_end": week_end.isoformat(),
         "count": row["count"] if row else 0,
+        "account": account,
     }
 
 
-def increment_weekly_lookup_count(n: int = 1):
+def increment_weekly_lookup_count(n: int = 1, account: str = None):
     """Called once per actual FOREWARN search attempt (not for rows that
-    were skipped before ever reaching FOREWARN) — see lookup_engine.py."""
+    were skipped before ever reaching FOREWARN) — see lookup_engine.py.
+    Charged against the currently active account (whichever Mario has the
+    toggle set to) unless a specific one is passed."""
+    account = account or get_active_lookup_account()
     week_start = _monday_of(_today()).isoformat()
     conn = get_conn()
     conn.execute(
-        """INSERT INTO lookup_stats (week_start, count) VALUES (?, ?)
-           ON CONFLICT(week_start) DO UPDATE SET count = count + excluded.count""",
-        (week_start, n),
+        """INSERT INTO lookup_stats (week_start, account, count) VALUES (?, ?, ?)
+           ON CONFLICT(week_start, account) DO UPDATE SET count = count + excluded.count""",
+        (week_start, account, n),
     )
     conn.commit()
     conn.close()
