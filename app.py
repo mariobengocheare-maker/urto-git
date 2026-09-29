@@ -111,7 +111,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.35.0"
+APP_VERSION = "2.36.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -271,12 +271,35 @@ def _expire_stale_jobs_locked():
 
 
 def _job_in_progress() -> bool:
-    """Never auto-close mid-lookup — a real headed Chromium window may be
-    scraping FOREWARN in a background thread, and killing the process would
-    abandon that run with no partial-results file ever written."""
+    """True while a real headed Chromium window is (or might soon be)
+    scraping FOREWARN in a background thread. Used to be an unconditional
+    "never auto-close" gate — see _stop_all_jobs() right below for why
+    that's no longer the whole story: Mario explicitly wants closing URTO
+    to also stop a still-running scrape, not leave it orphaned forever."""
     with JOBS_LOCK:
         _expire_stale_jobs_locked()
         return any(j["status"] in ("starting", "awaiting_login", "running") for j in JOBS.values())
+
+
+def _stop_all_jobs():
+    """Mario: "if i close urto, it should STOP running forewarn in the
+    chromium window." Every browser tab being gone used to just mean
+    auto-close politely waited forever for a still-running job to finish on
+    its own (see _job_in_progress()'s old docstring) — nothing ever told it
+    to stop, so a scrape left running with the tab closed just kept going
+    to completion, headed Chromium window and all, with nobody watching it.
+    This is the SAME graceful stop the Stop button already triggers
+    (_force_stop_job(), reused as-is): run_job()'s loop only checks
+    stop_event between rows, so whatever row is already mid-flight still
+    finishes and gets written to the partial-results file before the loop
+    breaks and the browser closes cleanly — nothing already found is lost,
+    only rows not yet reached are left unprocessed. Safe to call on every
+    watchdog tick (idempotent — re-setting an already-set Event is a no-op),
+    so callers never need to track "did I already ask this job to stop.\""""
+    with JOBS_LOCK:
+        for job in JOBS.values():
+            if job["status"] in ("starting", "awaiting_login", "running"):
+                _force_stop_job(job)
 
 
 def _safe_to_exit() -> bool:
@@ -314,8 +337,16 @@ SHUTDOWN_GRACE_SECONDS = 5
 def _delayed_shutdown_check():
     with _active_tabs_lock:
         any_tabs_left = bool(_active_tabs)
-    if not any_tabs_left and _safe_to_exit():
-        os._exit(0)
+    if not any_tabs_left:
+        # Every tab is gone -- tell any still-running FOREWARN scrape to
+        # stop (see _stop_all_jobs()) before checking whether it's actually
+        # safe to exit yet. A stop is graceful, not instant, so the first
+        # check right after this often still finds the job mid-shutdown
+        # (closing its browser) -- _watchdog()'s own recurring 5s tick is
+        # what actually finishes the exit once that settles.
+        _stop_all_jobs()
+        if _safe_to_exit():
+            os._exit(0)
 
 
 @app.route("/api/shutdown", methods=["POST"])
@@ -343,8 +374,17 @@ def _watchdog():
                 del _active_tabs[tid]
             any_tabs_left = bool(_active_tabs)
         within_startup_grace = (now - _server_started_at) < STARTUP_GRACE_SECONDS
-        if _ever_connected["v"] and not any_tabs_left and not within_startup_grace and _safe_to_exit():
-            os._exit(0)
+        if _ever_connected["v"] and not any_tabs_left and not within_startup_grace:
+            # Every tab has been gone for a while -- same as
+            # _delayed_shutdown_check(), stop any running scrape first, then
+            # exit once it (and any in-flight request) has actually settled.
+            # This tick repeats every 5s for as long as the process is up,
+            # so it's what eventually completes an exit that a scrape's own
+            # graceful shutdown took longer than SHUTDOWN_GRACE_SECONDS to
+            # finish.
+            _stop_all_jobs()
+            if _safe_to_exit():
+                os._exit(0)
 
 
 threading.Thread(target=_watchdog, daemon=True).start()

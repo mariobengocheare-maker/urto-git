@@ -18,6 +18,7 @@ same "URTO" icon he already uses every day now updates itself first,
 automatically, whenever nothing's currently running.
 """
 
+import datetime
 import importlib.machinery
 import importlib.util
 import json
@@ -137,8 +138,29 @@ def check_for_auto_update():
         updater = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(updater)  # module __name__ != "__main__", so its Tkinter UI never opens
         updater.run_update(log=lambda msg: None)
+    except Exception as e:
+        # run_update() itself already logs a real failure to
+        # %LOCALAPPDATA%\URTO\update_log.txt (see build order #149) -- this
+        # covers the narrower case where loading urto_updater.pyw as a
+        # module failed before run_update() ever got a chance to run at
+        # all, which would otherwise vanish with zero trace, same silent-
+        # failure bug class build order #86 already fixed once for push
+        # notifications. Never let a failed auto-update block a normal
+        # launch either way.
+        _log_update_bootstrap_failure(installed, remote, e)
+
+
+def _log_update_bootstrap_failure(installed, remote, exc):
+    try:
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        base = os.path.join(local_appdata, "URTO") if local_appdata else HERE
+        os.makedirs(base, exist_ok=True)
+        with open(os.path.join(base, "update_log.txt"), "a", encoding="utf-8") as f:
+            f.write(f"\n--- {datetime.datetime.now().astimezone().isoformat()} ---\n")
+            f.write(f"Auto-update check found {installed} -> {remote} but couldn't even "
+                    f"start the updater: {exc}\n")
     except Exception:
-        pass  # never let a failed auto-update block a normal launch
+        pass
 
 
 def check_stale_version():

@@ -20,6 +20,7 @@ Safe to re-run any time. If the download or install fails partway,
 nothing gets overwritten and you're left exactly where you started.
 """
 
+import os
 import shutil
 import socket
 import subprocess
@@ -45,6 +46,38 @@ APP_PORT = 5000
 NEVER_TOUCH = {"urto_crm.db", "backups", "outputs", "documents", "flasklog.txt", "_update_backups"}
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _update_log_path() -> Path:
+    """Same %LOCALAPPDATA%\\URTO location crm.py's DATA_DIR already uses for
+    real data (duplicated rather than imported -- this updater is meant to
+    stay self-contained, and importing crm.py here would be a real module
+    for a couple of lines). Falls back to living alongside this file when
+    LOCALAPPDATA doesn't exist (e.g. this sandbox)."""
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    base = Path(local_appdata) / "URTO" if local_appdata else INSTALL_DIR
+    return base / "update_log.txt"
+
+
+def _append_update_log(lines):
+    """The silent auto-update paths (launch_desktop.pyw's
+    check_for_auto_update()/relaunch_after_update(), see build order #149)
+    call run_update() with a no-op log callback -- a real failure there used
+    to vanish with zero trace anywhere, the exact "swallowed exception,
+    impossible to diagnose without guessing" bug class already fixed once
+    for push notifications (build order #86). Every run_update() call, manual
+    or silent, now also appends its full log here regardless of what `log`
+    callback was passed in, so a failed auto-update leaves something Mario
+    (or a future session) can actually read afterward. Best-effort: a broken
+    log write must never block the real update."""
+    try:
+        path = _update_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n--- {datetime.now().astimezone().isoformat()} ---\n")
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
 
 
 def _port_is_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -178,33 +211,41 @@ def install_requirements(log):
 
 
 def run_update(log) -> bool:
+    log_lines = []
+
+    def _log(msg):
+        log_lines.append(msg)
+        log(msg)
+
     try:
-        old_server_stopped = kill_running_app(log)
-        backup_current_install(log)
+        old_server_stopped = kill_running_app(_log)
+        backup_current_install(_log)
         with tempfile.TemporaryDirectory(prefix="urto_update_") as tmp:
-            source_dir = download_and_extract(log, Path(tmp))
-            install_update(log, source_dir)
+            source_dir = download_and_extract(_log, Path(tmp))
+            install_update(_log, source_dir)
         # TemporaryDirectory cleans up the zip/extracted files on exit —
         # nothing left behind to manage by hand.
-        install_requirements(log)
-        log("")
+        install_requirements(_log)
+        _log("")
         if old_server_stopped:
-            log("Done! URTO is up to date.")
+            _log("Done! URTO is up to date.")
         else:
             # The new files ARE on disk correctly — this is purely about the
             # OLD process still holding the port, which is why Mario hit
             # "both launch paths show the old version" (they just find
             # something already answering on 5000 and open a tab to THAT,
             # never starting a fresh process with the new code).
-            log("Files are updated, but the OLD version may still be running.")
-            log("See the warning above — end it in Task Manager before")
-            log("launching URTO, or you'll keep seeing the old version.")
+            _log("Files are updated, but the OLD version may still be running.")
+            _log("See the warning above — end it in Task Manager before")
+            _log("launching URTO, or you'll keep seeing the old version.")
         return True
     except Exception as e:
-        log("")
-        log(f"Update failed: {e}")
-        log("Nothing was changed — you're still on your previous version.")
+        _log("")
+        _log(f"Update failed: {e}")
+        _log("Nothing was changed — you're still on your previous version.")
         return False
+    finally:
+        _append_update_log(log_lines)
 
 
 def launch_urto():
