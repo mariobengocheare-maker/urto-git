@@ -116,7 +116,16 @@ def run_search(page, first_name, last_name, zip_code):
     human_pause(0.25, 0.7)
     human_fill(page.get_by_label("Zip Code", exact=True), zip_code)
     human_pause(0.6, 1.5)
-    page.get_by_role("button", name=SEARCH_BUTTON_RE).click()
+    # FOREWARN added a global top-nav "Search" button (data-testid="nav-search")
+    # that now collides with the actual search FORM's own submit button --
+    # both match a bare page-wide get_by_role("button", name="Search"), which
+    # Playwright correctly refuses to click ambiguously (a real strict-mode
+    # error, not a bug in our selector logic). Scope to the form itself,
+    # which is where the real submit button lives -- the nav button isn't
+    # inside any form. .first is extra defense in case a future FOREWARN
+    # change adds a second form too, matching the same defensive pattern
+    # already used for Sunbiz's own search button in llc_lookup.py.
+    page.locator("form").get_by_role("button", name=SEARCH_BUTTON_RE).first.click()
 
 
 def extract_first_phone(page) -> str:
