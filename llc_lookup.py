@@ -72,6 +72,25 @@ def _extract_zip(text: str) -> str:
     return m.group(1) if m else ""
 
 
+def _strip_first_line(text: str, first_line: str) -> str:
+    """Returns `text` with its first occurrence of `first_line` (a name line
+    already pulled out separately) removed, leaving just the lines that
+    follow it — used to isolate a registered agent's ADDRESS lines from the
+    name line sitting right above them in the same section block."""
+    if not first_line:
+        return text
+    idx = text.find(first_line)
+    return text[idx + len(first_line):] if idx != -1 else text
+
+
+def _clean_address_block(text: str) -> str:
+    """Collapses a multi-line Sunbiz address block (street line, then city/
+    state/zip line) into one flat comma-joined string suitable for both
+    address_tokens() matching and showing in a note. Blank lines dropped."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return ", ".join(lines)
+
+
 def _is_agent_service_firm(name: str) -> bool:
     return any(kw in name.upper() for kw in AGENT_SERVICE_KEYWORDS)
 
@@ -258,7 +277,15 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
     a "zip" (the person's own address zip on file with Sunbiz, when one
     could be read) — the caller should search FOREWARN under THAT zip
     rather than the subject property's, since a registered agent/officer
-    very often lives somewhere else entirely (see build order #138).
+    very often lives somewhere else entirely (see build order #138) — and
+    an "address" (that same address, cleaned to one flat string), which the
+    caller should verify a FOREWARN candidate's Address History against
+    INSTEAD of the subject property's address: this person was reached as
+    an LLC's registered agent/officer, not as someone who ever necessarily
+    lived at (or had any real connection to) the property itself, so
+    requiring the property's address to show up in their personal history
+    is the wrong check entirely and silently rejects real matches (see
+    build order #142).
 
     `_visited`/`_depth` are internal recursion state for following a
     registered agent or officer/manager that's itself another company —
@@ -342,7 +369,8 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
             parsed = _split_person_name(agent_name)
             if parsed["ok"]:
                 candidate = {"first_name": parsed["first_name"], "last_name": parsed["last_name"],
-                             "resolved_via": "registered agent", "zip": _extract_zip(agent_section)}
+                             "resolved_via": "registered agent", "zip": _extract_zip(agent_section),
+                             "address": _clean_address_block(_strip_first_line(agent_section, agent_name))}
                 return {"first_name": candidate["first_name"], "last_name": candidate["last_name"],
                         "resolved_via": candidate["resolved_via"], "skip_reason": "",
                         "candidates": [candidate]}
@@ -360,7 +388,8 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
             pa_person = _try_extract_pa_person(agent_name)
             if pa_person["ok"]:
                 candidates.append({"first_name": pa_person["first_name"], "last_name": pa_person["last_name"],
-                                    "resolved_via": "PA/PLLC name", "zip": _extract_zip(agent_section)})
+                                    "resolved_via": "PA/PLLC name", "zip": _extract_zip(agent_section),
+                                    "address": _clean_address_block(_strip_first_line(agent_section, agent_name))})
 
         for label in OFFICER_SECTION_LABELS:
             officer_section = _section_text(body_text, label)
@@ -377,7 +406,8 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
                 parsed = _split_person_name(candidate_name)
                 if parsed["ok"]:
                     candidates.append({"first_name": parsed["first_name"], "last_name": parsed["last_name"],
-                                        "resolved_via": "officer/manager", "zip": _extract_zip(block_text)})
+                                        "resolved_via": "officer/manager", "zip": _extract_zip(block_text),
+                                        "address": _clean_address_block(block_text)})
 
         # The registered agent itself being a company is the same situation,
         # just one level up -- follow it too, unless it's a known agent-

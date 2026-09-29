@@ -169,6 +169,14 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         row["first_name"] = primary["first_name"]
         row["last_name"] = primary["last_name"]
         search_zip = primary.get("zip") or None
+        # A registered agent/officer was reached as an LLC's legal contact,
+        # not as someone who necessarily ever lived at (or has any real
+        # connection to) the property their LLC owns — requiring the
+        # PROPERTY's address to show up in their personal FOREWARN Address
+        # History is the wrong check and silently rejects real matches (see
+        # build order #142). Verify against THEIR OWN on-file address
+        # instead, when Sunbiz gave us one.
+        match_address = primary.get("address") or None
         entity_note += (f"Resolved via Sunbiz ({primary['resolved_via']}): "
                          f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}. ")
     else:
@@ -179,19 +187,27 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         # lives at the property being foreclosed on, same underlying reason
         # a Sunbiz-resolved registered agent usually doesn't either (see
         # build order #138). `_run_forewarn_search()` explains the
-        # substitution in its own notes whenever it's actually used.
+        # substitution in its own notes whenever it's actually used. Match
+        # verification for a direct individual owner still correctly stays
+        # anchored to the property's own address — unlike an entity's
+        # registered agent, a direct owner presumably has some real
+        # historical connection to the property they themselves own.
         search_zip = row.get("owner_zip") or None
+        match_address = None
 
-    result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip)
+    result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip,
+                                   match_address=match_address)
 
     if candidates and result["status"] == "NOT_FOUND":
         for fallback in candidates[1:]:
             row["first_name"] = fallback["first_name"]
             row["last_name"] = fallback["last_name"]
             search_zip = fallback.get("zip") or None
+            match_address = fallback.get("address") or None
             entity_note += (f"No FOREWARN match for that name — retrying via Sunbiz "
                              f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}. ")
-            result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip)
+            result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip,
+                                           match_address=match_address)
             if result["status"] != "NOT_FOUND":
                 break
 
@@ -199,7 +215,8 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
     return result
 
 
-def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str = None) -> dict:
+def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str = None,
+                          match_address: str = None) -> dict:
     # Counts once per actual FOREWARN search attempt — this function is only
     # ever reached for rows that weren't skipped (at input-parsing time or,
     # for an entity row, by a failed Sunbiz resolution), so it's an accurate
@@ -217,16 +234,31 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
     # The SEARCH is run under `search_zip` when one was given (a Sunbiz-
     # resolved person's own zip, which is very often different from the
     # subject property's — a registered agent/officer usually lives
-    # somewhere else entirely, see build order #138) -- but MATCH
-    # VERIFICATION always stays anchored to the property's own real
-    # address/zip regardless of what zip was used to find the person, since
-    # that's still the address we're actually trying to prove they're
-    # connected to.
-    required_tokens = address_tokens(address, zip_code)
+    # somewhere else entirely, see build order #138). MATCH VERIFICATION
+    # normally stays anchored to the property's own real address/zip, since
+    # that's the address we're trying to prove a direct owner is connected
+    # to -- but when `match_address` is given (a Sunbiz-resolved person's
+    # OWN on-file address), verification uses THAT instead: this person was
+    # reached as an LLC's registered agent/officer, not as someone with any
+    # necessary personal connection to the property itself, so requiring the
+    # property's address to appear in their FOREWARN history is the wrong
+    # check and silently rejects real matches (see build order #142) --
+    # confirmed live: FOREWARN's own single returned candidate for "Orlando
+    # Landaeta" showed his current on-file address as exactly the Sunbiz
+    # registered-agent address used to search, with zero overlap with the
+    # unrelated LLC-owned property, yet he was still genuinely the right
+    # person to call.
     effective_search_zip = (search_zip or zip_code).strip()
-    zip_note = (f"Searched FOREWARN under zip {effective_search_zip} instead of the "
-                f"property's {zip_code} (that's where this person's own address is on file). "
-                if effective_search_zip and effective_search_zip != zip_code else "")
+    if match_address:
+        required_tokens = address_tokens(match_address, effective_search_zip)
+        zip_note = (f"Verified against this person's own on-file address ({match_address}) "
+                     f"rather than the property's ({address}, {zip_code}) — they were reached "
+                     f"via Sunbiz corporate resolution, not as a direct owner. ")
+    else:
+        required_tokens = address_tokens(address, zip_code)
+        zip_note = (f"Searched FOREWARN under zip {effective_search_zip} instead of the "
+                    f"property's {zip_code} (that's where this person's own address is on file). "
+                    if effective_search_zip and effective_search_zip != zip_code else "")
 
     result = {"phone": "", "status": "NOT_FOUND", "notes": ""}
 
