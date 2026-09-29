@@ -2662,8 +2662,26 @@ stopBtn.addEventListener('click', async () => {
   await fetch(`/api/stop/${jobId}`, { method: 'POST' });
 });
 
-downloadBtn.addEventListener('click', () => {
-  window.location.href = `/api/download/${jobId}`;
+downloadBtn.addEventListener('click', async () => {
+  const defaultName = 'forewarn_results';
+  let name = prompt('What do you want to name the file?', defaultName);
+  if (name === null) return; // cancelled
+  name = name.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\.csv$/i, '').trim() || defaultName;
+  try {
+    const res = await fetch(`/api/download/${jobId}`);
+    if (!res.ok) throw new Error('The server could not produce the file.');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Couldn't download the file: " + err.message);
+  }
 });
 
 function showError(msg) {
