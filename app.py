@@ -111,7 +111,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.31.0"
+APP_VERSION = "2.32.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -464,8 +464,26 @@ def api_check_update():
 @app.route("/api/upload", methods=["POST"])
 def upload():
     with JOBS_LOCK:
-        if any(j["status"] in ("starting", "awaiting_login", "running") for j in JOBS.values()):
-            return jsonify({"error": "A lookup is already running. Wait for it to finish."}), 409
+        # A job can end up genuinely orphaned -- its Chromium window closed
+        # or abandoned while stuck at awaiting_login (e.g. build order
+        # #144's now-fixed stuck-disabled login button), with the PAGE that
+        # started it long since reloaded/closed and its jobId forgotten.
+        # /api/stop/<job_id> already knows how to wake a job parked at
+        # login_event.wait() and mark it stopped (see stop()) -- but the
+        # current page has no way to call it without knowing which job_id
+        # is stuck, since a bare error string gives it nothing to act on.
+        # Handing the blocking job's own id back here is what lets the
+        # frontend offer a real "force stop" recovery instead of leaving
+        # Mario with no option but killing python in Task Manager.
+        stuck_job_id = next(
+            (jid for jid, j in JOBS.items() if j["status"] in ("starting", "awaiting_login", "running")),
+            None,
+        )
+        if stuck_job_id:
+            return jsonify({
+                "error": "A lookup is already running. Wait for it to finish.",
+                "stuck_job_id": stuck_job_id,
+            }), 409
 
     file = request.files.get("file")
     if not file or not file.filename:

@@ -2638,7 +2638,11 @@ startBtn.addEventListener('click', async () => {
   const res = await fetch('/api/upload', { method: 'POST', body: form });
   const data = await res.json();
   if (!res.ok) {
-    showError(data.error || 'Upload failed');
+    if (data.stuck_job_id) {
+      showStuckJobError(data.stuck_job_id);
+    } else {
+      showError(data.error || 'Upload failed');
+    }
     startBtn.disabled = false;
     return;
   }
@@ -2688,6 +2692,42 @@ downloadBtn.addEventListener('click', async () => {
 
 function showError(msg) {
   errorBox.textContent = msg;
+  errorBox.style.display = 'block';
+}
+
+// A lookup can end up genuinely orphaned server-side -- its Chromium
+// window closed/abandoned while stuck waiting for login confirmation
+// (see build order #144's now-fixed stuck-disabled login button), with
+// THIS page reloaded since then and no memory of that job's id, so its
+// own Stop button is nowhere to click. /api/upload's 409 now hands back
+// the blocking job's id specifically so this recovery path exists at
+// all -- without it, the only way to unstick things was closing python
+// in Task Manager. Calling /api/stop/<id> wakes a job parked at
+// login_event.wait() and marks it stopped (see app.py's stop()), which
+// frees /api/upload to accept a brand-new lookup right after.
+function showStuckJobError(stuckJobId) {
+  errorBox.innerHTML = '';
+  const msg = document.createElement('div');
+  msg.textContent = "A previous lookup is stuck (its browser window may have been closed) and is blocking a new one from starting.";
+  errorBox.appendChild(msg);
+  const btn = document.createElement('button');
+  btn.textContent = 'Force Stop Stuck Lookup';
+  btn.className = 'secondary';
+  btn.style.marginTop = '10px';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+    try {
+      await fetch(`/api/stop/${stuckJobId}`, { method: 'POST' });
+      errorBox.style.display = 'none';
+      errorBox.innerHTML = '';
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Force Stop Stuck Lookup';
+      showError("Couldn't stop the stuck lookup: " + err.message);
+    }
+  });
+  errorBox.appendChild(btn);
   errorBox.style.display = 'block';
 }
 
