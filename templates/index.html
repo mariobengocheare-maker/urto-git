@@ -423,6 +423,16 @@
     border-radius: 8px;
     font-size: .9rem;
   }
+  #dedupInfoBox {
+    display: none;
+    margin-top: 16px;
+    padding: 12px 14px;
+    color: var(--gold-bright);
+    background: rgba(201, 162, 39, .12);
+    border: 1px solid rgba(201, 162, 39, .3);
+    border-radius: 8px;
+    font-size: .9rem;
+  }
 
   .table-wrap { margin-top: 22px; overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
   table { border-collapse: collapse; width: 100%; font-size: .85rem; background: rgba(12, 19, 34, .55); }
@@ -1284,6 +1294,7 @@
     </div>
 
     <div id="errorBox"></div>
+    <div id="dedupInfoBox"></div>
 
     <div id="loginBox">
       A Chromium window has opened. Log into FOREWARN there, then click below to continue.
@@ -1336,6 +1347,7 @@
 
     <div id="downloadBox">
       <button id="downloadBtn" class="secondary">Download results CSV</button>
+      <button id="retainResultsBtn" class="secondary">💾 Retain Found Numbers</button>
     </div>
 
     <div class="table-wrap">
@@ -2549,6 +2561,64 @@
   </div>
 </div>
 
+<!-- Retain Found Numbers (save a skip-trace batch's FOUND rows into the CRM) -->
+<div class="modal-overlay" id="retainResultsOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Retain Found Numbers</h2>
+      <button class="modal-close" id="retainResultsCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px" id="retainResultsSummary"></p>
+    <div class="error-box" id="retainResultsError"></div>
+
+    <div class="form-group">
+      <label><input type="checkbox" id="rrAddToList"> Also add them to a Contact List</label>
+    </div>
+    <div id="rrListFields" style="display:none">
+      <div class="form-group">
+        <label><input type="radio" name="rrListMode" id="rrModeExisting" value="existing" checked> Add to an existing list</label>
+      </div>
+      <div class="form-group" id="rrExistingRow">
+        <select id="rrExistingSelect"></select>
+      </div>
+      <div class="form-group">
+        <label><input type="radio" name="rrListMode" id="rrModeNew" value="new"> Create a new list</label>
+      </div>
+      <div id="rrNewFields" style="display:none">
+        <div class="form-group">
+          <label for="rrNewName">List name *</label>
+          <input type="text" id="rrNewName" placeholder="e.g. September Skip Trace Batch">
+        </div>
+        <div class="form-group">
+          <label for="rrNewFrequency">Call this whole list every</label>
+          <select id="rrNewFrequency">
+            <option value="none">No recurring schedule</option>
+            <option value="2_weeks" selected>2 Weeks</option>
+            <option value="3_weeks">3 Weeks</option>
+            <option value="4_weeks">4 Weeks</option>
+            <option value="2_months">2 Months</option>
+            <option value="6_months">6 Months</option>
+            <option value="custom">Custom...</option>
+          </select>
+        </div>
+        <div class="form-group row" id="rrNewCustomRow" style="display:none; margin-top:0">
+          <input type="number" id="rrNewCustomAmount" min="1" value="30" style="width:80px">
+          <select id="rrNewCustomUnit">
+            <option value="days">Days</option>
+            <option value="weeks">Weeks</option>
+            <option value="months">Months</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="retainResultsCancelBtn">Cancel</button>
+      <button id="retainResultsSubmitBtn">Save Found Numbers</button>
+    </div>
+  </div>
+</div>
+
 <!-- Manage Document Checklists modal -->
 <div class="modal-overlay" id="txnDocTypesOverlay">
   <div class="modal" style="max-width:640px">
@@ -2583,6 +2653,7 @@ const loginBox = document.getElementById('loginBox');
 const loginBtn = document.getElementById('loginBtn');
 const statusDiv = document.getElementById('status');
 const errorBox = document.getElementById('errorBox');
+const dedupInfoBox = document.getElementById('dedupInfoBox');
 const downloadBox = document.getElementById('downloadBox');
 const downloadBtn = document.getElementById('downloadBtn');
 const resultsTable = document.getElementById('resultsTable');
@@ -2691,6 +2762,26 @@ startBtn.addEventListener('click', async () => {
     startBtn.disabled = false;
     return;
   }
+
+  // Pre-upload CRM dedup (build order #158) -- rows already matching an
+  // existing CRM client's address were silently dropped BEFORE this job
+  // was ever created (never reaching the FOREWARN-login step), per Mario's
+  // explicit ask. If EVERY row in the upload matched, no job exists at
+  // all here -- data.job_id is absent -- so show that plainly and stop.
+  dedupInfoBox.style.display = 'none';
+  if (data.already_in_crm_count > 0) {
+    const n = data.already_in_crm_count;
+    const noun = n === 1 ? 'this address is' : `all ${n} of these addresses are`;
+    dedupInfoBox.textContent = data.all_already_in_crm
+      ? `All ${data.total_input} of these are already in your CRM.`
+      : `${n} of ${data.total_input} rows ${n === 1 ? 'was' : 'were'} skipped -- ${noun} already in your CRM.`;
+    dedupInfoBox.style.display = 'block';
+  }
+  if (data.all_already_in_crm) {
+    startBtn.disabled = false;
+    return;
+  }
+
   jobId = data.job_id;
   resultsTable.style.display = 'table';
   stopBtn.style.display = 'inline-block';
@@ -2827,6 +2918,203 @@ function renderRows(rows) {
     resultsBody.appendChild(tr);
   }
 }
+
+/* ---- Retain Found Numbers (save a skip-trace batch's FOUND rows into the
+   CRM, and optionally a Contact List) -- build order #158. Mirrors the
+   Dialer's "Save This List to a Contact List" flow (existing-vs-new list
+   picker, phone-based dedup against the CRM before creating anyone), just
+   sourced from the current Owner Lookup job's results instead of a loaded
+   dial list. Owner-Lookup-only, so this whole block MUST stay inside the
+   surrounding desktop-only Jinja guard for this script section, same as
+   the rest of Owner Lookup's own setup code just above -- referencing
+   'retainResultsBtn' (only exists in this tab's gated-out-in-hosted-mode
+   markup) from outside that guard would throw on a null element and, per
+   this file's own "one giant script tag" gotcha, silently kill every line
+   of JS after it on the hosted deployment. */
+const retainResultsOverlay = document.getElementById('retainResultsOverlay');
+const retainResultsError = document.getElementById('retainResultsError');
+const retainResultsSummary = document.getElementById('retainResultsSummary');
+const rrAddToList = document.getElementById('rrAddToList');
+const rrListFields = document.getElementById('rrListFields');
+const rrExistingRow = document.getElementById('rrExistingRow');
+const rrExistingSelect = document.getElementById('rrExistingSelect');
+const rrNewFields = document.getElementById('rrNewFields');
+const rrNewName = document.getElementById('rrNewName');
+const rrNewFrequency = document.getElementById('rrNewFrequency');
+const rrNewCustomRow = document.getElementById('rrNewCustomRow');
+const rrNewCustomAmount = document.getElementById('rrNewCustomAmount');
+const rrNewCustomUnit = document.getElementById('rrNewCustomUnit');
+const retainResultsSubmitBtn = document.getElementById('retainResultsSubmitBtn');
+let retainResultsFound = [];
+
+function updateRrModeVisibility() {
+  const isNew = document.getElementById('rrModeNew').checked;
+  rrExistingRow.style.display = isNew ? 'none' : 'block';
+  rrNewFields.style.display = isNew ? 'block' : 'none';
+}
+document.getElementById('rrModeExisting').addEventListener('change', updateRrModeVisibility);
+document.getElementById('rrModeNew').addEventListener('change', updateRrModeVisibility);
+rrNewFrequency.addEventListener('change', () => {
+  rrNewCustomRow.style.display = rrNewFrequency.value === 'custom' ? 'flex' : 'none';
+});
+rrAddToList.addEventListener('change', () => {
+  rrListFields.style.display = rrAddToList.checked ? 'block' : 'none';
+});
+
+document.getElementById('retainResultsBtn').addEventListener('click', async () => {
+  if (!jobId) {
+    alert('No Owner Lookup results in this session yet. Run a lookup first.');
+    return;
+  }
+  let data;
+  try {
+    const res = await fetch(`/api/status/${jobId}`);
+    data = await res.json();
+  } catch (e) {
+    alert("Couldn't reach URTO's server — try again.");
+    return;
+  }
+  retainResultsFound = (data.rows || []).filter(r => r.status === 'FOUND' && r.phone);
+  if (retainResultsFound.length === 0) {
+    alert('No FOUND results with a phone number in the current lookup session yet.');
+    return;
+  }
+
+  retainResultsError.style.display = 'none';
+  retainResultsError.textContent = '';
+  retainResultsSummary.textContent = `${retainResultsFound.length} found number${retainResultsFound.length === 1 ? '' : 's'} will be saved to your CRM.`;
+  rrAddToList.checked = false;
+  rrListFields.style.display = 'none';
+  document.getElementById('rrModeExisting').checked = true;
+  document.getElementById('rrModeNew').checked = false;
+  rrNewName.value = '';
+  rrNewFrequency.value = '2_weeks';
+  rrNewCustomRow.style.display = 'none';
+  updateRrModeVisibility();
+  try {
+    const listsRes = await fetch('/api/crm/contact_lists');
+    const lists = listsRes.ok ? await listsRes.json() : [];
+    rrExistingSelect.innerHTML = lists.length
+      ? lists.map(l => `<option value="${l.id}">${escapeHtml(l.name)} (${l.member_count} member${l.member_count === 1 ? '' : 's'})</option>`).join('')
+      : '<option value="">No existing lists yet — create a new one below</option>';
+  } catch (e) {
+    rrExistingSelect.innerHTML = '<option value="">Could not load lists</option>';
+  }
+  retainResultsOverlay.classList.add('show');
+});
+
+document.getElementById('retainResultsCloseBtn').addEventListener('click', () => retainResultsOverlay.classList.remove('show'));
+document.getElementById('retainResultsCancelBtn').addEventListener('click', () => retainResultsOverlay.classList.remove('show'));
+
+retainResultsSubmitBtn.addEventListener('click', async () => {
+  retainResultsError.style.display = 'none';
+  const wantsList = rrAddToList.checked;
+  const isNewList = document.getElementById('rrModeNew').checked;
+
+  try {
+    let listId = null;
+    if (wantsList) {
+      if (isNewList) {
+        const name = rrNewName.value.trim();
+        if (!name) {
+          retainResultsError.textContent = 'Type a list name first.';
+          retainResultsError.style.display = 'block';
+          return;
+        }
+        const res = await fetch('/api/crm/contact_lists', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            frequency_key: rrNewFrequency.value,
+            custom_amount: rrNewCustomAmount.value,
+            custom_unit: rrNewCustomUnit.value,
+          }),
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          retainResultsError.textContent = errData.error || 'Could not create that list.';
+          retainResultsError.style.display = 'block';
+          return;
+        }
+        listId = (await res.json()).id;
+      } else {
+        listId = Number(rrExistingSelect.value);
+        if (!listId) {
+          retainResultsError.textContent = 'Pick an existing list, or switch to "Create a new list".';
+          retainResultsError.style.display = 'block';
+          return;
+        }
+      }
+    }
+
+    retainResultsSubmitBtn.disabled = true;
+    retainResultsSubmitBtn.textContent = 'Saving…';
+
+    // Same phone-based dedup as the Dialer's own "Save This List" flow --
+    // two CRM clients can never share a phone number, so a found row whose
+    // number is already on file reuses that existing client instead of
+    // trying (and failing) to create a duplicate.
+    const crmRes = await fetch('/api/crm/clients');
+    const crmClients = crmRes.ok ? await crmRes.json() : [];
+    const byPhone = new Map();
+    for (const c of crmClients) {
+      const key = normalizePhone(c.phone);
+      if (key) byPhone.set(key, c.id);
+    }
+
+    const clientIds = [];
+    for (const r of retainResultsFound) {
+      const key = normalizePhone(r.phone);
+      if (key && byPhone.has(key)) {
+        clientIds.push(byPhone.get(key));
+        continue;
+      }
+      const res = await fetch('/api/crm/clients', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: r.owner || r.phone,
+          phone: r.phone,
+          address: r.address || '',
+          frequency_key: 'none',
+        }),
+      });
+      if (res.ok) {
+        const c = await res.json();
+        clientIds.push(c.id);
+        if (key) byPhone.set(key, c.id);
+      } else if (res.status === 409) {
+        // Another row in this same batch already claimed this phone number
+        // a moment ago (or it was already in the CRM under a slightly
+        // different cached name) -- reuse that client rather than dropping
+        // this row entirely.
+        const existing = crmClients.find(c => normalizePhone(c.phone) === key);
+        if (existing) clientIds.push(existing.id);
+      }
+    }
+
+    const uniqueClientIds = [...new Set(clientIds)];
+    if (wantsList && listId && uniqueClientIds.length) {
+      const addRes = await fetch(`/api/crm/contact_lists/${listId}/members/add`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_ids: uniqueClientIds }),
+      });
+      if (!addRes.ok) {
+        retainResultsError.textContent = 'Saved to your CRM, but could not add them to the list.';
+        retainResultsError.style.display = 'block';
+        return;
+      }
+    }
+
+    retainResultsOverlay.classList.remove('show');
+    alert(`Saved ${uniqueClientIds.length} contact${uniqueClientIds.length === 1 ? '' : 's'} to your CRM` + (wantsList && listId ? ' and added to the list.' : '.'));
+  } catch (e) {
+    retainResultsError.textContent = "Couldn't reach URTO's server — try again.";
+    retainResultsError.style.display = 'block';
+  } finally {
+    retainResultsSubmitBtn.disabled = false;
+    retainResultsSubmitBtn.textContent = 'Save Found Numbers';
+  }
+});
 {% endif %}
 
 function escapeHtml(s) {

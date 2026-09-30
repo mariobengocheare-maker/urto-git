@@ -220,3 +220,38 @@ def proxy_request(flask_request, subpath_with_prefix: str):
         if h in res.headers:
             out_headers[h] = res.headers[h]
     return res.content, res.status_code, out_headers
+
+
+def get_json(path: str):
+    """A plain authenticated GET against the hosted server, for server-side
+    code that needs to read CRM data from WITHIN app.py itself (not proxying
+    an incoming Flask request) -- e.g. the pre-upload CRM-dedup check in
+    /api/upload (see build order #158). Reuses the exact same session/lock/
+    re-login machinery as proxy_request() rather than opening a second,
+    unlocked path to the same _session. Raises HostedUnreachableError if not
+    configured, unreachable, or the response isn't valid JSON -- callers
+    should treat that as "couldn't check, fail open" rather than a hard
+    error, same as this module's other functions."""
+    config = load_config()
+    if not config:
+        raise HostedUnreachableError("Not connected to URTO Cloud yet.")
+
+    url = config["base_url"] + path
+    try:
+        with _session_lock:
+            _ensure_logged_in(config)
+            res = _session.get(url, timeout=30, allow_redirects=False)
+            if res.status_code in (302, 303) and "/login" in res.headers.get("Location", ""):
+                global _logged_in_url
+                _logged_in_url = None
+                _ensure_logged_in(config)
+                res = _session.get(url, timeout=30, allow_redirects=False)
+    except requests.RequestException:
+        raise HostedUnreachableError("Can't reach URTO Cloud right now — check your internet connection.")
+
+    if res.status_code != 200:
+        raise HostedUnreachableError(f"Hosted server returned status {res.status_code} for {path}.")
+    try:
+        return res.json()
+    except ValueError:
+        raise HostedUnreachableError(f"Hosted server returned a non-JSON response for {path}.")

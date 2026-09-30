@@ -39,6 +39,86 @@ individual":
 
 import re
 
+# --- Address-matching helpers -------------------------------------------
+# Moved here from lookup_engine.py (see build order #158) so a plain,
+# non-Playwright-dependent caller (app.py's pre-upload CRM dedup check) can
+# use the exact same proven address-subset-matching logic FOREWARN
+# verification already relies on, without importing lookup_engine.py itself
+# -- lookup_engine.py imports playwright.sync_api at module load, and
+# app.py must never do that eagerly (see build order #120's cold-start
+# fix). lookup_engine.py now imports these three names from here instead
+# of defining them itself; behavior is byte-for-byte unchanged.
+
+# Words normalized to a common form so "Street" vs "St" style differences
+# don't cause false non-matches.
+ABBREVIATIONS = {
+    "STREET": "ST", "AVENUE": "AVE", "BOULEVARD": "BLVD", "DRIVE": "DR",
+    "LANE": "LN", "ROAD": "RD", "COURT": "CT", "CIRCLE": "CIR",
+    "PLACE": "PL", "TERRACE": "TER", "PARKWAY": "PKWY", "HIGHWAY": "HWY",
+    "APARTMENT": "APT", "UNIT": "APT", "SUITE": "STE", "#": "APT",
+    "NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W",
+}
+
+
+def normalize(text: str) -> str:
+    text = text.upper()
+    # "#" is stripped alongside "."/"," rather than left attached to the
+    # following digits -- see build order #157: leaving it in place turned
+    # an address written "...DR #408" into a literal "#408" token that could
+    # never appear in FOREWARN's own page text (FOREWARN always writes
+    # "APT 408"/"UNIT 408", never with a hash), so `text_contains_address()`
+    # rejected an otherwise-perfect match. Stripping it here means the
+    # digits end up as a plain, matchable token -- `address_tokens()` below
+    # then drops that same token itself, exactly like it already does for
+    # an "APT"/"STE"-prefixed unit number.
+    text = re.sub(r"[.,#]", "", text)
+    tokens = text.split()
+    tokens = [ABBREVIATIONS.get(t, t) for t in tokens]
+    return " ".join(tokens)
+
+
+def address_tokens(address: str, zip_code: str) -> set:
+    """Key tokens that must all appear in a candidate address for it to count
+    as a match: house number, street-name words, and zip code. City/state are
+    deliberately EXCLUDED -- FOREWARN (like most data providers) labels many
+    unincorporated Miami-Dade addresses under "Miami" regardless of the
+    county's own incorporated-municipality name (Palmetto Bay, Cutler Bay,
+    etc.), so requiring the input row's raw city name to appear verbatim on
+    FOREWARN's own page silently rejected real, correct matches (a real row
+    proved this: FOREWARN showed "...MIAMI FL 33158" for an address whose
+    county record said "PALMETTO BAY", and the old code required "PALMETTO"/
+    "BAY" to appear literally in that page's text, which they never would).
+    House number + street name + zip is already unique enough on its own to
+    identify one specific real-world address. Unit/apt numbers are
+    deliberately NOT required either, since the same person can be listed
+    with or without a unit across records."""
+    norm = normalize(f"{address} {zip_code}")
+    tokens = set(norm.split())
+    drop = set()
+    tlist = norm.split()
+    for i, t in enumerate(tlist):
+        if t in ("APT", "STE") and i + 1 < len(tlist):
+            drop.add(tlist[i + 1])
+    # A unit number can also be written as "#408" instead of "APT 408"/
+    # "STE 408" -- normalize() already strips the "#" itself (so it never
+    # becomes an unmatchable literal "#408" token), but the bare digits it
+    # leaves behind still need to be dropped from the required set the same
+    # way an APT/STE-prefixed unit already is, per this function's own
+    # stated "unit numbers are deliberately not required" design. Scanned
+    # against the ORIGINAL (pre-normalize) text, since normalize() has
+    # already removed the "#" marker that identifies which token was one by
+    # the time `tlist` exists.
+    for m in re.finditer(r"#\s*(\S+)", f"{address} {zip_code}".upper()):
+        drop.add(normalize(m.group(1)))
+    return tokens - drop
+
+
+def text_contains_address(blob: str, required_tokens: set) -> bool:
+    norm_blob = normalize(blob)
+    blob_tokens = set(norm_blob.split())
+    return required_tokens.issubset(blob_tokens)
+
+
 OUTPUT_FIELDS = [
     "owner", "address", "city", "state", "zip",
     "phone", "status", "notes", "input_owner_name",

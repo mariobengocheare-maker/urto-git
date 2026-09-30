@@ -29,7 +29,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 
 import crm
 import hosted_sync
-from input_parser import OUTPUT_FIELDS, build_output_row, load_rows
+from input_parser import OUTPUT_FIELDS, build_output_row, load_rows, address_tokens, text_contains_address
 
 # `playwright.sync_api` (and lookup_engine.py/llc_lookup.py, which both
 # import it too) is deliberately NOT imported here at module load time --
@@ -111,7 +111,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.45.0"
+APP_VERSION = "2.46.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -535,6 +535,63 @@ def api_check_update():
     return jsonify({"update_available": True, "version": remote})
 
 
+def _find_rows_already_in_crm(rows: list) -> tuple:
+    """Drops any row whose ADDRESS already matches an existing CRM client,
+    before a new Skip Trace job is ever started -- Mario's explicit ask
+    ("it should not skip trace the ones i already have in my crm... this
+    would happen BEFORE signing into forewarn," see build order #158).
+
+    Matches by ADDRESS, not name, per Mario's own explicit correction ("i
+    imagine blocking would be by ADDRESS, not name as there can be two
+    people with the same name but 2 people with the same address is SUPER
+    unlikely") -- reuses the exact same house-number/street-name/zip
+    subset-matching logic (address_tokens/text_contains_address) FOREWARN
+    match-verification already relies on, so "does this address already
+    exist in the CRM" is answered the same proven way, not a fresh string
+    comparison. Only a row that HAS an address+zip to build a real required-
+    token set from is ever checked; an is_entity row, an already-skipped
+    row, or a row missing address/zip data is left untouched -- there's
+    nothing reliable to match on yet for those (an entity's Sunbiz-resolved
+    address isn't known until process_row() actually runs).
+
+    Fails OPEN if the hosted CRM can't be reached (unconfigured, offline,
+    a Render redeploy in progress, etc.): returns every row untouched with
+    zero dropped, rather than silently blocking a real lookup because a
+    network check happened to fail -- consistent with this codebase's other
+    "never let a diagnostic check itself cause data loss" patterns (see
+    check_data_health()'s fail-open-on-ambiguity design).
+
+    Returns (rows_to_process, already_in_crm_count).
+    """
+    try:
+        clients = hosted_sync.get_json("/api/crm/clients")
+    except hosted_sync.HostedUnreachableError:
+        return rows, 0
+
+    client_addresses = [c.get("address") or "" for c in clients if (c.get("address") or "").strip()]
+    if not client_addresses:
+        return rows, 0
+
+    rows_to_process = []
+    already_in_crm = 0
+    for row in rows:
+        if row.get("is_entity") or row.get("skip_reason"):
+            rows_to_process.append(row)
+            continue
+        address = (row.get("address") or "").strip()
+        zip_code = (row.get("zip") or "").strip()
+        if not address or not zip_code:
+            rows_to_process.append(row)
+            continue
+        required = address_tokens(address, zip_code)
+        if any(text_contains_address(text, required) for text in client_addresses):
+            already_in_crm += 1
+        else:
+            rows_to_process.append(row)
+
+    return rows_to_process, already_in_crm
+
+
 @app.route("/api/upload", methods=["POST"])
 def upload():
     with JOBS_LOCK:
@@ -584,6 +641,19 @@ def upload():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
+    # Pre-upload CRM dedup (build order #158) -- must run BEFORE any job is
+    # created, since a job's existence is what triggers the FOREWARN-login
+    # browser window; Mario was explicit this has to happen before that.
+    total_input = len(rows)
+    rows, already_in_crm_count = _find_rows_already_in_crm(rows)
+
+    if not rows:
+        return jsonify({
+            "already_in_crm_count": already_in_crm_count,
+            "total_input": total_input,
+            "all_already_in_crm": True,
+        })
+
     job_id = uuid.uuid4().hex
     JOBS[job_id] = {
         "status": "starting",
@@ -601,7 +671,11 @@ def upload():
     thread = threading.Thread(target=run_job_safe, args=(job_id, rows), daemon=True)
     thread.start()
 
-    return jsonify({"job_id": job_id})
+    return jsonify({
+        "job_id": job_id,
+        "already_in_crm_count": already_in_crm_count,
+        "total_input": total_input,
+    })
 
 
 @app.route("/api/confirm_login/<job_id>", methods=["POST"])
