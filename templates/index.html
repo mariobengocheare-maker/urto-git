@@ -1548,6 +1548,7 @@
       <a href="#" class="dialer-phone" id="dialerPhone"></a>
       <div class="dialer-meta" id="dialerMeta"></div>
       <button type="button" class="ghost small" id="dialerZillowBtn" style="display:none; margin-top:4px">🏠 View on Zillow</button>
+      <button type="button" class="ghost small" id="dialerPropertyAppraiserBtn" style="display:none; margin-top:4px">🏛️ Miami-Dade Property Search</button>
       <button class="dialer-add-crm" id="dialerAddCrmBtn" style="display:none">+ Add to CRM</button>
       <div id="dialerClientInfo" class="dialer-client-info" style="display:none">
         <div class="dialer-client-info-head">📇 In your CRM</div>
@@ -6370,20 +6371,50 @@ function buildZillowUrl(address) {
   return `https://www.zillow.com/homes/${encodeURIComponent(clean.replace(/ /g, '-'))}_rb/`;
 }
 
+// Miami-Dade County's own official Property Search portal (the same site
+// property_appraiser.py already automates for Owner Lookup -- see
+// PROPERTY_SEARCH_URL there). Mario: "next to view in zillow i have view
+// in miami dade property search." Unlike Zillow's well-known
+// "/homes/<address>_rb/" quick-search pattern, this county portal has NO
+// confirmed URL query parameter for deep-linking straight to a specific
+// address's results (miamidade.gov is blocked by this sandbox's network
+// policy, so this couldn't be verified live the way property_appraiser.py's
+// own scraping selectors eventually were on Mario's real PC -- see that
+// module's own "never confirmed" caveat). Rather than guess an unverified
+// query-string format and risk it silently landing on the wrong result (or
+// just doing nothing) -- exactly the class of "it just says not working"
+// failure Zillow's own iframe attempt already went through twice, see
+// build order #135/#136 -- this deliberately just opens the county's real
+// search tool in a new tab for Mario to paste the address into himself.
+// Always a real, guaranteed-working one-click shortcut to the right site,
+// never a guessed deep link that might be wrong. If a future session finds
+// (or Mario screenshots) a confirmed way to pre-fill an address via URL,
+// this is the one place to add it.
+const PROPERTY_APPRAISER_SEARCH_URL = 'https://www.miamidade.gov/Apps/PA/PropertySearch/';
+
 const dialerZillowBtn = document.getElementById('dialerZillowBtn');
+const dialerPropertyAppraiserBtn = document.getElementById('dialerPropertyAppraiserBtn');
 let dialerZillowUrl = null;
 
 // Called with the best address known for the CURRENT entry -- entry.address
 // immediately (whatever the dialer source itself carries), then overridden
 // once a CRM match resolves with that client's own address on file, which
-// is the authoritative source Mario actually asked for.
+// is the authoritative source Mario actually asked for. Drives both
+// external-lookup buttons together, since they're always shown/hidden as a
+// pair -- whenever there's a real address to look up on Zillow, the same
+// address is worth having Mario jump to the county's own record for too.
 function setDialerZillowAddress(address) {
   dialerZillowUrl = buildZillowUrl(address);
   dialerZillowBtn.style.display = dialerZillowUrl ? 'inline-block' : 'none';
+  dialerPropertyAppraiserBtn.style.display = dialerZillowUrl ? 'inline-block' : 'none';
 }
 
 dialerZillowBtn.addEventListener('click', () => {
   if (dialerZillowUrl) window.open(dialerZillowUrl, '_blank', 'noopener');
+});
+
+dialerPropertyAppraiserBtn.addEventListener('click', () => {
+  window.open(PROPERTY_APPRAISER_SEARCH_URL, '_blank', 'noopener');
 });
 
 const dialerClientInfoEl = document.getElementById('dialerClientInfo');
