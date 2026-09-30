@@ -310,8 +310,46 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
                          f"with first/last swapped ('{first_name} {last_name}') in case this file's name "
                          f"order is reversed, and that's what actually returned results. ")
 
+    # Mario, from a real row ("Miryam Ravelo Romero", zip 34746) that came
+    # back empty under both name orders above: "this person has two last
+    # names. Typical of hispanics, make sure to only include the second
+    # last name to not get thrown off" -- then, narrowing the order: "if
+    # and only if the second last name with the first name doesnt bear any
+    # fruit, try first name with first last name." A Hispanic double
+    # surname (paternal + maternal, e.g. "Ravelo Romero") stored whole in
+    # one field can fail FOREWARN's own search even after the swap above,
+    # since FOREWARN's real records key on a single surname, not a
+    # compound one. This is scoped to `last_name` specifically (never
+    # `first_name`) to match exactly what Mario described and observed --
+    # the swap attempt above already covers the reversed-field case. Safe
+    # from ever causing a wrong-person match for the same reason the swap
+    # is: every candidate still has to pass the exact same Address History
+    # verification below, so this can only turn a genuine zero-result miss
+    # into a real match, never invent one.
+    compound_note = ""
+    surname_words = last_name.split() if last_name else []
+    if count == 0 and first_name and len(surname_words) >= 2:
+        second_surname = surname_words[-1]
+        first_surname = surname_words[0]
+
+        run_search(page, first_name, second_surname, effective_search_zip)
+        count = wait_for_results_or_none(page)
+        if count > 0:
+            compound_note = (f"'{first_name} {last_name}' returned nothing under either name order -- "
+                              f"retried with just the second surname ('{first_name} {second_surname}'), "
+                              f"a common Hispanic double-surname case, and that's what returned results. ")
+            last_name = second_surname
+        else:
+            run_search(page, first_name, first_surname, effective_search_zip)
+            count = wait_for_results_or_none(page)
+            if count > 0:
+                compound_note = (f"'{first_name} {' '.join(surname_words)}' returned nothing under either "
+                                  f"name order or the second surname alone -- retried with just the first "
+                                  f"surname ('{first_name} {first_surname}'), and that's what returned results. ")
+                last_name = first_surname
+
     if count == 0:
-        result["notes"] = swap_note + zip_note + "No results returned by FOREWARN for this name/zip."
+        result["notes"] = swap_note + compound_note + zip_note + "No results returned by FOREWARN for this name/zip."
         return result
 
     n = get_result_cards(page).count()
@@ -338,18 +376,19 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
             human_pause(0.3, 0.8)
             page.go_back()  # -> summary page
             phone = extract_first_phone(page)
-            if swap_note:
-                # The swapped order is what actually worked -- correct the
-                # row's own names so build_output_row() shows the real name,
-                # not the original (apparently reversed) guess.
+            if swap_note or compound_note:
+                # The swapped order or the surname-only retry is what
+                # actually worked -- correct the row's own names so
+                # build_output_row() shows the real name, not the original
+                # (apparently reversed/compound) guess.
                 row["first_name"], row["last_name"] = first_name, last_name
             if phone:
                 result["phone"] = phone
                 result["status"] = "FOUND"
-                result["notes"] = swap_note + zip_note + "Matched in address history."
+                result["notes"] = swap_note + compound_note + zip_note + "Matched in address history."
                 return result
             result["status"] = "FOUND_NO_PHONE"
-            result["notes"] = swap_note + zip_note + "Address matched in history but no phone on record."
+            result["notes"] = swap_note + compound_note + zip_note + "Address matched in history but no phone on record."
             return result
         else:
             human_pause(0.3, 0.8)
@@ -357,5 +396,5 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
             page.go_back()  # -> results list
             human_pause(0.3, 0.7)
 
-    result["notes"] = swap_note + zip_note + f"Checked {n} candidate(s), none matched the target address."
+    result["notes"] = swap_note + compound_note + zip_note + f"Checked {n} candidate(s), none matched the target address."
     return result
