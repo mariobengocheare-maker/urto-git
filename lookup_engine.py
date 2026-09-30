@@ -202,7 +202,26 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
     # if it turns up a genuinely different zip than what's already failed —
     # a match found here is verified against THIS on-file address, same
     # reasoning as an entity-resolved candidate (see build order #142).
-    if result["status"] == "NOT_FOUND":
+    #
+    # `not candidates` scopes this to a genuine plain individual (never
+    # `is_entity`) — see build order #160. A row that WAS resolved via
+    # Sunbiz's own entity-name search (candidates is truthy, e.g. "7720
+    # View Drive Llc" -> registered agent Eddy Sile) already has its
+    # person's real address straight from that LLC's own official Sunbiz
+    # filing, which is more authoritative than anything a generic
+    # officer/registered-agent NAME index search could turn up. Re-searching
+    # Sunbiz's officer index for that exact same name is pure redundancy at
+    # best (we already exhausted Sunbiz's knowledge of this person via the
+    # entity's own page, including nested-company recursion, see build order
+    # #138) and a real, confusing regression at worst — Mario hit this
+    # live on a real row: URTO correctly resolved "7720 View Drive Llc" to
+    # its registered agent "Eddy Sile" (with his own on-file address/zip
+    # already extracted), then, when FOREWARN's search for that exact
+    # candidate came back NOT_FOUND, ALSO ran this fallback and searched
+    # Sunbiz's officer-name index for "Eddy Sile"/"Sile Eddy" all over
+    # again — a wasted, confusing extra step that could never improve on
+    # data already pulled directly from the real entity's own filing.
+    if result["status"] == "NOT_FOUND" and not candidates:
         current_first = row["first_name"].strip()
         current_last = row["last_name"].strip()
         if current_first and current_last:
