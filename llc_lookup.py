@@ -686,6 +686,57 @@ def find_person_zip_via_sunbiz_officer_search(page, first_name: str, last_name: 
                              f"({first_reason} / {second_reason})")}
 
 
+# Real Sunbiz link text for the officer/registered-agent search option,
+# in decreasing order of how likely each phrasing is -- see build order
+# #156: the old direct SUNBIZ_OFFICER_SEARCH_URL guess turned out to be
+# genuinely wrong (Sunbiz's own ASP.NET error page, not a bot-check --
+# confirmed live from Mario's screenshot of search.sunbiz.org/Home/Error).
+_SUNBIZ_OFFICER_LINK_PATTERNS = [
+    re.compile(r"officer\s*/?\s*(?:or\s*)?registered\s*agent", re.IGNORECASE),
+    re.compile(r"registered\s*agent\s*name", re.IGNORECASE),
+    re.compile(r"officer\s*/?\s*r\.?\s*a\.?\b", re.IGNORECASE),
+]
+
+
+def _navigate_to_officer_search_page(page) -> bool:
+    """Reaches Sunbiz's officer/registered-agent name search form by
+    clicking through from the known-good entity-name search page
+    (SUNBIZ_SEARCH_URL, confirmed working live since build order #18),
+    instead of deep-linking to a guessed URL that turned out to be wrong.
+    Returns True once a link/tab matching the officer/RA search option was
+    found and clicked; False if none of the known phrasings turned up
+    anything, in which case the caller falls back to the old guessed URL
+    as a last resort."""
+    try:
+        page.goto(SUNBIZ_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except PWTimeoutError:
+            pass
+        _wait_out_bot_challenge(page)
+    except Exception:
+        return False
+
+    for getter in (
+        lambda p: page.get_by_role("link", name=p),
+        lambda p: page.get_by_text(p),
+    ):
+        for pattern in _SUNBIZ_OFFICER_LINK_PATTERNS:
+            try:
+                loc = getter(pattern)
+                if loc.count() > 0:
+                    loc.first.click()
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    except PWTimeoutError:
+                        pass
+                    _wait_out_bot_challenge(page)
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def _officer_search_attempt(page, first_name: str, last_name: str, debug: bool = False) -> dict:
     """One single-order Sunbiz officer/registered-agent search attempt --
     see `find_person_zip_via_sunbiz_officer_search()` above, which tries
@@ -695,17 +746,20 @@ def _officer_search_attempt(page, first_name: str, last_name: str, debug: bool =
     if not target:
         return {"skip_reason": "No name to search Sunbiz's officer/registered-agent index with"}
     try:
-        page.goto(SUNBIZ_OFFICER_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
-        try:
-            page.wait_for_load_state("networkidle", timeout=8000)
-        except PWTimeoutError:
-            pass
-        cleared = _wait_out_bot_challenge(page)
-        if cleared:
+        if not _navigate_to_officer_search_page(page):
+            # Last resort -- the old guessed URL, kept in case some Sunbiz
+            # deployment/path variant actually does serve it correctly.
+            page.goto(SUNBIZ_OFFICER_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
             try:
                 page.wait_for_load_state("networkidle", timeout=8000)
             except PWTimeoutError:
                 pass
+            cleared = _wait_out_bot_challenge(page)
+            if cleared:
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                except PWTimeoutError:
+                    pass
 
         if debug:
             page.pause()
