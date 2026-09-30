@@ -2609,6 +2609,19 @@ def list_notes(client_id) -> list:
     return [dict(r) for r in rows]
 
 
+def delete_note(client_id, note_id) -> bool:
+    conn = get_conn()
+    cur = conn.execute(
+        "DELETE FROM notes WHERE id = ? AND client_id = ?", (note_id, client_id)
+    )
+    conn.commit()
+    conn.close()
+    deleted = cur.rowcount > 0
+    if deleted:
+        on_data_changed("note deleted")
+    return deleted
+
+
 def _now_time():
     return _now().strftime("%H:%M")
 

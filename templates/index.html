@@ -762,7 +762,12 @@
     font-size: .88rem;
   }
   .note-item:last-child { border-bottom: none; }
-  .note-item .note-time { color: var(--text-secondary); font-size: .74rem; margin-bottom: 3px; }
+  .note-item .note-time { color: var(--text-secondary); font-size: .74rem; margin-bottom: 3px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .note-delete-btn {
+    background: none; border: none; color: var(--text-secondary); cursor: pointer;
+    font-size: .85rem; line-height: 1; padding: 2px 4px; border-radius: 4px; flex-shrink: 0;
+  }
+  .note-delete-btn:hover { color: #ff6b6b; background: rgba(255,255,255,.06); }
 
   .call-history-link { color: var(--gold); font-size: .78rem; text-decoration: none; }
   .call-history-link:hover { text-decoration: underline; }
@@ -1549,6 +1554,7 @@
       <div class="dialer-meta" id="dialerMeta"></div>
       <button type="button" class="ghost small" id="dialerZillowBtn" style="display:none; margin-top:4px">🏠 View on Zillow</button>
       <button type="button" class="ghost small" id="dialerPropertyAppraiserBtn" style="display:none; margin-top:4px">🏛️ Miami-Dade Property Search</button>
+      <div id="dialerPaMsg" style="display:none; font-size:.78rem; color:var(--text-secondary); margin-top:3px"></div>
       <button class="dialer-add-crm" id="dialerAddCrmBtn" style="display:none">+ Add to CRM</button>
       <div id="dialerClientInfo" class="dialer-client-info" style="display:none">
         <div class="dialer-client-info-head">📇 In your CRM</div>
@@ -3922,6 +3928,20 @@ function formatNoteTime(raw) {
   return `${dateStr}, ${timeStr}`;
 }
 
+// Shared by the client-detail view's own notes log and the Dialer's "In your
+// CRM" panel -- both display the same client.notes, so a delete needs the
+// same confirm + DELETE call either way; only the refresh step differs.
+async function deleteNoteAndRefresh(clientId, noteId, onDone) {
+  if (!confirm('Delete this note? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`/api/crm/clients/${clientId}/notes/${noteId}`, { method: 'DELETE' });
+    if (!res.ok) { alert('Could not delete the note. Try again.'); return; }
+    await onDone();
+  } catch (err) {
+    alert('Could not reach URTO\'s server to delete the note. Try again.');
+  }
+}
+
 // Calendar events / follow-ups store a plain 24-hour "HH:MM" (native
 // input[type=time] value) — reformatted 12-hour with AM/PM for display.
 function formatTime12(hhmm) {
@@ -4418,7 +4438,8 @@ async function openClientDetail(id) {
     for (const n of c.notes) {
       const div = document.createElement('div');
       div.className = 'note-item';
-      div.innerHTML = `<div class="note-time">${escapeHtml(formatNoteTime(n.created_at))}</div>${escapeHtml(n.text)}`;
+      div.innerHTML = `<div class="note-time"><span>${escapeHtml(formatNoteTime(n.created_at))}</span><button type="button" class="note-delete-btn" title="Delete note">✕</button></div>${escapeHtml(n.text)}`;
+      div.querySelector('.note-delete-btn').addEventListener('click', () => deleteNoteAndRefresh(id, n.id, () => openClientDetail(id)));
       notesList.appendChild(div);
     }
   }
@@ -6394,7 +6415,9 @@ const PROPERTY_APPRAISER_SEARCH_URL = 'https://www.miamidade.gov/Apps/PA/Propert
 
 const dialerZillowBtn = document.getElementById('dialerZillowBtn');
 const dialerPropertyAppraiserBtn = document.getElementById('dialerPropertyAppraiserBtn');
+const dialerPaMsg = document.getElementById('dialerPaMsg');
 let dialerZillowUrl = null;
+let dialerLookupAddress = null;
 
 // Called with the best address known for the CURRENT entry -- entry.address
 // immediately (whatever the dialer source itself carries), then overridden
@@ -6404,17 +6427,39 @@ let dialerZillowUrl = null;
 // pair -- whenever there's a real address to look up on Zillow, the same
 // address is worth having Mario jump to the county's own record for too.
 function setDialerZillowAddress(address) {
+  dialerLookupAddress = address || null;
   dialerZillowUrl = buildZillowUrl(address);
   dialerZillowBtn.style.display = dialerZillowUrl ? 'inline-block' : 'none';
   dialerPropertyAppraiserBtn.style.display = dialerZillowUrl ? 'inline-block' : 'none';
+  dialerPaMsg.style.display = 'none';
 }
 
 dialerZillowBtn.addEventListener('click', () => {
   if (dialerZillowUrl) window.open(dialerZillowUrl, '_blank', 'noopener');
 });
 
-dialerPropertyAppraiserBtn.addEventListener('click', () => {
+// The county's Property Search tool is its own separate origin with no
+// confirmed URL parameter to pre-fill and auto-submit its ADDRESS search box
+// (unlike Zillow's own well-known /homes/<address>_rb/ quick-search format) --
+// and even if one existed, a window.open() to another origin can never reach
+// into that tab to fill/submit its form for real, since cross-origin scripts
+// can't touch another site's DOM. So instead of guessing at a link format
+// that might silently do nothing (the exact "it just says not working"
+// failure the Zillow iframe/proxy attempts already hit twice -- see build
+// orders #134/#135/#136), this copies the address to the clipboard and opens
+// the real search tool, so Mario just pastes it into the ADDRESS box instead
+// of retyping it -- a real, honest improvement that doesn't depend on any
+// unverified behavior of a site this sandbox can't even reach.
+dialerPropertyAppraiserBtn.addEventListener('click', async () => {
   window.open(PROPERTY_APPRAISER_SEARCH_URL, '_blank', 'noopener');
+  if (!dialerLookupAddress) return;
+  try {
+    await navigator.clipboard.writeText(dialerLookupAddress);
+    dialerPaMsg.textContent = '📋 Address copied — paste it into the ADDRESS box on the county site.';
+  } catch (err) {
+    dialerPaMsg.textContent = `Address: ${dialerLookupAddress} (copy it in manually — clipboard access wasn't available)`;
+  }
+  dialerPaMsg.style.display = 'block';
 });
 
 const dialerClientInfoEl = document.getElementById('dialerClientInfo');
@@ -6504,7 +6549,8 @@ async function updateDialerClientInfo(entry) {
     for (const n of c.notes) {
       const div = document.createElement('div');
       div.className = 'note-item';
-      div.innerHTML = `<div class="note-time">${escapeHtml(formatNoteTime(n.created_at))}</div>${escapeHtml(n.text)}`;
+      div.innerHTML = `<div class="note-time"><span>${escapeHtml(formatNoteTime(n.created_at))}</span><button type="button" class="note-delete-btn" title="Delete note">✕</button></div>${escapeHtml(n.text)}`;
+      div.querySelector('.note-delete-btn').addEventListener('click', () => deleteNoteAndRefresh(entry.clientId, n.id, () => updateDialerClientInfo(entry)));
       notesEl.appendChild(div);
     }
   }

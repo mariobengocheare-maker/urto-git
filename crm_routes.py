@@ -121,6 +121,13 @@ def crm_add_note(client_id):
     return jsonify(note)
 
 
+@crm_bp.route("/api/crm/clients/<int:client_id>/notes/<int:note_id>", methods=["DELETE"])
+def crm_delete_note(client_id, note_id):
+    if not crm.delete_note(client_id, note_id):
+        abort(404)
+    return jsonify({"ok": True})
+
+
 @crm_bp.route("/api/crm/clients/<int:client_id>/complete_followup", methods=["POST"])
 def crm_complete_followup(client_id):
     client = crm.complete_followup(client_id)
