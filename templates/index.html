@@ -733,6 +733,24 @@
   .cl-member-box label:last-child { margin-bottom: 0; }
   .cl-member-box input[type="checkbox"] { width: auto; }
 
+  /* Owner Lookup's pre-search "do these names look right?" review table
+     (build order #162) -- replaces the old automatic FOREWARN-side
+     first/last swap retry, which wasted a real search on every reversed-
+     order row, with a one-time manual review Mario confirms before any
+     search is ever spent. */
+  .name-preview-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .name-preview-table thead th { position: sticky; top: 0; background: rgba(10,16,30,.97); text-align: left;
+    padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text-secondary);
+    font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; z-index: 1; }
+  .name-preview-table td { padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,.05); }
+  .name-preview-table .np-addr { color: var(--text-secondary); font-size: .82rem; }
+  .name-preview-row.swappable { cursor: pointer; }
+  .name-preview-row.swappable:hover { background: rgba(201,162,39,.1); }
+  .name-preview-row.swappable:hover .np-hint { opacity: 1; }
+  .name-preview-row.swapped .np-name { color: var(--gold); font-weight: 600; }
+  .name-preview-row.non-swappable .np-name { color: var(--text-secondary); font-style: italic; }
+  .np-hint { opacity: 0; font-size: .75rem; color: var(--text-secondary); margin-left: 6px; }
+
   .detail-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
   .detail-section h3 { font-size: .82rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); margin: 0 0 10px; }
   .contact-line { font-size: .92rem; margin-bottom: 4px; }
@@ -2561,6 +2579,30 @@
   </div>
 </div>
 
+<!-- "Do the names look right?" pre-search review (build order #162) -->
+<div class="modal-overlay" id="namePreviewOverlay">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-head">
+      <h2>Do the names look right?</h2>
+      <button class="modal-close" id="namePreviewCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">
+      Click any row to swap its First/Last name before we start searching FOREWARN — checking this once up front
+      is free, where a wrong guess costs a real search. Entity-owned rows (searched via Sunbiz instead) aren't swappable.
+    </p>
+    <div id="namePreviewList" class="cl-member-box" style="max-height:440px; padding:0;">
+      <table class="name-preview-table">
+        <thead><tr><th>First Name</th><th>Last Name</th><th>Property</th></tr></thead>
+        <tbody id="namePreviewBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="namePreviewCancelBtn">Cancel</button>
+      <button type="button" id="namePreviewConfirmBtn">✅ Looks good — Start Lookup</button>
+    </div>
+  </div>
+</div>
+
 <!-- Retain Found Numbers (save a skip-trace batch's FOUND rows into the CRM) -->
 <div class="modal-overlay" id="retainResultsOverlay">
   <div class="modal">
@@ -2743,13 +2785,95 @@ function setFile(file) {
   startBtn.disabled = false;
 }
 
+// --- "Do the names look right?" pre-search review (build order #162) ---
+// Replaces the old automatic FOREWARN-side first/last swap retry, which
+// silently burned a real (limited) FOREWARN search on every row whose name
+// order turned out reversed. Instead, before any search ever runs, this
+// shows every parsed row's First/Last columns side by side and lets Mario
+// click any row to swap it -- checked once, for free, up front.
+const namePreviewOverlay = document.getElementById('namePreviewOverlay');
+const namePreviewBody = document.getElementById('namePreviewBody');
+const namePreviewConfirmBtn = document.getElementById('namePreviewConfirmBtn');
+let namePreviewRows = [];   // the parsed preview rows, as returned by the server
+let namePreviewSwapped = new Set(); // indices the user has toggled swapped
+
+function closeNamePreview() {
+  namePreviewOverlay.classList.remove('show');
+  startBtn.disabled = false;
+}
+
+function renderNamePreview() {
+  namePreviewBody.innerHTML = namePreviewRows.map(row => {
+    const propertyBits = [row.address, row.city, row.zip].filter(Boolean).join(', ');
+    if (row.is_entity) {
+      return `<tr class="name-preview-row non-swappable">
+        <td class="np-name" colspan="2">🏢 ${escapeHtml(row.entity_name || '(entity)')}</td>
+        <td class="np-addr">${escapeHtml(propertyBits || row.skip_reason || '')}</td>
+      </tr>`;
+    }
+    if (!row.first_name && !row.last_name) {
+      return `<tr class="name-preview-row non-swappable">
+        <td class="np-name">—</td><td class="np-name">—</td>
+        <td class="np-addr">${escapeHtml(row.skip_reason || propertyBits || '')}</td>
+      </tr>`;
+    }
+    const swapped = namePreviewSwapped.has(row.index);
+    const shownFirst = swapped ? row.last_name : row.first_name;
+    const shownLast = swapped ? row.first_name : row.last_name;
+    return `<tr class="name-preview-row swappable${swapped ? ' swapped' : ''}" data-index="${row.index}">
+      <td class="np-name">${escapeHtml(shownFirst)}</td>
+      <td class="np-name">${escapeHtml(shownLast)}<span class="np-hint">click to swap</span></td>
+      <td class="np-addr">${escapeHtml(propertyBits || row.skip_reason || '')}</td>
+    </tr>`;
+  }).join('');
+}
+
+namePreviewBody.addEventListener('click', e => {
+  const tr = e.target.closest('tr.swappable');
+  if (!tr) return;
+  const idx = parseInt(tr.dataset.index, 10);
+  if (namePreviewSwapped.has(idx)) namePreviewSwapped.delete(idx);
+  else namePreviewSwapped.add(idx);
+  renderNamePreview();
+});
+
+document.getElementById('namePreviewCloseBtn').addEventListener('click', closeNamePreview);
+document.getElementById('namePreviewCancelBtn').addEventListener('click', closeNamePreview);
+namePreviewConfirmBtn.addEventListener('click', () => {
+  namePreviewOverlay.classList.remove('show');
+  actuallyStartUpload(Array.from(namePreviewSwapped));
+});
+
 startBtn.addEventListener('click', async () => {
   if (!selectedFile) return;
   startBtn.disabled = true;
   errorBox.style.display = 'none';
+  namePreviewSwapped = new Set();
+
+  const form = new FormData();
+  form.append('file', selectedFile);
+  let data;
+  try {
+    const res = await fetch('/api/preview_names', { method: 'POST', body: form });
+    data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not read that file.');
+  } catch (err) {
+    showError(err.message);
+    startBtn.disabled = false;
+    return;
+  }
+
+  namePreviewRows = data.rows;
+  renderNamePreview();
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  namePreviewOverlay.classList.add('show');
+});
+
+async function actuallyStartUpload(swappedIndices) {
   const form = new FormData();
   form.append('file', selectedFile);
   form.append('delay', delayInput.value);
+  form.append('swapped_indices', JSON.stringify(swappedIndices));
 
   const res = await fetch('/api/upload', { method: 'POST', body: form });
   const data = await res.json();
@@ -2790,7 +2914,7 @@ startBtn.addEventListener('click', async () => {
   loginBtn.disabled = false;
   loginBox.style.display = 'none';
   pollTimer = setInterval(poll, 1500);
-});
+}
 
 loginBtn.addEventListener('click', async () => {
   loginBtn.disabled = true;

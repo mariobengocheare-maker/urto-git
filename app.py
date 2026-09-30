@@ -13,6 +13,7 @@ automation, driven from your own machine.
 
 import csv
 import io
+import json
 import os
 import re
 import subprocess
@@ -111,7 +112,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.49.0"
+APP_VERSION = "2.50.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -592,6 +593,50 @@ def _find_rows_already_in_crm(rows: list) -> tuple:
     return rows_to_process, already_in_crm
 
 
+@app.route("/api/preview_names", methods=["POST"])
+def preview_names():
+    """Parses an uploaded CSV the exact same way /api/upload will, but never
+    creates a job or touches FOREWARN/the CRM -- this is the read-only
+    "do these names look right?" review step (see build order #162, Mario's
+    explicit ask to replace the automatic FOREWARN-side name-swap retry,
+    which wasted a real search on every reversed-order row, with a manual
+    review he confirms once BEFORE any search is ever spent). The returned
+    `index` values are positions in this exact parse -- since /api/upload
+    runs the identical load_rows() call against the identical file content
+    moments later, they line up perfectly with whatever `swapped_indices`
+    the frontend sends back once Mario confirms."""
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    text = file.read().decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    raw_rows = list(reader)
+    if not raw_rows:
+        return jsonify({"error": "CSV is empty"}), 400
+
+    try:
+        rows = load_rows(reader.fieldnames, raw_rows)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    preview = [
+        {
+            "index": i,
+            "first_name": row["first_name"],
+            "last_name": row["last_name"],
+            "is_entity": row["is_entity"],
+            "entity_name": row["entity_name"],
+            "address": row["address"],
+            "city": row["city"],
+            "zip": row["zip"],
+            "skip_reason": row["skip_reason"],
+        }
+        for i, row in enumerate(rows)
+    ]
+    return jsonify({"rows": preview, "total": len(preview)})
+
+
 @app.route("/api/upload", methods=["POST"])
 def upload():
     with JOBS_LOCK:
@@ -640,6 +685,21 @@ def upload():
         rows = load_rows(reader.fieldnames, raw_rows)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+
+    # Apply the first/last-name swaps Mario confirmed in the pre-search
+    # "do these names look right?" review step (see build order #162,
+    # `/api/preview_names`) -- the indices are positions in this exact same
+    # deterministic load_rows() parse of the identical file content, so they
+    # line up perfectly with what the review screen showed him moments
+    # earlier. Never applied to an entity row -- those use `entity_name`,
+    # not first/last, and have nothing to swap.
+    try:
+        swapped_indices = json.loads(request.form.get("swapped_indices", "[]"))
+    except (ValueError, TypeError):
+        swapped_indices = []
+    for idx in swapped_indices:
+        if isinstance(idx, int) and 0 <= idx < len(rows) and not rows[idx]["is_entity"]:
+            rows[idx]["first_name"], rows[idx]["last_name"] = rows[idx]["last_name"], rows[idx]["first_name"]
 
     # Pre-upload CRM dedup (build order #158) -- must run BEFORE any job is
     # created, since a job's existence is what triggers the FOREWARN-login
