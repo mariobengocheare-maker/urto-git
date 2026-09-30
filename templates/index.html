@@ -3344,7 +3344,7 @@ retainResultsSubmitBtn.addEventListener('click', async () => {
         body: JSON.stringify({
           name: r.owner || r.phone,
           phone: r.phone,
-          address: r.address || '',
+          address: composeFullAddress(r.address, r.city, r.state, r.zip),
           frequency_key: 'none',
         }),
       });
@@ -5730,7 +5730,10 @@ dialerSourceLookupBtn.addEventListener('click', async () => {
     alert('No FOUND results with a phone number in the current lookup session yet.');
     return;
   }
-  await loadDialerList(found.map(r => ({ name: r.owner, phone: r.phone, address: r.address, meta: r.address })));
+  await loadDialerList(found.map(r => {
+    const fullAddr = composeFullAddress(r.address, r.city, r.state, r.zip);
+    return { name: r.owner, phone: r.phone, address: fullAddr, meta: fullAddr };
+  }));
 });
 
 dialerSourceTodayBtn.addEventListener('click', async () => {
@@ -6257,7 +6260,8 @@ function parseDialerText(text) {
     if (asCsvRow.length === RESULTS_CSV_FIELDS.length) {
       const row = Object.fromEntries(RESULTS_CSV_FIELDS.map((k, i) => [k, asCsvRow[i]]));
       if (row.phone) {
-        entries.push({ name: row.owner || 'Unknown', phone: row.phone, address: row.address, meta: row.address });
+        const fullAddr = composeFullAddress(row.address, row.city, row.state, row.zip);
+        entries.push({ name: row.owner || 'Unknown', phone: row.phone, address: fullAddr, meta: fullAddr });
         continue;
       }
       continue;  // a results row with no phone (SKIPPED/NOT_FOUND) has nothing to call
@@ -6344,6 +6348,22 @@ function normalizePhone(raw) {
    this is now just a plain link -- clicking it opens the real Zillow page
    in a new tab, nothing in-app. Don't reintroduce an iframe/proxy attempt
    here without a new explicit ask -- both were tried and dropped. ---- */
+// Several places build a dial/CRM entry straight from an Owner Lookup
+// results row, which always carries address/city/state/zip as SEPARATE
+// fields (see input_parser.OUTPUT_FIELDS) -- using the bare street alone
+// left Zillow's own address search to guess the city with nothing to
+// anchor it, and it guessed wrong (Mario: clicked one and got Delray
+// Beach for what was actually a Miami-Dade property). Composing the full
+// "STREET, CITY, STATE ZIP" string here, once, at the point every such
+// entry/client is built, fixes the Zillow link AND every other place that
+// same composed address later gets displayed/saved (the Dialer meta line,
+// "Add to CRM" prefill, Retain Found Numbers' saved client record) --
+// gracefully degrades to whatever subset of fields is actually available.
+function composeFullAddress(address, city, state, zip) {
+  const cityStateZip = [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return [address, cityStateZip].filter(Boolean).join(', ');
+}
+
 function buildZillowUrl(address) {
   const clean = (address || '').replace(/[,#]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) return null;
