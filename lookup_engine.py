@@ -291,7 +291,26 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
     # person to call.
     effective_search_zip = (search_zip or zip_code).strip()
     if match_address:
-        required_tokens = address_tokens(match_address, effective_search_zip)
+        # `match_address` is a flat, comma-joined "STREET, CITY STATE ZIP"
+        # string (see llc_lookup._clean_address_block()) -- built for
+        # DISPLAY in the note below, where showing the full address is
+        # exactly what's useful. But address_tokens()'s whole design
+        # deliberately excludes city/state from what's REQUIRED to match
+        # (see build order #137 -- FOREWARN labels many real addresses
+        # under a different city than the county/Sunbiz record uses), and
+        # passing the full string straight through silently reintroduces
+        # that exact bug for this path specifically: the street-address
+        # portion could be a perfect match while a city-label difference
+        # (e.g. Sunbiz's "NORTH BAY VILLAGE" vs FOREWARN's own "MIAMI" for
+        # the identical physical address) still fails the whole check,
+        # since NORTH/BAY/VILLAGE would silently become required tokens.
+        # Confirmed live on a real row (build order #161, Mario: "in this
+        # case, its the same address") -- only the FIRST comma-segment
+        # (the street line _clean_address_block() always puts first) is
+        # passed to address_tokens(), matching exactly how the property-
+        # address path already only ever passes a bare street address.
+        match_street = match_address.split(",")[0].strip()
+        required_tokens = address_tokens(match_street, effective_search_zip)
         zip_note = (f"Verified against this person's own on-file address ({match_address}) "
                      f"rather than the property's ({address}, {zip_code}) — they were reached "
                      f"via Sunbiz corporate resolution, not as a direct owner. ")
@@ -391,7 +410,22 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
             pass
         history_text = page.inner_text("body")
 
-        if text_contains_address(history_text, required_tokens):
+        matched = text_contains_address(history_text, required_tokens)
+        # Mario, explicit confirmation (build order #161, after his real
+        # "Eddy Sile" case): "yes, if it's the only candidate" -- when a
+        # Sunbiz-resolved entity candidate is the ONLY name+zip result
+        # FOREWARN returns at all, accept it even if their own Address
+        # History still doesn't confirm the Sunbiz-listed address -- a
+        # registered agent/officer's personal Address History can
+        # genuinely never include an address they only ever filed as a
+        # legal/business contact, never actually lived at. A unique
+        # name+zip hit is already real evidence on its own. Deliberately
+        # scoped to entity-resolved candidates only (`match_address` set)
+        # -- a direct individual owner (`match_address` is None) still
+        # requires the real address match, since that's the actual
+        # wrong-property protection build order #30 exists for.
+        accept_unmatched_unique = (not matched and match_address and n == 1)
+        if matched or accept_unmatched_unique:
             human_pause(0.3, 0.8)
             page.go_back()  # -> summary page
             phone = extract_first_phone(page)
@@ -401,13 +435,19 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
                 # build_output_row() shows the real name, not the original
                 # (apparently reversed/compound) guess.
                 row["first_name"], row["last_name"] = first_name, last_name
+            outcome_note = ("Matched in address history." if matched else
+                             "FOREWARN returned exactly one candidate for this name/zip -- accepted "
+                             "without an address-history confirmation, since they were reached via "
+                             "Sunbiz corporate resolution and a unique name/zip match is real evidence "
+                             "on its own.")
             if phone:
                 result["phone"] = phone
                 result["status"] = "FOUND"
-                result["notes"] = swap_note + compound_note + zip_note + "Matched in address history."
+                result["notes"] = swap_note + compound_note + zip_note + outcome_note
                 return result
             result["status"] = "FOUND_NO_PHONE"
-            result["notes"] = swap_note + compound_note + zip_note + "Address matched in history but no phone on record."
+            result["notes"] = (swap_note + compound_note + zip_note + outcome_note.rstrip(".") +
+                                 " but no phone on record.")
             return result
         else:
             human_pause(0.3, 0.8)
