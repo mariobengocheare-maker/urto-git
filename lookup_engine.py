@@ -38,7 +38,16 @@ AGE_TAG_RE = re.compile(r"Age\s*\(\s*\d+\s*\)", re.IGNORECASE)
 
 def normalize(text: str) -> str:
     text = text.upper()
-    text = re.sub(r"[.,]", "", text)
+    # "#" is stripped alongside "."/"," rather than left attached to the
+    # following digits -- see build order #157: leaving it in place turned
+    # an address written "...DR #408" into a literal "#408" token that could
+    # never appear in FOREWARN's own page text (FOREWARN always writes
+    # "APT 408"/"UNIT 408", never with a hash), so `text_contains_address()`
+    # rejected an otherwise-perfect match. Stripping it here means the
+    # digits end up as a plain, matchable token -- `address_tokens()` below
+    # then drops that same token itself, exactly like it already does for
+    # an "APT"/"STE"-prefixed unit number.
+    text = re.sub(r"[.,#]", "", text)
     tokens = text.split()
     tokens = [ABBREVIATIONS.get(t, t) for t in tokens]
     return " ".join(tokens)
@@ -66,6 +75,17 @@ def address_tokens(address: str, zip_code: str) -> set:
     for i, t in enumerate(tlist):
         if t in ("APT", "STE") and i + 1 < len(tlist):
             drop.add(tlist[i + 1])
+    # A unit number can also be written as "#408" instead of "APT 408"/
+    # "STE 408" -- normalize() already strips the "#" itself (so it never
+    # becomes an unmatchable literal "#408" token), but the bare digits it
+    # leaves behind still need to be dropped from the required set the same
+    # way an APT/STE-prefixed unit already is, per this function's own
+    # stated "unit numbers are deliberately not required" design. Scanned
+    # against the ORIGINAL (pre-normalize) text, since normalize() has
+    # already removed the "#" marker that identifies which token was one by
+    # the time `tlist` exists.
+    for m in re.finditer(r"#\s*(\S+)", f"{address} {zip_code}".upper()):
+        drop.add(normalize(m.group(1)))
     return tokens - drop
 
 
