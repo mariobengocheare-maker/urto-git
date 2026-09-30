@@ -2603,6 +2603,31 @@
   </div>
 </div>
 
+<!-- Batch-resolve LLC/business-owned rows via Sunbiz before FOREWARN starts (build order #163) -->
+<div class="modal-overlay" id="entityResolveOverlay">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-head">
+      <h2>Resolving businesses on Sunbiz…</h2>
+      <button class="modal-close" id="entityResolveCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">
+      Looking up the real person behind each LLC/business-owned property before we start searching FOREWARN —
+      this can take a few minutes for a large batch. This never uses up a FOREWARN search.
+    </p>
+    <p class="sub" id="entityResolveCount" style="font-weight:600;">Starting…</p>
+    <div id="entityResolveList" class="cl-member-box" style="max-height:380px; padding:0; display:none;">
+      <table class="name-preview-table">
+        <thead><tr><th>Business</th><th>Resolved to</th><th>Zip / Address</th></tr></thead>
+        <tbody id="entityResolveBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="entityResolveCancelBtn">Cancel</button>
+      <button type="button" id="entityResolveConfirmBtn" style="display:none;">✅ Looks good — Start Lookup</button>
+    </div>
+  </div>
+</div>
+
 <!-- Retain Found Numbers (save a skip-trace batch's FOUND rows into the CRM) -->
 <div class="modal-overlay" id="retainResultsOverlay">
   <div class="modal">
@@ -2841,7 +2866,127 @@ document.getElementById('namePreviewCloseBtn').addEventListener('click', closeNa
 document.getElementById('namePreviewCancelBtn').addEventListener('click', closeNamePreview);
 namePreviewConfirmBtn.addEventListener('click', () => {
   namePreviewOverlay.classList.remove('show');
-  actuallyStartUpload(Array.from(namePreviewSwapped));
+  const swaps = Array.from(namePreviewSwapped);
+  // Build order #163: a batch with any LLC/business-owned rows gets those
+  // resolved via Sunbiz up front (behind the scenes, no FOREWARN search
+  // spent) and shown for approval before the real lookup ever starts. A
+  // batch of plain individual owners skips straight to the real upload,
+  // same as before this feature existed -- no reason to pop a Sunbiz
+  // browser window for nothing.
+  if (namePreviewRows.some(r => r.is_entity)) {
+    startEntityResolve(swaps);
+  } else {
+    actuallyStartUpload(swaps, null);
+  }
+});
+
+// --- Batch-resolve LLC/business-owned rows via Sunbiz before FOREWARN ever
+// starts (build order #163) -- Mario: "does it run it behind the scenes
+// real quick for all the llcs at once and then give me the list for
+// approval before we start skip tracing?" Never touches FOREWARN or the
+// weekly lookup counter -- Sunbiz resolution never has.
+const entityResolveOverlay = document.getElementById('entityResolveOverlay');
+const entityResolveCount = document.getElementById('entityResolveCount');
+const entityResolveList = document.getElementById('entityResolveList');
+const entityResolveBody = document.getElementById('entityResolveBody');
+const entityResolveConfirmBtn = document.getElementById('entityResolveConfirmBtn');
+const entityResolveCancelBtn = document.getElementById('entityResolveCancelBtn');
+let entityResolveJobId = null;
+let entityResolvePollTimer = null;
+let entityResolvePendingSwaps = [];
+
+function closeEntityResolve() {
+  if (entityResolvePollTimer) { clearInterval(entityResolvePollTimer); entityResolvePollTimer = null; }
+  entityResolveOverlay.classList.remove('show');
+  startBtn.disabled = false;
+}
+
+function renderEntityResolveResults(results) {
+  entityResolveBody.innerHTML = results.slice().sort((a, b) => a.index - b.index).map(r => {
+    if (r.skip_reason || !r.candidates || !r.candidates.length) {
+      return `<tr>
+        <td>🏢 ${escapeHtml(r.entity_name || '(entity)')}</td>
+        <td colspan="2" style="font-style:italic;">Couldn't resolve automatically — will show as SKIPPED (${escapeHtml(r.skip_reason || 'no match found')})</td>
+      </tr>`;
+    }
+    const primary = r.candidates[0];
+    // primary.address (when Sunbiz gave us one) is already a full "STREET,
+    // CITY STATE ZIP" string that includes the zip -- only fall back to the
+    // bare zip on its own when no full address was extracted.
+    const zipAddr = primary.address || primary.zip || '';
+    const fallbackNote = r.candidates.length > 1
+      ? `<span class="np-hint">+${r.candidates.length - 1} fallback${r.candidates.length > 2 ? 's' : ''} if not found</span>` : '';
+    return `<tr>
+      <td>🏢 ${escapeHtml(r.entity_name || '(entity)')}</td>
+      <td>${escapeHtml(primary.first_name || '')} ${escapeHtml(primary.last_name || '')}${fallbackNote}</td>
+      <td class="np-addr">${escapeHtml(zipAddr || '—')}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function pollEntityResolve() {
+  let data;
+  try {
+    const res = await fetch(`/api/resolve_entities/${entityResolveJobId}`);
+    data = await res.json();
+  } catch (e) { return; } // transient network hiccup -- the next tick retries
+  if (data.results && data.results.length) {
+    entityResolveList.style.display = 'block';
+    renderEntityResolveResults(data.results);
+  }
+  if (data.status === 'done' || data.status === 'stopped' || data.status === 'error') {
+    clearInterval(entityResolvePollTimer);
+    entityResolvePollTimer = null;
+    entityResolveCount.textContent = data.status === 'error'
+      ? `Resolved ${data.processed} of ${data.total} before hitting an error (${data.error || 'unknown'}) — you can still continue, anything unresolved will show as SKIPPED.`
+      : `Resolved ${data.processed} of ${data.total}. Do these look right?`;
+    entityResolveConfirmBtn.style.display = 'inline-block';
+  } else {
+    entityResolveCount.textContent = `Resolved ${data.processed} of ${data.total}…`;
+  }
+}
+
+async function startEntityResolve(swappedIndices) {
+  entityResolvePendingSwaps = swappedIndices;
+  const form = new FormData();
+  form.append('file', selectedFile);
+  let data;
+  try {
+    const res = await fetch('/api/resolve_entities', { method: 'POST', body: form });
+    data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not resolve businesses.');
+  } catch (err) {
+    showError(err.message);
+    startBtn.disabled = false;
+    return;
+  }
+  if (!data.job_id) {
+    // No LLC/business-owned rows in this batch at all -- nothing to
+    // resolve, go straight to the real upload as before.
+    actuallyStartUpload(swappedIndices, null);
+    return;
+  }
+  entityResolveJobId = data.job_id;
+  entityResolveCount.textContent = `Resolved 0 of ${data.total}…`;
+  entityResolveList.style.display = 'none';
+  entityResolveBody.innerHTML = '';
+  entityResolveConfirmBtn.style.display = 'none';
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  entityResolveOverlay.classList.add('show');
+  pollEntityResolve();
+  entityResolvePollTimer = setInterval(pollEntityResolve, 1500);
+}
+
+entityResolveCancelBtn.addEventListener('click', async () => {
+  if (entityResolveJobId) {
+    try { await fetch(`/api/resolve_entities/${entityResolveJobId}/stop`, { method: 'POST' }); } catch (e) {}
+  }
+  closeEntityResolve();
+});
+document.getElementById('entityResolveCloseBtn').addEventListener('click', () => entityResolveCancelBtn.click());
+entityResolveConfirmBtn.addEventListener('click', () => {
+  entityResolveOverlay.classList.remove('show');
+  actuallyStartUpload(entityResolvePendingSwaps, entityResolveJobId);
 });
 
 startBtn.addEventListener('click', async () => {
@@ -2869,11 +3014,12 @@ startBtn.addEventListener('click', async () => {
   namePreviewOverlay.classList.add('show');
 });
 
-async function actuallyStartUpload(swappedIndices) {
+async function actuallyStartUpload(swappedIndices, entityResolveJobId) {
   const form = new FormData();
   form.append('file', selectedFile);
   form.append('delay', delayInput.value);
   form.append('swapped_indices', JSON.stringify(swappedIndices));
+  if (entityResolveJobId) form.append('entity_resolve_job_id', entityResolveJobId);
 
   const res = await fetch('/api/upload', { method: 'POST', body: form });
   const data = await res.json();

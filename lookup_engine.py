@@ -108,18 +108,34 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
     candidates = None
     if row.get("is_entity"):
         entity_name = row.get("entity_name", "")
-        resolved = resolve_entity_owner(page, entity_name, debug=debug)
-        if resolved["skip_reason"]:
-            return {"phone": "", "status": "SKIPPED", "notes": resolved["skip_reason"]}
-        # resolve_entity_owner may hand back more than one candidate person
-        # (e.g. a PA/PLLC's own embedded name, plus an officer/manager
-        # fallback) — try the top pick first, and only spend a second real
-        # FOREWARN search on a fallback candidate if the first comes back
-        # NOT_FOUND, rather than committing to a single guess.
-        candidates = resolved.get("candidates") or [
-            {"first_name": resolved["first_name"], "last_name": resolved["last_name"],
-             "resolved_via": resolved["resolved_via"]}
-        ]
+        # app.py's /api/resolve_entities may have already resolved this row
+        # via Sunbiz, up front, before FOREWARN login ever happens — the new
+        # batch "resolve every LLC first, show me the list for approval"
+        # step (see build order #163, Mario: "does it run it behind the
+        # scenes real quick for all the llcs at once and then give me the
+        # list for approval before we start skip tracing?"). When that's
+        # already been done, reuse it rather than loading the same Sunbiz
+        # page a second time during the real run — both keys are always set
+        # together by app.py (one may be None), so presence, not truthiness,
+        # is what marks "already resolved."
+        if "_resolved_skip_reason" in row:
+            skip_reason = row.get("_resolved_skip_reason")
+            candidates = row.get("_resolved_candidates")
+        else:
+            resolved = resolve_entity_owner(page, entity_name, debug=debug)
+            skip_reason = resolved["skip_reason"]
+            # resolve_entity_owner may hand back more than one candidate
+            # person (e.g. a PA/PLLC's own embedded name, plus an
+            # officer/manager fallback) — try the top pick first, and only
+            # spend a second real FOREWARN search on a fallback candidate if
+            # the first comes back NOT_FOUND, rather than committing to a
+            # single guess.
+            candidates = resolved.get("candidates") or [
+                {"first_name": resolved["first_name"], "last_name": resolved["last_name"],
+                 "resolved_via": resolved["resolved_via"]}
+            ]
+        if skip_reason:
+            return {"phone": "", "status": "SKIPPED", "notes": skip_reason}
         primary = candidates[0]
         # Mutate the row itself: build_output_row() reads first/last name
         # back out of it afterward, so the resolved person becomes the

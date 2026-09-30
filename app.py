@@ -112,7 +112,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.50.0"
+APP_VERSION = "2.51.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -167,6 +167,14 @@ threading.Thread(target=_backup_watcher, daemon=True).start()
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
+
+# Batch Sunbiz entity-resolution jobs (build order #163) — a genuinely
+# separate, smaller job system from JOBS above. These never touch FOREWARN
+# or the weekly lookup counter (Sunbiz resolution never has), never need a
+# login, and finish (or fail) well before a real Skip Trace job would ever
+# be created — see resolve_entities()/resolve_entities_job() below.
+ENTITY_JOBS = {}
+ENTITY_JOBS_LOCK = threading.Lock()
 
 # The desktop launcher starts this server detached, with no window — so
 # nothing closes it automatically when Mario's done, and he was having to
@@ -452,6 +460,68 @@ def run_job_safe(job_id, rows):
         JOBS[job_id]["error"] = str(e)
 
 
+def resolve_entities_job(job_id, rows, entity_indices):
+    """Resolves every LLC/entity row's real person via Sunbiz up front, all
+    in one pass, BEFORE any FOREWARN search or login ever happens — see
+    build order #163, Mario: "does it run it behind the scenes real quick
+    for all the llcs at once and then give me the list for approval before
+    we start skip tracing?" This never counts against the weekly FOREWARN
+    lookup counter (that only ever increments inside
+    lookup_engine._run_forewarn_search — a real FOREWARN search — and this
+    function never calls it), and reuses the exact same shared-page Sunbiz
+    automation `process_row()` normally calls live, per row, during the real
+    run — the only difference is WHEN it runs and that the result gets shown
+    to Mario for approval first instead of being spent immediately."""
+    from playwright.sync_api import sync_playwright
+    from llc_lookup import resolve_entity_owner
+
+    job = ENTITY_JOBS[job_id]
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        page = browser.new_page()
+        with ENTITY_JOBS_LOCK:
+            job["status"] = "running"
+
+        for idx in entity_indices:
+            if job["stop_event"].is_set():
+                break
+            row = rows[idx]
+            entity_name = row.get("entity_name", "")
+            try:
+                resolved = resolve_entity_owner(page, entity_name)
+                skip_reason = resolved.get("skip_reason")
+                candidates = [] if skip_reason else (resolved.get("candidates") or [
+                    {"first_name": resolved.get("first_name", ""), "last_name": resolved.get("last_name", ""),
+                     "resolved_via": resolved.get("resolved_via", "")}
+                ])
+            except Exception as e:
+                skip_reason = f"Error while resolving via Sunbiz: {e}"
+                candidates = []
+
+            with ENTITY_JOBS_LOCK:
+                job["results"].append({
+                    "index": idx,
+                    "entity_name": entity_name,
+                    "skip_reason": skip_reason,
+                    "candidates": candidates,
+                })
+                job["processed"] += 1
+
+        browser.close()
+
+    with ENTITY_JOBS_LOCK:
+        job["status"] = "stopped" if job["stop_event"].is_set() else "done"
+
+
+def resolve_entities_job_safe(job_id, rows, entity_indices):
+    try:
+        resolve_entities_job(job_id, rows, entity_indices)
+    except Exception as e:
+        with ENTITY_JOBS_LOCK:
+            ENTITY_JOBS[job_id]["status"] = "error"
+            ENTITY_JOBS[job_id]["error"] = str(e)
+
+
 @app.route("/")
 def index():
     # /admin/google_auth and /admin/microsoft_auth only exist on the HOSTED
@@ -637,6 +707,100 @@ def preview_names():
     return jsonify({"rows": preview, "total": len(preview)})
 
 
+def _apply_name_swaps(rows: list, swapped_indices_raw: str) -> list:
+    """Shared by /api/upload and /api/resolve_entities so both agree on the
+    exact same deterministic swap application -- extracted out of upload()
+    verbatim (see build order #162). Never touches an entity row -- those
+    use entity_name, not first/last, and have nothing to swap. Returns the
+    parsed swapped_indices list (callers that don't need it can ignore it)."""
+    try:
+        swapped_indices = json.loads(swapped_indices_raw or "[]")
+    except (ValueError, TypeError):
+        swapped_indices = []
+    for idx in swapped_indices:
+        if isinstance(idx, int) and 0 <= idx < len(rows) and not rows[idx]["is_entity"]:
+            rows[idx]["first_name"], rows[idx]["last_name"] = rows[idx]["last_name"], rows[idx]["first_name"]
+    return swapped_indices
+
+
+@app.route("/api/resolve_entities", methods=["POST"])
+def resolve_entities():
+    """Kicks off build order #163's batch Sunbiz resolution: every LLC/
+    entity row in the file gets resolved up front, in one background pass,
+    before any FOREWARN search or login. Parses the file the exact same
+    deterministic way /api/preview_names and /api/upload already do, so the
+    `index` values returned in polling results line up perfectly with what
+    Mario already reviewed in the name-swap screen and with the row order
+    /api/upload will use moments later.
+
+    Name swaps never affect which rows are entities or what their
+    entity_name is, so this deliberately doesn't need swapped_indices at all
+    -- Sunbiz resolution only ever reads entity_name.
+
+    Returns {"job_id": None, "total": 0} with no browser ever opened when
+    the file has no entity/LLC rows at all -- a plain individual-owner batch
+    should never pop a Sunbiz browser window for nothing."""
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    text = file.read().decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    raw_rows = list(reader)
+    if not raw_rows:
+        return jsonify({"error": "CSV is empty"}), 400
+
+    try:
+        rows = load_rows(reader.fieldnames, raw_rows)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    entity_indices = [i for i, row in enumerate(rows) if row.get("is_entity")]
+    if not entity_indices:
+        return jsonify({"job_id": None, "total": 0})
+
+    job_id = uuid.uuid4().hex
+    with ENTITY_JOBS_LOCK:
+        ENTITY_JOBS[job_id] = {
+            "status": "starting",
+            "total": len(entity_indices),
+            "processed": 0,
+            "results": [],
+            "stop_event": threading.Event(),
+            "error": None,
+            "created_at": time.time(),
+        }
+
+    thread = threading.Thread(target=resolve_entities_job_safe, args=(job_id, rows, entity_indices), daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id, "total": len(entity_indices)})
+
+
+@app.route("/api/resolve_entities/<job_id>")
+def resolve_entities_status(job_id):
+    job = ENTITY_JOBS.get(job_id)
+    if not job:
+        abort(404)
+    with ENTITY_JOBS_LOCK:
+        return jsonify({
+            "status": job["status"],
+            "total": job["total"],
+            "processed": job["processed"],
+            "results": job["results"],
+            "error": job["error"],
+        })
+
+
+@app.route("/api/resolve_entities/<job_id>/stop", methods=["POST"])
+def resolve_entities_stop(job_id):
+    job = ENTITY_JOBS.get(job_id)
+    if not job:
+        abort(404)
+    job["stop_event"].set()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/upload", methods=["POST"])
 def upload():
     with JOBS_LOCK:
@@ -693,13 +857,26 @@ def upload():
     # line up perfectly with what the review screen showed him moments
     # earlier. Never applied to an entity row -- those use `entity_name`,
     # not first/last, and have nothing to swap.
-    try:
-        swapped_indices = json.loads(request.form.get("swapped_indices", "[]"))
-    except (ValueError, TypeError):
-        swapped_indices = []
-    for idx in swapped_indices:
-        if isinstance(idx, int) and 0 <= idx < len(rows) and not rows[idx]["is_entity"]:
-            rows[idx]["first_name"], rows[idx]["last_name"] = rows[idx]["last_name"], rows[idx]["first_name"]
+    _apply_name_swaps(rows, request.form.get("swapped_indices", "[]"))
+
+    # If Mario already approved a batch Sunbiz resolution for this exact
+    # file (build order #163's /api/resolve_entities, run right before this
+    # upload from the same reviewed file), reuse those results instead of
+    # letting process_row() resolve each entity row all over again live --
+    # same row indices, since name swaps never change which rows are
+    # entities or what their entity_name is. Consumed once and discarded --
+    # nothing else will ever read this job again once its own upload lands.
+    entity_resolve_job_id = request.form.get("entity_resolve_job_id", "")
+    if entity_resolve_job_id:
+        with ENTITY_JOBS_LOCK:
+            resolve_job = ENTITY_JOBS.pop(entity_resolve_job_id, None)
+        if resolve_job:
+            resolved_by_index = {r["index"]: r for r in resolve_job["results"]}
+            for idx, row in enumerate(rows):
+                entry = resolved_by_index.get(idx)
+                if entry is not None and row.get("is_entity"):
+                    row["_resolved_skip_reason"] = entry["skip_reason"]
+                    row["_resolved_candidates"] = entry["candidates"] or None
 
     # Pre-upload CRM dedup (build order #158) -- must run BEFORE any job is
     # created, since a job's existence is what triggers the FOREWARN-login
