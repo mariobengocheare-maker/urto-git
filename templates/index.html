@@ -2111,8 +2111,10 @@
 
     <div class="detail-section">
       <h3>Manage Presets</h3>
+      <p class="sub" style="margin-top:0">Tip: type <code>{first_name}</code> anywhere in a preset and it'll be swapped for the first name of whoever you're texting.</p>
       <div class="row" style="margin-top:0">
         <input type="text" id="textPresetNewInput" placeholder="Add a new preset message…" style="flex:1">
+        <button class="small" id="textPresetInsertTokenBtn" type="button" title="Insert {first_name} at the cursor">+ {first_name}</button>
         <button class="small" id="textPresetAddBtn">+ Add</button>
       </div>
       <div class="error-box" id="textPresetError" style="display:none"></div>
@@ -3769,6 +3771,26 @@ const textPresetList = document.getElementById('textPresetList');
 const textPresetNewInput = document.getElementById('textPresetNewInput');
 const textPresetError = document.getElementById('textPresetError');
 let textFollowupPhone = '';
+let textFollowupName = '';
+
+// Mario: a preset should be able to auto-fill the first name of whoever
+// he's texting, e.g. "Hi there {first_name}, my name is Mario...". The
+// token is just plain literal text stored right in the preset itself (no
+// backend change needed -- `text_presets` already stores arbitrary text) --
+// substituted here whenever a preset is loaded into the message box, and
+// again, defensively, right before sending, in case the token is still
+// sitting in the box from a message typed/pasted in directly rather than
+// loaded via a preset click.
+function extractFirstName(fullName) {
+  const trimmed = (fullName || '').trim();
+  if (!trimmed || trimmed === 'Unknown') return '';
+  return trimmed.split(/\s+/)[0];
+}
+
+function applyPresetTemplate(text) {
+  const firstName = extractFirstName(textFollowupName) || 'there';
+  return text.replace(/\{first_name\}/gi, firstName);
+}
 
 async function loadTextPresetsIntoModal() {
   textPresetList.innerHTML = 'Loading…';
@@ -3785,7 +3807,7 @@ async function loadTextPresetsIntoModal() {
       row.className = 'text-preset-row';
       row.innerHTML = `<span class="preset-text">${escapeHtml(p.text)}</span><button class="preset-delete" title="Delete preset">&times;</button>`;
       row.querySelector('.preset-text').addEventListener('click', () => {
-        textFollowupBody.value = p.text;
+        textFollowupBody.value = applyPresetTemplate(p.text);
       });
       row.querySelector('.preset-delete').addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -3806,6 +3828,7 @@ function openTextFollowup(name, phone) {
   // and swallow clicks meant for this one.
   document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
   textFollowupPhone = phone || '';
+  textFollowupName = name || '';
   textFollowupRecipient.textContent = `${name || 'Unknown'} (${phone || 'no phone on file'})`;
   textFollowupBody.value = '';
   textPresetError.style.display = 'none';
@@ -3820,9 +3843,20 @@ document.getElementById('textFollowupSendBtn').addEventListener('click', () => {
     alert('No phone number on file for this contact.');
     return;
   }
-  const body = textFollowupBody.value.trim();
+  const body = applyPresetTemplate(textFollowupBody.value.trim());
   const smsUrl = `sms:${normalizePhone(textFollowupPhone)}${body ? '?body=' + encodeURIComponent(body) : ''}`;
   window.location.href = smsUrl;
+});
+
+document.getElementById('textPresetInsertTokenBtn').addEventListener('click', () => {
+  const input = textPresetNewInput;
+  const token = '{first_name}';
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = input.value.slice(0, start) + token + input.value.slice(end);
+  const newPos = start + token.length;
+  input.focus();
+  input.setSelectionRange(newPos, newPos);
 });
 
 document.getElementById('textPresetAddBtn').addEventListener('click', async () => {
