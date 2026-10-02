@@ -1629,6 +1629,7 @@
       </div>
       <div class="dialer-controls">
         <button class="ghost" id="dialerTextBtn">📱 Follow-up Text</button>
+        <button class="ghost" id="dialerRepeatPresetBtn" title="Send the same preset you used last, filled in for this contact">🔁 Repeat Last Preset</button>
       </div>
       <div class="dialer-hint">Enter = call current number &nbsp;·&nbsp; &larr;/&rarr; = move through the list</div>
     </div>
@@ -3796,10 +3797,38 @@ function extractAddressForTemplate(address) {
   return trimmed;
 }
 
-function applyPresetTemplate(text) {
-  const firstName = extractFirstName(textFollowupName) || 'there';
-  const address = extractAddressForTemplate(textFollowupAddress) || 'your property';
-  return text.replace(/\{first_name\}/gi, firstName).replace(/\{address\}/gi, address);
+// `nameOverride`/`addressOverride` let a caller substitute for a DIFFERENT
+// contact than whichever one the Follow-up Text modal currently has loaded
+// (see dialerRepeatPresetBtn below, build order #171) without having to
+// mutate the modal's own `textFollowupName`/`textFollowupAddress` state --
+// omit both to keep the original "whatever the modal is currently showing"
+// behavior every existing caller already relies on.
+function applyPresetTemplate(text, nameOverride, addressOverride) {
+  const name = nameOverride !== undefined ? nameOverride : textFollowupName;
+  const address = addressOverride !== undefined ? addressOverride : textFollowupAddress;
+  const firstName = extractFirstName(name) || 'there';
+  const fullAddress = extractAddressForTemplate(address) || 'your property';
+  return text.replace(/\{first_name\}/gi, firstName).replace(/\{address\}/gi, fullAddress);
+}
+
+// Mario: "a button outside of the preset text menu that lets me reuse the
+// last preset text... just ON the dialer screen" -- while dialing down a
+// list he'll often send the identical preset to contact after contact, and
+// wants a one-click repeat without reopening the Follow-up Text modal each
+// time. `lastPresetTemplate` holds the RAW template (tokens intact) of
+// whichever preset was most recently clicked into the compose box -- never
+// the already-substituted message, so repeating it for a new contact fills
+// in THAT contact's own name/address, not the previous one's. Persisted to
+// localStorage purely as a per-browser convenience (surviving a page
+// refresh mid-list); never treated as a source of truth anywhere else.
+let lastPresetTemplate = null;
+try {
+  lastPresetTemplate = localStorage.getItem('urtoLastPresetText') || null;
+} catch (e) { /* private browsing / storage blocked -- just start with none remembered */ }
+
+function rememberLastPresetText(text) {
+  lastPresetTemplate = text;
+  try { localStorage.setItem('urtoLastPresetText', text); } catch (e) { /* ignore */ }
 }
 
 async function loadTextPresetsIntoModal() {
@@ -3818,6 +3847,7 @@ async function loadTextPresetsIntoModal() {
       row.innerHTML = `<span class="preset-text">${escapeHtml(p.text)}</span><button class="preset-delete" title="Delete preset">&times;</button>`;
       row.querySelector('.preset-text').addEventListener('click', () => {
         textFollowupBody.value = applyPresetTemplate(p.text);
+        rememberLastPresetText(p.text);
       });
       row.querySelector('.preset-delete').addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -3914,6 +3944,28 @@ document.getElementById('dialerTextBtn').addEventListener('click', () => {
   // Search buttons use -- it already prefers a matched CRM client's own
   // address on file over the raw dial entry's address, see build order #134.
   openTextFollowup(entry.name, entry.phone, dialerLookupAddress || entry.address);
+});
+
+// Mario: a one-click "send the same preset again" shortcut living directly
+// on the Dialer screen itself, not inside the Follow-up Text modal -- never
+// opens that modal at all, just fires the sms: link straight away using
+// whichever preset was last used, substituted for the CURRENT entry (own
+// name/address, not whoever it was last sent to). See build order #171.
+document.getElementById('dialerRepeatPresetBtn').addEventListener('click', () => {
+  if (!dialerList.length) return;
+  if (!lastPresetTemplate) {
+    alert('No preset has been used yet — open "📱 Follow-up Text" and pick one first, then this button will repeat it.');
+    return;
+  }
+  const entry = dialerList[dialerIndex];
+  if (!entry.phone) {
+    alert('No phone number on file for this contact.');
+    return;
+  }
+  const address = dialerLookupAddress || entry.address;
+  const body = applyPresetTemplate(lastPresetTemplate, entry.name, address);
+  const smsUrl = `sms:${normalizePhone(entry.phone)}?body=${encodeURIComponent(body)}`;
+  window.location.href = smsUrl;
 });
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
