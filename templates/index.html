@@ -1570,6 +1570,9 @@
           <button type="button" class="ghost small" id="dciFreqToggleBtn">✏️ Change follow-up schedule</button>
           <button type="button" class="ghost small" id="dciSkipFollowupBtn">⏭ Skip Follow-up</button>
         </div>
+        <div class="row" style="gap:8px; margin-top:6px">
+          <button type="button" class="ghost small" id="dciAddFollowupDayBtn" title="A one-off reminder on a specific day -- doesn't touch this client's recurring schedule above">📅 Add Follow-up Day</button>
+        </div>
         <div id="dciSkipMsg" style="display:none; margin-top:6px; font-size:.85em; color:var(--gold)"></div>
         <div id="dciFreqPanel" style="display:none; margin-top:8px">
           <select id="dciFrequency">
@@ -5629,7 +5632,12 @@ efTypeVirtual.addEventListener('change', updateMeetingTypeUi);
 efProviderGoogleBtn.addEventListener('click', () => setMeetingProvider('google_meet'));
 efProviderTeamsBtn.addEventListener('click', () => setMeetingProvider('teams'));
 
-async function openEventForm(dateStr, existing) {
+// `prefillClientId` lets a caller open a brand-new event already linked to
+// a specific client (see dciAddFollowupDayBtn below) without making the
+// caller reach into efClient/efClientSearch itself -- only ever applied on
+// the NEW-event path (never alongside `existing`, which already carries its
+// own real client_id/list_id to restore).
+async function openEventForm(dateStr, existing, prefillClientId) {
   eventFormError.style.display = 'none';
   eventForm.reset();
   // A previous save that got stuck (e.g. a slow connection) leaves the
@@ -5682,8 +5690,9 @@ async function openEventForm(dateStr, existing) {
     eventFormTitle.textContent = 'Add Event';
     efId.value = '';
     efDate.value = dateStr;
-    efClient.value = '';
-    efClientSearch.value = '';
+    efClient.value = prefillClientId ? `client-${prefillClientId}` : '';
+    syncEfClientSearchLabel();
+    if (prefillClientId) efClient.dispatchEvent(new Event('change')); // fills the title/attendee-email the same way picking it by hand would
     efDeleteBtn.style.display = 'none';
     efTypePhysical.checked = true;
   }
@@ -6716,6 +6725,20 @@ document.getElementById('dciEditBtn').addEventListener('click', () => {
   cfNotesRow.style.display = 'none'; // editing: notes are managed from the Dialer panel itself
   renderCfListsBox(c.list_ids || []);
   clientFormOverlay.classList.add('show');
+});
+
+// Mario: "add a specific followup day with notes or whatever else instead
+// of only having the option to manipulate a schedule from the dialer" --
+// the frequency editor above only ever changes the RECURRING cadence; this
+// opens the same Add/Edit Event modal the Calendar tab's own "+ Add Event"
+// button uses, pre-linked to whoever's currently loaded, so Mario can pin a
+// one-off reminder (any date, a time, an address, real notes) without that
+// touching the client's automatic schedule at all -- a manual `events` row,
+// same as every other calendar event in this app (see the "manual calendar
+// events are a separate table" gotcha).
+document.getElementById('dciAddFollowupDayBtn').addEventListener('click', () => {
+  if (!dialerCurrentClientData) return;
+  openEventForm(todayIsoDate(), null, dialerCurrentClientData.id);
 });
 
 document.getElementById('dciDeleteBtn').addEventListener('click', async () => {
