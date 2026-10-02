@@ -1558,6 +1558,9 @@
       <button class="dialer-add-crm" id="dialerAddCrmBtn" style="display:none">+ Add to CRM</button>
       <div id="dialerClientInfo" class="dialer-client-info" style="display:none">
         <div class="dialer-client-info-head">📇 In your CRM</div>
+        <div class="row" style="gap:8px; margin:2px 0 8px">
+          <button type="button" class="ghost small" id="dciEditBtn">✏️ Edit Info</button>
+        </div>
         <div class="contact-line"><span class="lbl">Phone</span><span id="dciPhone">—</span></div>
         <div class="contact-line"><span class="lbl">Contact</span><span id="dciContact">—</span></div>
         <div class="contact-line"><span class="lbl">Address</span><span id="dciAddress">—</span></div>
@@ -4378,7 +4381,20 @@ clientForm.addEventListener('submit', async (e) => {
     loadMissedFollowupsSource({ silent: true });
   }
 
-  if (id) {
+  if (id && clientFormOrigin === 'dialerEdit') {
+    // Edited straight from the Dialer's "In your CRM" panel -- stay right
+    // here instead of jumping to the full client card. The dialer entry's
+    // own cached name/phone/address (used for the big name header, the
+    // tel: link, and the Zillow/Property-Search address) need updating too,
+    // since they're a separate copy from what the CRM just saved.
+    const entry = dialerList[dialerIndex];
+    if (entry && entry.clientId === data.id) {
+      entry.name = data.name;
+      entry.phone = data.phone;
+      entry.address = data.address;
+      renderDialerCard();
+    }
+  } else if (id) {
     openClientDetail(id);
   } else if (clientFormOrigin === 'dialer') {
     // Tag the current dialer entry as now in the CRM so the "In your CRM"
@@ -6557,6 +6573,24 @@ async function updateDialerClientInfo(entry) {
 
   dialerClientInfoEl.style.display = 'block';
 }
+
+document.getElementById('dciEditBtn').addEventListener('click', () => {
+  if (!dialerCurrentClientData) return;
+  const c = dialerCurrentClientData;
+  resetClientForm();
+  clientFormTitle.textContent = 'Edit Client';
+  clientFormOrigin = 'dialerEdit';
+  clientFormId.value = c.id;
+  cfName.value = c.name;
+  cfPhone.value = c.phone || '';
+  cfEmail.value = c.email || '';
+  cfContact.value = c.contact_info || '';
+  cfAddress.value = c.address || '';
+  applyClientFrequencyToForm(c);
+  cfNotesRow.style.display = 'none'; // editing: notes are managed from the Dialer panel itself
+  renderCfListsBox(c.list_ids || []);
+  clientFormOverlay.classList.add('show');
+});
 
 document.getElementById('dciDeleteBtn').addEventListener('click', async () => {
   const entry = dialerList[dialerIndex];
