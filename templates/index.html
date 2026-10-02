@@ -6402,8 +6402,28 @@ function composeFullAddress(address, city, state, zip) {
   return [address, cityStateZip].filter(Boolean).join(', ');
 }
 
+// Mario: "make it so that this doesn't happen i need the miami one only or
+// miami dade county one only" -- after a real Zillow search for "900 NW 10TH
+// ST" (a CRM client's own on-file address, with nothing after the street --
+// clients.address is a single free-text column, unlike an Owner Lookup
+// results row's separate address/city/state/zip, see composeFullAddress
+// above) resolved to a real property in Andrews, TEXAS instead of the actual
+// Miami-Dade one. With no state/city to anchor it, Zillow's own nationwide
+// fuzzy address search can and does match an identically-named street in a
+// totally different state. Every one of Mario's real clients is in
+// Miami-Dade County, FL, so when the address doesn't already name Florida,
+// force it there before ever building the search URL -- a safe default
+// given this app's whole domain, never a guess that could land worse than
+// where it started. An address that already specifies "FL"/"Florida" is left
+// completely alone, so a real, already-correct full address (built via
+// composeFullAddress, or typed in with its own real city/state) is never
+// second-guessed or duplicated.
 function buildZillowUrl(address) {
-  const clean = (address || '').replace(/[,#]/g, ' ').replace(/\s+/g, ' ').trim();
+  const raw = (address || '').trim();
+  if (!raw) return null;
+  const hasFlorida = /\bfl(orida)?\b/i.test(raw);
+  const anchored = hasFlorida ? raw : `${raw}, Miami-Dade County, FL`;
+  const clean = anchored.replace(/[,#]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) return null;
   return `https://www.zillow.com/homes/${encodeURIComponent(clean.replace(/ /g, '-'))}_rb/`;
 }
