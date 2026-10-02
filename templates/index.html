@@ -2111,10 +2111,11 @@
 
     <div class="detail-section">
       <h3>Manage Presets</h3>
-      <p class="sub" style="margin-top:0">Tip: type <code>{first_name}</code> anywhere in a preset and it'll be swapped for the first name of whoever you're texting.</p>
+      <p class="sub" style="margin-top:0">Tip: type <code>{first_name}</code> or <code>{address}</code> anywhere in a preset and they'll be swapped for the real name/address of whoever you're texting.</p>
       <div class="row" style="margin-top:0">
         <input type="text" id="textPresetNewInput" placeholder="Add a new preset message…" style="flex:1">
         <button class="small" id="textPresetInsertTokenBtn" type="button" title="Insert {first_name} at the cursor">+ {first_name}</button>
+        <button class="small" id="textPresetInsertAddressTokenBtn" type="button" title="Insert {address} at the cursor">+ {address}</button>
         <button class="small" id="textPresetAddBtn">+ Add</button>
       </div>
       <div class="error-box" id="textPresetError" style="display:none"></div>
@@ -3772,13 +3773,15 @@ const textPresetNewInput = document.getElementById('textPresetNewInput');
 const textPresetError = document.getElementById('textPresetError');
 let textFollowupPhone = '';
 let textFollowupName = '';
+let textFollowupAddress = '';
 
-// Mario: a preset should be able to auto-fill the first name of whoever
-// he's texting, e.g. "Hi there {first_name}, my name is Mario...". The
-// token is just plain literal text stored right in the preset itself (no
-// backend change needed -- `text_presets` already stores arbitrary text) --
+// Mario: a preset should be able to auto-fill the first name AND the
+// address of whoever he's texting, e.g. "Hi there {first_name}, ... I saw
+// your address at {address} on a preforeclosure list...". Both tokens are
+// just plain literal text stored right in the preset itself (no backend
+// change needed -- `text_presets` already stores arbitrary text) --
 // substituted here whenever a preset is loaded into the message box, and
-// again, defensively, right before sending, in case the token is still
+// again, defensively, right before sending, in case a token is still
 // sitting in the box from a message typed/pasted in directly rather than
 // loaded via a preset click.
 function extractFirstName(fullName) {
@@ -3787,9 +3790,16 @@ function extractFirstName(fullName) {
   return trimmed.split(/\s+/)[0];
 }
 
+function extractAddressForTemplate(address) {
+  const trimmed = (address || '').trim();
+  if (!trimmed || trimmed === '—' || trimmed === 'Unknown') return '';
+  return trimmed;
+}
+
 function applyPresetTemplate(text) {
   const firstName = extractFirstName(textFollowupName) || 'there';
-  return text.replace(/\{first_name\}/gi, firstName);
+  const address = extractAddressForTemplate(textFollowupAddress) || 'your property';
+  return text.replace(/\{first_name\}/gi, firstName).replace(/\{address\}/gi, address);
 }
 
 async function loadTextPresetsIntoModal() {
@@ -3821,7 +3831,7 @@ async function loadTextPresetsIntoModal() {
   }
 }
 
-function openTextFollowup(name, phone) {
+function openTextFollowup(name, phone, address) {
   // Close any other open modal first (e.g. the client detail view this was
   // launched from) — two stacked .modal-overlay elements share the same
   // z-index, so whichever is later in the DOM would otherwise sit on top
@@ -3829,6 +3839,7 @@ function openTextFollowup(name, phone) {
   document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
   textFollowupPhone = phone || '';
   textFollowupName = name || '';
+  textFollowupAddress = address || '';
   textFollowupRecipient.textContent = `${name || 'Unknown'} (${phone || 'no phone on file'})`;
   textFollowupBody.value = '';
   textPresetError.style.display = 'none';
@@ -3848,16 +3859,18 @@ document.getElementById('textFollowupSendBtn').addEventListener('click', () => {
   window.location.href = smsUrl;
 });
 
-document.getElementById('textPresetInsertTokenBtn').addEventListener('click', () => {
+function insertTextPresetToken(token) {
   const input = textPresetNewInput;
-  const token = '{first_name}';
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? input.value.length;
   input.value = input.value.slice(0, start) + token + input.value.slice(end);
   const newPos = start + token.length;
   input.focus();
   input.setSelectionRange(newPos, newPos);
-});
+}
+
+document.getElementById('textPresetInsertTokenBtn').addEventListener('click', () => insertTextPresetToken('{first_name}'));
+document.getElementById('textPresetInsertAddressTokenBtn').addEventListener('click', () => insertTextPresetToken('{address}'));
 
 document.getElementById('textPresetAddBtn').addEventListener('click', async () => {
   const text = textPresetNewInput.value.trim();
@@ -3887,13 +3900,20 @@ document.getElementById('textPresetAddBtn').addEventListener('click', async () =
 });
 
 document.getElementById('cdTextBtn').addEventListener('click', () => {
-  openTextFollowup(document.getElementById('cdName').textContent, document.getElementById('cdPhone').textContent);
+  openTextFollowup(
+    document.getElementById('cdName').textContent,
+    document.getElementById('cdPhone').textContent,
+    document.getElementById('cdAddress').textContent
+  );
 });
 
 document.getElementById('dialerTextBtn').addEventListener('click', () => {
   if (!dialerList.length) return;
   const entry = dialerList[dialerIndex];
-  openTextFollowup(entry.name, entry.phone);
+  // dialerLookupAddress is the same best-known address the Zillow/Property
+  // Search buttons use -- it already prefers a matched CRM client's own
+  // address on file over the raw dial entry's address, see build order #134.
+  openTextFollowup(entry.name, entry.phone, dialerLookupAddress || entry.address);
 });
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
