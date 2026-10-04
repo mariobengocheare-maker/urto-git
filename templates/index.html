@@ -1241,6 +1241,97 @@
   }
 
 
+  /* ===================== Transactions Chessboard (build order #175) ===================== */
+  .chess-glyph, .chess-piece-glyph, .chess-piece-big, .chess-pawn {
+    font-family: "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols 2", "Arial Unicode MS", serif;
+    font-variant-emoji: text;
+  }
+  .chess-howto { margin-top: 0; }
+  .chess-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; }
+  .chess-board-col { position: relative; width: min(100%, 560px); flex: 0 1 560px; }
+  .chess-board {
+    display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+    aspect-ratio: 1 / 1; width: 100%;
+    border: 2px solid var(--gold); border-radius: 6px; overflow: hidden;
+    box-shadow: 0 0 28px rgba(201,162,39,.18);
+  }
+  .chess-sq {
+    position: relative; min-width: 0; min-height: 0; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: #2a3a5c; transition: filter .15s;
+  }
+  .chess-sq.light { background: #c9b98f; }
+  .chess-sq:hover { filter: brightness(1.15); }
+  .chess-sq.queen-rank { box-shadow: inset 0 0 0 2px rgba(201,162,39,.35); }
+  .chess-sq .coord {
+    position: absolute; top: 2px; left: 4px; font-size: .62rem; font-weight: 700; opacity: .7;
+    color: #c9b98f; pointer-events: none;
+  }
+  .chess-sq.light .coord { color: #2a3a5c; }
+  .chess-piece-glyph { font-size: clamp(1.3rem, 5.2vw, 2.4rem); line-height: 1; color: #f2d36b;
+    text-shadow: 0 1px 0 #3b2c00, 0 0 6px rgba(0,0,0,.6), 0 0 10px rgba(201,162,39,.4); }
+  .chess-sq.light .chess-piece-glyph { color: #0e1830; text-shadow: 0 0 4px rgba(255,255,255,.4); }
+  .chess-piece-glyph.queen { color: #ffe27a; }
+  .chess-sq.light .chess-piece-glyph.queen { color: #7a1e1e; }
+  .chess-sq .chess-name {
+    max-width: 94%; font-size: .62rem; line-height: 1.1; margin-top: 2px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff;
+    background: rgba(14,24,48,.72); padding: 0 4px; border-radius: 4px; pointer-events: none;
+  }
+  .chess-sq .chess-count {
+    position: absolute; top: 2px; right: 3px; font-size: .62rem; font-weight: 700;
+    background: var(--gold); color: #0e1830; border-radius: 8px; padding: 0 5px; pointer-events: none;
+  }
+  .chess-sq.pawn-sq { cursor: help; }
+  .chess-pawn { font-size: clamp(1.2rem, 4.6vw, 2.1rem); line-height: 1; color: #e8edf7;
+    text-shadow: 0 0 5px rgba(0,0,0,.7); pointer-events: none; }
+  .chess-sq.light .chess-pawn { color: #e8edf7; text-shadow: 0 0 2px #0e1830, 0 0 4px #0e1830, 0 1px 0 #0e1830; }
+  .chess-pawn-tip {
+    display: none; position: absolute; left: 50%; top: -8px; transform: translate(-50%, -100%); z-index: 2;
+    background: rgba(14,24,48,.96); color: #fff; border: 1px solid var(--gold); border-radius: 8px;
+    padding: 7px 12px; font-size: .88rem; white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,.4);
+    pointer-events: none;
+  }
+  .chess-pawn-tip.show { display: block; }
+  .chess-files { display: grid; grid-template-columns: repeat(8, 1fr); text-align: center;
+    font-size: .72rem; color: var(--text-secondary); margin-top: 4px; }
+  .chess-captured { flex: 1 1 220px; min-width: 200px; margin-top: 0; }
+  .chess-captured h3 { margin-top: 0; }
+  .chess-cap-row { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 8px; cursor: pointer; }
+  .chess-cap-row:hover { background: rgba(201,162,39,.08); }
+  .chess-cap-row .chess-glyph { font-size: 1.5rem; color: var(--gold); }
+  .chess-cap-row .meta { font-size: .76rem; color: var(--text-secondary); }
+  .chess-type-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chess-type-btn { background: rgba(19,28,46,.5); color: var(--text-secondary); border: 1px solid var(--border); }
+  .chess-type-btn.active { color: #fff; border-color: var(--gold); box-shadow: 0 0 14px rgba(201,162,39,.25); }
+  .chess-type-btn .chess-glyph { font-size: 1.2rem; color: var(--gold); }
+  .chess-client-list { max-height: 220px; overflow-y: auto; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; }
+  .chess-client-opt { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid rgba(38,51,73,.6); font-size: .9rem; }
+  .chess-client-opt:last-child { border-bottom: none; }
+  .chess-client-opt:hover { background: rgba(201,162,39,.08); }
+  .chess-client-opt.selected { background: rgba(201,162,39,.18); color: #fff; }
+  .chess-client-opt .meta { font-size: .76rem; color: var(--text-secondary); }
+  .chess-client-opt.disabled { opacity: .45; cursor: not-allowed; }
+  .field-hint { font-size: .8rem; color: var(--text-secondary); margin-top: 6px; }
+  .chess-square-list .chess-cap-row { border-bottom: 1px solid rgba(38,51,73,.6); }
+  .chess-piece-hero { display: flex; gap: 16px; align-items: center; margin: 4px 0 14px; }
+  .chess-piece-big { font-size: 4.2rem; line-height: 1; color: var(--gold);
+    text-shadow: 0 0 18px rgba(201,162,39,.45); }
+  .chess-client-link { background: none; border: none; padding: 0; color: #fff; font-size: 1.25rem;
+    font-weight: 700; text-decoration: underline; text-decoration-color: rgba(201,162,39,.6); cursor: pointer; box-shadow: none; }
+  .chess-piece-meta { font-size: .85rem; color: var(--text-secondary); margin-top: 4px; }
+  .chess-piece-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chess-piece-msg { display: none; margin-top: 10px; font-size: .88rem; color: #8fe3a8; }
+  .chess-notes-head { margin: 18px 0 6px; font-size: 1rem; }
+  .chess-notes { max-height: 220px; overflow-y: auto; }
+  .chess-notes .chess-note { padding: 7px 0; border-bottom: 1px solid rgba(38,51,73,.6); font-size: .86rem; }
+  .chess-notes .chess-note .when { font-size: .72rem; color: var(--text-secondary); }
+  @media (max-width: 640px) {
+    .chess-sq .chess-name { display: none; }
+    .chess-sq .coord { font-size: .5rem; }
+    .chess-pawn-tip { white-space: normal; width: max-content; max-width: 92%; }
+  }
+
   /* ===================== Map tab (build order #173) ===================== */
   .map-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
   .map-layer-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -1712,8 +1803,26 @@
       <button class="active" data-view="active">Active</button>
       <button data-view="closings">💰 Closings</button>
       <button data-view="archive">📁 Archive</button>
+      <button data-view="chess">♟ Chessboard</button>
     </div>
     <div id="txnList" class="txn-list"></div>
+    <div id="txnChessView" style="display:none">
+      <p class="sub chess-howto">Every client starts as a pawn. Click any open square to promote a client into a
+        <strong>Rook</strong>, <strong>Knight</strong> or <strong>Bishop</strong> (all equal weight). Click the piece and
+        <strong>Advance</strong> it one square whenever something important happens — reaching rank 7 makes it a
+        <strong>Queen</strong> (Under Contract). When the deal closes, capture it. Everything you do here is saved to that client's notes.</p>
+      <div class="chess-layout">
+        <div class="chess-board-col">
+          <div class="chess-pawn-tip" id="chessPawnTip"></div>
+          <div class="chess-board" id="chessBoard"></div>
+          <div class="chess-files"><span>a</span><span>b</span><span>c</span><span>d</span><span>e</span><span>f</span><span>g</span><span>h</span></div>
+        </div>
+        <div class="card chess-captured">
+          <h3>Captured pieces</h3>
+          <div id="chessCapturedList"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="txnDetailView" style="display:none">
@@ -2271,6 +2380,83 @@
 </div>
 
 <!-- Add / Edit calendar event modal -->
+<div class="modal-overlay" id="chessCreateOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="chessCreateTitle">Promote a pawn</h2>
+      <button class="modal-close" id="chessCreateCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="chessCreateError"></div>
+    <div class="form-group">
+      <label>Piece</label>
+      <div class="chess-type-btns" id="chessTypeBtns">
+        <button type="button" class="chess-type-btn active" data-type="rook"><span class="chess-glyph">♜&#xFE0E;</span> Rook</button>
+        <button type="button" class="chess-type-btn" data-type="knight"><span class="chess-glyph">♞&#xFE0E;</span> Knight</button>
+        <button type="button" class="chess-type-btn" data-type="bishop"><span class="chess-glyph">♝&#xFE0E;</span> Bishop</button>
+      </div>
+      <div class="field-hint" id="chessQueenRankHint" style="display:none">This square is on rank 7 — the piece starts as a ♛ Queen (Under Contract).</div>
+    </div>
+    <div class="form-group">
+      <label for="chessClientSearch">Client *</label>
+      <input type="text" id="chessClientSearch" placeholder="Search your clients by name or phone…" autocomplete="off">
+      <div class="chess-client-list" id="chessClientList"></div>
+    </div>
+    <div class="form-group">
+      <label for="chessCreateNote">First note (optional — saved to this client's notes)</label>
+      <textarea id="chessCreateNote" rows="2" placeholder="e.g. Met at open house, wants to list in spring"></textarea>
+    </div>
+    <div class="row" style="justify-content:flex-end; margin-top:8px">
+      <button type="button" class="ghost" id="chessCreateCancelBtn">Cancel</button>
+      <button type="button" id="chessCreateSubmitBtn">Create Rook</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="chessSquareOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="chessSquareTitle">Square</h2>
+      <button class="modal-close" id="chessSquareCloseBtn">&times;</button>
+    </div>
+    <div id="chessSquareList" class="chess-square-list"></div>
+    <div class="row" style="justify-content:flex-end; margin-top:12px">
+      <button type="button" id="chessSquareCreateBtn">+ Create a piece on this square</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="chessPieceOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="chessPieceTitle">Piece</h2>
+      <button class="modal-close" id="chessPieceCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="chessPieceError"></div>
+    <div class="chess-piece-hero">
+      <div class="chess-piece-big" id="chessPieceGlyph">♜</div>
+      <div>
+        <button type="button" class="link-btn chess-client-link" id="chessPieceClientBtn">Client</button>
+        <div class="chess-piece-meta" id="chessPieceMeta"></div>
+      </div>
+    </div>
+    <div class="form-group" id="chessPieceNoteGroup">
+      <label for="chessPieceNote" id="chessPieceNoteLabel">What happened? (saved to this client's notes)</label>
+      <textarea id="chessPieceNote" rows="3" placeholder="e.g. Signed listing agreement, showing set for Saturday"></textarea>
+    </div>
+    <div class="chess-piece-actions">
+      <button type="button" id="chessAdvanceBtn">▲ Advance Rook</button>
+      <button type="button" class="ghost" id="chessPromoteBtn">♛ Promote to Queen now</button>
+      <button type="button" class="ghost" id="chessCaptureBtn">🏁 Closed — Capture</button>
+      <button type="button" class="ghost" id="chessNoteBtn">📝 Save note only</button>
+      <button type="button" class="ghost" id="chessRestoreBtn">↩ Return to board</button>
+      <button type="button" class="ghost" id="chessRemoveBtn">♟ Back to pawn</button>
+    </div>
+    <div class="chess-piece-msg" id="chessPieceMsg"></div>
+    <h3 class="chess-notes-head">Notes</h3>
+    <div id="chessPieceNotes" class="chess-notes"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="creUnitOverlay">
   <div class="modal">
     <div class="modal-head">
@@ -7348,6 +7534,12 @@ const TXN_EMPTY_STATE = {
 };
 
 async function loadTxnList() {
+  // The ♟ Chessboard subtab (build order #175) lives in the same list view
+  // but isn't a folder of transactions -- swap the two panes.
+  const chessMode = txnListViewMode === 'chess';
+  txnListEl.style.display = chessMode ? 'none' : '';
+  document.getElementById('txnChessView').style.display = chessMode ? 'block' : 'none';
+  if (chessMode) { loadChessboard(); return; }
   await ensureTxnTypesLoaded();
   const res = await fetch(`/api/txn/transactions?folder=${txnListViewMode}`);
   const txns = res.ok ? await res.json() : [];
@@ -8745,6 +8937,379 @@ document.getElementById('cuDeleteBtn').addEventListener('click', async () => {
   }
   await afterCreUnitChange();
 });
+
+/* ===================== Transactions Chessboard (build order #175) ===================== */
+const CHESS_FILES = 'abcdefgh';
+const CHESS_TXT = '︎';  // force text (not emoji) presentation of the chess glyphs
+const CHESS_GLYPH = { rook: '♜', knight: '♞', bishop: '♝', queen: '♛', pawn: '♟' };
+const CHESS_LABEL = { rook: 'Rook', knight: 'Knight', bishop: 'Bishop', queen: 'Queen' };
+let chessState = { pieces: [], captured: [], pawn_count: 0, total_clients: 0, queen_rank: 7 };
+let chessCreateSquare = null;      // {file, rank}
+let chessCreateType = 'rook';
+let chessCreateClientId = null;
+let chessClientsCache = [];
+let chessCurrentPiece = null;
+let chessPawnTipTimer = null;
+
+const chessBoardEl = document.getElementById('chessBoard');
+const chessPawnTip = document.getElementById('chessPawnTip');
+const chessCreateOverlay = document.getElementById('chessCreateOverlay');
+const chessSquareOverlay = document.getElementById('chessSquareOverlay');
+const chessPieceOverlay = document.getElementById('chessPieceOverlay');
+
+function chessGlyph(type) { return (CHESS_GLYPH[type] || '♟') + CHESS_TXT; }
+function chessSquareName(file, rank) { return CHESS_FILES[file] + rank; }
+function chessPawnText() {
+  const n = chessState.pawn_count;
+  return `${n} client${n === 1 ? ' is' : 's are'} currently pawns.`;
+}
+function closeAllModals() {
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+}
+
+async function loadChessboard() {
+  try {
+    const res = await fetch('/api/crm/chess');
+    if (!res.ok) throw new Error();
+    chessState = await res.json();
+  } catch (e) {
+    chessBoardEl.innerHTML = '';
+    document.getElementById('chessCapturedList').innerHTML = '<div class="empty-state">Couldn\'t load the chessboard — try again.</div>';
+    return;
+  }
+  renderChessboard();
+}
+
+function chessPiecesOn(file, rank) {
+  return chessState.pieces
+    .filter(p => p.file === file && p.rank === rank)
+    .sort((a, b) => (b.piece_type === 'queen') - (a.piece_type === 'queen') || a.id - b.id);
+}
+
+function showChessPawnTip(autoHide) {
+  chessPawnTip.textContent = chessPawnText();
+  chessPawnTip.classList.add('show');
+  clearTimeout(chessPawnTipTimer);
+  if (autoHide) chessPawnTipTimer = setTimeout(() => chessPawnTip.classList.remove('show'), 2500);
+}
+
+function renderChessboard() {
+  chessBoardEl.innerHTML = '';
+  for (let row = 0; row < 8; row++) {
+    const rank = 8 - row;
+    for (let file = 0; file < 8; file++) {
+      const sq = document.createElement('div');
+      sq.className = 'chess-sq' + ((row + file) % 2 === 0 ? ' light' : '');
+      sq.dataset.square = chessSquareName(file, rank);
+      const coord = file === 0 ? `<span class="coord">${rank}</span>` : '';
+      if (rank === 8) {
+        // The pawn row -- all 8 pawns together stand for every client not
+        // currently promoted into a piece.
+        sq.classList.add('pawn-sq');
+        sq.innerHTML = `${coord}<span class="chess-pawn">${chessGlyph('pawn')}</span>`;
+        sq.title = chessPawnText();
+        sq.addEventListener('mouseenter', () => showChessPawnTip(false));
+        sq.addEventListener('mouseleave', () => chessPawnTip.classList.remove('show'));
+        sq.addEventListener('click', () => showChessPawnTip(true));
+      } else {
+        if (rank === chessState.queen_rank) sq.classList.add('queen-rank');
+        const here = chessPiecesOn(file, rank);
+        let inner = coord;
+        if (here.length) {
+          const top = here[0];
+          inner += `<span class="chess-piece-glyph ${top.piece_type === 'queen' ? 'queen' : ''}">${chessGlyph(top.piece_type)}</span>`;
+          inner += `<span class="chess-name">${escapeHtml((top.client_name || '').split(' ')[0])}</span>`;
+          if (here.length > 1) inner += `<span class="chess-count">+${here.length - 1}</span>`;
+          sq.title = here.map(p => `${CHESS_LABEL[p.piece_type]} — ${p.client_name}`).join('\n');
+        } else {
+          sq.title = `Promote a pawn on ${chessSquareName(file, rank)}`;
+        }
+        sq.innerHTML = inner;
+        sq.addEventListener('click', () => {
+          if (here.length === 0) openChessCreate(file, rank);
+          else if (here.length === 1) openChessPiece(here[0].id);
+          else openChessSquare(file, rank);
+        });
+      }
+      chessBoardEl.appendChild(sq);
+    }
+  }
+  const capEl = document.getElementById('chessCapturedList');
+  if (!chessState.captured.length) {
+    capEl.innerHTML = '<div class="empty-state" style="padding:12px 0">No captured pieces yet. Capture a Queen once its deal closes.</div>';
+  } else {
+    capEl.innerHTML = '';
+    for (const p of chessState.captured) {
+      const row = document.createElement('div');
+      row.className = 'chess-cap-row';
+      row.innerHTML = `<span class="chess-glyph">${chessGlyph(p.piece_type)}</span>
+        <div><div>${escapeHtml(p.client_name)}</div>
+        <div class="meta">Captured ${escapeHtml(formatMissedDate((p.captured_at || '').slice(0, 10)))}</div></div>`;
+      row.addEventListener('click', () => openChessPiece(p.id));
+      capEl.appendChild(row);
+    }
+  }
+}
+
+// ---- Create a piece ----
+function setChessCreateType(type) {
+  chessCreateType = type;
+  document.querySelectorAll('#chessTypeBtns .chess-type-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.type === type));
+  const queen = chessCreateSquare && chessCreateSquare.rank >= chessState.queen_rank;
+  document.getElementById('chessCreateSubmitBtn').textContent = queen ? 'Create Queen' : `Create ${CHESS_LABEL[type]}`;
+}
+document.querySelectorAll('#chessTypeBtns .chess-type-btn').forEach(b =>
+  b.addEventListener('click', () => setChessCreateType(b.dataset.type)));
+
+function renderChessClientList() {
+  const q = document.getElementById('chessClientSearch').value.trim().toLowerCase();
+  const qDigits = q.replace(/\D/g, '');
+  const onBoard = new Map(chessState.pieces.map(p => [p.client_id, p]));
+  const listEl = document.getElementById('chessClientList');
+  const matches = chessClientsCache.filter(c => {
+    if (!q) return true;
+    if ((c.name || '').toLowerCase().includes(q)) return true;
+    return qDigits.length >= 3 && (c.phone || '').replace(/\D/g, '').includes(qDigits);
+  }).slice(0, 150);
+  if (!matches.length) {
+    listEl.innerHTML = '<div class="chess-client-opt disabled">No clients match.</div>';
+    return;
+  }
+  listEl.innerHTML = '';
+  for (const c of matches) {
+    const piece = onBoard.get(c.id);
+    const opt = document.createElement('div');
+    opt.className = 'chess-client-opt' + (piece ? ' disabled' : '') + (c.id === chessCreateClientId ? ' selected' : '');
+    opt.innerHTML = `<div>${escapeHtml(c.name)}</div><div class="meta">${piece
+      ? `Already on the board — ${CHESS_LABEL[piece.piece_type]} on ${escapeHtml(piece.square)}`
+      : escapeHtml(c.phone || c.address || '')}</div>`;
+    if (!piece) {
+      opt.addEventListener('click', () => { chessCreateClientId = c.id; renderChessClientList(); });
+    }
+    listEl.appendChild(opt);
+  }
+}
+document.getElementById('chessClientSearch').addEventListener('input', renderChessClientList);
+
+async function openChessCreate(file, rank) {
+  closeAllModals();
+  chessCreateSquare = { file, rank };
+  chessCreateClientId = null;
+  document.getElementById('chessCreateTitle').textContent = `Promote a pawn — ${chessSquareName(file, rank)}`;
+  document.getElementById('chessCreateError').style.display = 'none';
+  document.getElementById('chessClientSearch').value = '';
+  document.getElementById('chessCreateNote').value = '';
+  document.getElementById('chessQueenRankHint').style.display = rank >= chessState.queen_rank ? 'block' : 'none';
+  document.getElementById('chessCreateSubmitBtn').disabled = false;
+  setChessCreateType(chessCreateType);
+  document.getElementById('chessClientList').innerHTML = '<div class="chess-client-opt disabled">Loading clients…</div>';
+  chessCreateOverlay.classList.add('show');
+  try {
+    const res = await fetch('/api/crm/clients');
+    chessClientsCache = res.ok ? await res.json() : [];
+    chessClientsCache.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  } catch (e) { chessClientsCache = []; }
+  renderChessClientList();
+  document.getElementById('chessClientSearch').focus();
+}
+
+document.getElementById('chessCreateSubmitBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('chessCreateError');
+  errEl.style.display = 'none';
+  if (!chessCreateClientId) {
+    errEl.textContent = 'Pick a client first.';
+    errEl.style.display = 'block';
+    return;
+  }
+  const btn = document.getElementById('chessCreateSubmitBtn');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/crm/chess/pieces', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: chessCreateClientId, piece_type: chessCreateType,
+        file: chessCreateSquare.file, rank: chessCreateSquare.rank,
+        note: document.getElementById('chessCreateNote').value,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Couldn\'t create the piece.');
+    chessCreateOverlay.classList.remove('show');
+    await loadChessboard();
+  } catch (e) {
+    errEl.textContent = e.message || 'Couldn\'t reach URTO\'s server — try again.';
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
+});
+document.getElementById('chessCreateCloseBtn').addEventListener('click', () => chessCreateOverlay.classList.remove('show'));
+document.getElementById('chessCreateCancelBtn').addEventListener('click', () => chessCreateOverlay.classList.remove('show'));
+
+// ---- A square holding several pieces ----
+function openChessSquare(file, rank) {
+  closeAllModals();
+  document.getElementById('chessSquareTitle').textContent = `Square ${chessSquareName(file, rank)}`;
+  const listEl = document.getElementById('chessSquareList');
+  listEl.innerHTML = '';
+  for (const p of chessPiecesOn(file, rank)) {
+    const row = document.createElement('div');
+    row.className = 'chess-cap-row';
+    row.innerHTML = `<span class="chess-glyph">${chessGlyph(p.piece_type)}</span>
+      <div><div>${escapeHtml(p.client_name)}</div><div class="meta">${CHESS_LABEL[p.piece_type]}</div></div>`;
+    row.addEventListener('click', () => openChessPiece(p.id));
+    listEl.appendChild(row);
+  }
+  document.getElementById('chessSquareCreateBtn').onclick = () => openChessCreate(file, rank);
+  chessSquareOverlay.classList.add('show');
+}
+document.getElementById('chessSquareCloseBtn').addEventListener('click', () => chessSquareOverlay.classList.remove('show'));
+
+// ---- A piece's own menu ----
+async function openChessPiece(pieceId) {
+  closeAllModals();
+  document.getElementById('chessPieceError').style.display = 'none';
+  document.getElementById('chessPieceMsg').style.display = 'none';
+  document.getElementById('chessPieceNote').value = '';
+  let p;
+  try {
+    const res = await fetch(`/api/crm/chess/pieces/${pieceId}`);
+    if (!res.ok) throw new Error();
+    p = await res.json();
+  } catch (e) {
+    alert('That piece no longer exists — refreshing the board.');
+    loadChessboard();
+    return;
+  }
+  chessCurrentPiece = p;
+  renderChessPieceMenu();
+  chessPieceOverlay.classList.add('show');
+  loadChessPieceNotes();
+}
+
+function renderChessPieceMenu() {
+  const p = chessCurrentPiece;
+  const captured = p.status === 'captured';
+  const queen = p.piece_type === 'queen';
+  const label = CHESS_LABEL[p.piece_type];
+  document.getElementById('chessPieceTitle').textContent = captured ? `Captured ${label}` : label;
+  document.getElementById('chessPieceGlyph').textContent = chessGlyph(p.piece_type);
+  document.getElementById('chessPieceClientBtn').textContent = p.client_name;
+  const since = formatMissedDate((p.created_at || '').slice(0, 10));
+  let meta;
+  if (captured) meta = `Closed — captured ${formatMissedDate((p.captured_at || '').slice(0, 10))} · was on ${p.square}`;
+  else if (queen) meta = `Queen on ${p.square} · Under Contract · on the board since ${since}`;
+  else meta = `${label} on ${p.square} · ${chessState.queen_rank - p.rank} square${chessState.queen_rank - p.rank === 1 ? '' : 's'} from Queen · since ${since}`;
+  document.getElementById('chessPieceMeta').textContent = meta;
+  document.getElementById('chessPieceNoteLabel').textContent = `What happened? (saved to ${p.client_name}'s notes)`;
+  const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
+  document.getElementById('chessAdvanceBtn').textContent = `▲ Advance ${label}`;
+  show('chessAdvanceBtn', !captured && !queen);
+  show('chessPromoteBtn', !captured && !queen);
+  show('chessCaptureBtn', !captured);
+  show('chessRemoveBtn', !captured);
+  show('chessRestoreBtn', captured);
+  show('chessNoteBtn', true);
+}
+
+async function loadChessPieceNotes() {
+  const p = chessCurrentPiece;
+  const el = document.getElementById('chessPieceNotes');
+  el.innerHTML = '<div class="empty-state" style="padding:8px 0">Loading…</div>';
+  try {
+    const res = await fetch(`/api/crm/clients/${p.client_id}`);
+    if (!res.ok) throw new Error();
+    const c = await res.json();
+    if (!chessCurrentPiece || chessCurrentPiece.id !== p.id) return;
+    const notes = (c.notes || []).slice(0, 25);
+    el.innerHTML = notes.length ? notes.map(n =>
+      `<div class="chess-note"><div class="when">${escapeHtml(formatNoteTime(n.created_at))}</div>${escapeHtml(n.text)}</div>`).join('')
+      : '<div class="empty-state" style="padding:8px 0">No notes yet.</div>';
+  } catch (e) {
+    el.innerHTML = '<div class="empty-state" style="padding:8px 0">Couldn\'t load notes.</div>';
+  }
+}
+
+async function chessPieceAction(path, method, okMsg, opts = {}) {
+  const errEl = document.getElementById('chessPieceError');
+  const msgEl = document.getElementById('chessPieceMsg');
+  errEl.style.display = 'none';
+  msgEl.style.display = 'none';
+  const noteEl = document.getElementById('chessPieceNote');
+  const buttons = document.querySelectorAll('.chess-piece-actions button');
+  buttons.forEach(b => b.disabled = true);
+  try {
+    const res = await fetch(path, {
+      method, headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts.body || { note: noteEl.value }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Something went wrong — try again.');
+    noteEl.value = '';
+    await loadChessboard();
+    if (opts.close) {
+      chessPieceOverlay.classList.remove('show');
+      return;
+    }
+    if (data && data.id) chessCurrentPiece = data;
+    renderChessPieceMenu();
+    msgEl.textContent = okMsg(chessCurrentPiece);
+    msgEl.style.display = 'block';
+    loadChessPieceNotes();
+  } catch (e) {
+    errEl.textContent = e.message || 'Couldn\'t reach URTO\'s server — try again.';
+    errEl.style.display = 'block';
+  } finally {
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+
+document.getElementById('chessAdvanceBtn').addEventListener('click', () =>
+  chessPieceAction(`/api/crm/chess/pieces/${chessCurrentPiece.id}/advance`, 'POST', p =>
+    p.piece_type === 'queen' ? `♛ Reached ${p.square} — it's a Queen now (Under Contract)!` : `▲ Advanced to ${p.square}. Saved to notes.`));
+document.getElementById('chessPromoteBtn').addEventListener('click', () => {
+  if (!confirm(`Promote ${chessCurrentPiece.client_name} to a Queen (Under Contract) now?`)) return;
+  chessPieceAction(`/api/crm/chess/pieces/${chessCurrentPiece.id}/promote`, 'POST', () => '♛ Promoted to Queen — Under Contract.');
+});
+document.getElementById('chessCaptureBtn').addEventListener('click', () => {
+  if (!confirm(`Mark ${chessCurrentPiece.client_name}'s deal as closed and capture this piece?`)) return;
+  chessPieceAction(`/api/crm/chess/pieces/${chessCurrentPiece.id}/capture`, 'POST', () => '🏁 Captured! Moved to Captured pieces.');
+});
+document.getElementById('chessRestoreBtn').addEventListener('click', () =>
+  chessPieceAction(`/api/crm/chess/pieces/${chessCurrentPiece.id}/restore`, 'POST', p => `↩ Back on the board on ${p.square}.`, { body: {} }));
+document.getElementById('chessRemoveBtn').addEventListener('click', () => {
+  if (!confirm(`Send ${chessCurrentPiece.client_name} back to the pawns? (Their notes are kept.)`)) return;
+  chessPieceAction(`/api/crm/chess/pieces/${chessCurrentPiece.id}`, 'DELETE', () => '', { close: true });
+});
+document.getElementById('chessNoteBtn').addEventListener('click', async () => {
+  const noteEl = document.getElementById('chessPieceNote');
+  const text = noteEl.value.trim();
+  const errEl = document.getElementById('chessPieceError');
+  const msgEl = document.getElementById('chessPieceMsg');
+  errEl.style.display = 'none';
+  if (!text) { errEl.textContent = 'Type a note first.'; errEl.style.display = 'block'; return; }
+  try {
+    const res = await fetch(`/api/crm/clients/${chessCurrentPiece.client_id}/notes`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error();
+    noteEl.value = '';
+    msgEl.textContent = '📝 Saved to notes.';
+    msgEl.style.display = 'block';
+    loadChessPieceNotes();
+  } catch (e) {
+    errEl.textContent = 'Couldn\'t save the note — try again.';
+    errEl.style.display = 'block';
+  }
+});
+document.getElementById('chessPieceClientBtn').addEventListener('click', () => {
+  const id = chessCurrentPiece && chessCurrentPiece.client_id;
+  if (!id) return;
+  chessPieceOverlay.classList.remove('show');
+  openClientDetail(id);
+});
+document.getElementById('chessPieceCloseBtn').addEventListener('click', () => chessPieceOverlay.classList.remove('show'));
 
 /* ===================== EOS & Rocks ===================== */
 const waterfallList = document.getElementById('waterfallList');

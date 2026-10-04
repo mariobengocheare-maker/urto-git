@@ -699,6 +699,7 @@ def _write_full_data_export(backup_dir: Path):
         "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
         "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
         "cre_units": [dict(r) for r in conn.execute("SELECT * FROM cre_units ORDER BY id").fetchall()],
+        "chess_pieces": [dict(r) for r in conn.execute("SELECT * FROM chess_pieces ORDER BY id").fetchall()],
         "events": [dict(r) for r in conn.execute("SELECT * FROM events ORDER BY id").fetchall()],
         "document_types": [dict(r) for r in conn.execute("SELECT * FROM document_types ORDER BY id").fetchall()],
         "transactions": [dict(r) for r in conn.execute("SELECT * FROM transactions ORDER BY id").fetchall()],
@@ -757,7 +758,7 @@ def import_full_data_export(data: dict) -> dict:
 
     table_order = [
         "clients", "notes", "call_log", "contact_lists", "contact_list_members", "cre_units",
-        "events", "document_types", "transactions", "transaction_documents",
+        "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
         "lookup_stats", "text_presets",
     ]
     counts = {}
@@ -1358,6 +1359,25 @@ def init_db():
             rent_type TEXT,
             notes TEXT,
             created_at TEXT NOT NULL
+        )
+    """)
+    # Transactions-tab Chessboard (build order #175): a client "promoted" out
+    # of the pawn pool into a piece (rook/knight/bishop, all equal weight),
+    # advanced one square at a time as real things happen, becoming a queen
+    # (under contract) on rank 7 and "captured" once closed. A client has at
+    # most one piece on the board at a time; captured rows are kept as history.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chess_pieces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            piece_type TEXT NOT NULL,
+            original_type TEXT NOT NULL,
+            file INTEGER NOT NULL,
+            rank INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            promoted_at TEXT,
+            captured_at TEXT
         )
     """)
     conn.execute("""
@@ -4844,3 +4864,232 @@ def get_map_community(list_id) -> dict:
         "cre_summary": cre_summary(units),
         "asset_classes": ASSET_CLASSES,
     }
+
+
+# ---------------------------------------------------------------------------
+# Transactions-tab Chessboard (build order #175)
+# ---------------------------------------------------------------------------
+# Every CRM client starts as a "pawn" (the row of 8 pawns on the far side of
+# the board stands for all of them). Mario promotes a client into a piece by
+# clicking a square: a rook, knight or bishop -- all three carry the same
+# weight, the shape is just whatever he likes for that client. "Advance" moves
+# a piece one square toward the pawn row when something important happens;
+# reaching rank 7 (the last open rank) makes it a queen = under contract.
+# Closing captures it off the board. Every action is written into the
+# client's own notes, so the board is a view of real CRM history, not a
+# separate silo. Squares can hold more than one piece (178 clients won't fit
+# one-per-square), so nothing is ever blocked by an occupied square.
+
+CHESS_PIECE_TYPES = ("rook", "knight", "bishop")
+CHESS_QUEEN_RANK = 7  # ranks 1-7 are open; rank 8 is the pawn row
+CHESS_GLYPHS = {"rook": "♜", "knight": "♞", "bishop": "♝", "queen": "♛", "pawn": "♟"}
+_CHESS_FILES = "abcdefgh"
+
+
+def _chess_square(file_idx, rank) -> str:
+    return f"{_CHESS_FILES[file_idx]}{rank}"
+
+
+def _chess_piece_label(piece_type) -> str:
+    return piece_type.capitalize()
+
+
+def _chess_piece_to_dict(row) -> dict:
+    d = dict(row)
+    d["square"] = _chess_square(d["file"], d["rank"])
+    d["glyph"] = CHESS_GLYPHS.get(d["piece_type"], "♟")
+    d["label"] = _chess_piece_label(d["piece_type"])
+    return d
+
+
+def _chess_note(client_id, piece_type, text, extra=""):
+    extra = (extra or "").strip()
+    line = f"{CHESS_GLYPHS.get(piece_type, '♟')} Chessboard: {text}"
+    if extra:
+        line += f" — {extra}"
+    add_note(client_id, line)
+
+
+_CHESS_SELECT = """
+    SELECT p.*, c.name AS client_name, c.phone AS client_phone
+      FROM chess_pieces p JOIN clients c ON c.id = p.client_id
+"""
+
+
+def get_chessboard() -> dict:
+    conn = get_conn()
+    active = conn.execute(_CHESS_SELECT + " WHERE p.status = 'active' ORDER BY p.rank DESC, p.id").fetchall()
+    captured = conn.execute(_CHESS_SELECT + " WHERE p.status = 'captured' ORDER BY p.captured_at DESC, p.id DESC").fetchall()
+    total = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+    conn.close()
+    return {
+        "pieces": [_chess_piece_to_dict(r) for r in active],
+        "captured": [_chess_piece_to_dict(r) for r in captured],
+        "total_clients": total,
+        "pawn_count": max(0, total - len(active)),
+        "queen_rank": CHESS_QUEEN_RANK,
+    }
+
+
+def get_chess_piece(piece_id) -> dict:
+    conn = get_conn()
+    row = conn.execute(_CHESS_SELECT + " WHERE p.id = ?", (piece_id,)).fetchone()
+    conn.close()
+    return _chess_piece_to_dict(row) if row else None
+
+
+def create_chess_piece(client_id, piece_type, file_idx, rank, note="") -> dict:
+    piece_type = (piece_type or "").strip().lower()
+    if piece_type not in CHESS_PIECE_TYPES:
+        raise ValueError("Pick a rook, knight or bishop.")
+    try:
+        file_idx, rank = int(file_idx), int(rank)
+    except (TypeError, ValueError):
+        raise ValueError("That square isn't on the board.")
+    if not (0 <= file_idx <= 7 and 1 <= rank <= CHESS_QUEEN_RANK):
+        raise ValueError("That square isn't on the board.")
+    conn = get_conn()
+    client = conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not client:
+        conn.close()
+        raise ValueError("That client no longer exists.")
+    existing = conn.execute(
+        "SELECT piece_type, file, rank FROM chess_pieces WHERE client_id = ? AND status = 'active'",
+        (client_id,),
+    ).fetchone()
+    if existing:
+        conn.close()
+        raise ValueError(
+            f"This client is already on the board as a {_chess_piece_label(existing['piece_type'])} "
+            f"on {_chess_square(existing['file'], existing['rank'])}."
+        )
+    # Placing a piece straight onto rank 7 means the deal is already under
+    # contract -- it starts life as a queen.
+    final_type = "queen" if rank >= CHESS_QUEEN_RANK else piece_type
+    now = _now().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO chess_pieces (client_id, piece_type, original_type, file, rank, status, created_at, promoted_at) "
+        "VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
+        (client_id, final_type, piece_type, file_idx, rank, now, now if final_type == "queen" else None),
+    )
+    piece_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    sq = _chess_square(file_idx, rank)
+    if final_type == "queen":
+        _chess_note(client_id, "queen", f"Placed on the board as a Queen on {sq} (Under Contract).", note)
+    else:
+        _chess_note(client_id, piece_type, f"Promoted from pawn to {_chess_piece_label(piece_type)} on {sq}.", note)
+    return get_chess_piece(piece_id)
+
+
+def _active_chess_piece(conn, piece_id):
+    row = conn.execute("SELECT * FROM chess_pieces WHERE id = ?", (piece_id,)).fetchone()
+    if not row:
+        return None
+    if row["status"] != "active":
+        raise ValueError("That piece has already been captured.")
+    return row
+
+
+def advance_chess_piece(piece_id, note="") -> dict:
+    conn = get_conn()
+    row = _active_chess_piece(conn, piece_id)
+    if not row:
+        conn.close()
+        return None
+    if row["piece_type"] == "queen":
+        conn.close()
+        raise ValueError("This piece is already a Queen (Under Contract) — capture it once the deal closes.")
+    new_rank = min(row["rank"] + 1, CHESS_QUEEN_RANK)
+    promoted = new_rank >= CHESS_QUEEN_RANK
+    now = _now().isoformat(timespec="seconds")
+    conn.execute(
+        "UPDATE chess_pieces SET rank = ?, piece_type = ?, promoted_at = ? WHERE id = ?",
+        (new_rank, "queen" if promoted else row["piece_type"], now if promoted else None, piece_id),
+    )
+    conn.commit()
+    conn.close()
+    sq = _chess_square(row["file"], new_rank)
+    label = _chess_piece_label(row["piece_type"])
+    if promoted:
+        _chess_note(row["client_id"], "queen", f"{label} advanced to {sq} and became a Queen (Under Contract).", note)
+    else:
+        _chess_note(row["client_id"], row["piece_type"], f"{label} advanced to {sq}.", note)
+    return get_chess_piece(piece_id)
+
+
+def promote_chess_piece(piece_id, note="") -> dict:
+    conn = get_conn()
+    row = _active_chess_piece(conn, piece_id)
+    if not row:
+        conn.close()
+        return None
+    if row["piece_type"] == "queen":
+        conn.close()
+        return get_chess_piece(piece_id)
+    now = _now().isoformat(timespec="seconds")
+    conn.execute("UPDATE chess_pieces SET piece_type = 'queen', promoted_at = ? WHERE id = ?", (now, piece_id))
+    conn.commit()
+    conn.close()
+    _chess_note(
+        row["client_id"], "queen",
+        f"{_chess_piece_label(row['piece_type'])} promoted to Queen on {_chess_square(row['file'], row['rank'])} (Under Contract).",
+        note,
+    )
+    return get_chess_piece(piece_id)
+
+
+def capture_chess_piece(piece_id, note="") -> dict:
+    conn = get_conn()
+    row = _active_chess_piece(conn, piece_id)
+    if not row:
+        conn.close()
+        return None
+    now = _now().isoformat(timespec="seconds")
+    conn.execute("UPDATE chess_pieces SET status = 'captured', captured_at = ? WHERE id = ?", (now, piece_id))
+    conn.commit()
+    conn.close()
+    _chess_note(row["client_id"], row["piece_type"],
+                f"Closed — {_chess_piece_label(row['piece_type'])} captured off the board. 🏁", note)
+    return get_chess_piece(piece_id)
+
+
+def restore_chess_piece(piece_id) -> dict:
+    """Undo a capture (clicked by mistake / the deal fell through)."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM chess_pieces WHERE id = ?", (piece_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    if row["status"] == "active":
+        conn.close()
+        return get_chess_piece(piece_id)
+    other = conn.execute(
+        "SELECT id FROM chess_pieces WHERE client_id = ? AND status = 'active'", (row["client_id"],)
+    ).fetchone()
+    if other:
+        conn.close()
+        raise ValueError("This client already has another piece on the board.")
+    conn.execute("UPDATE chess_pieces SET status = 'active', captured_at = NULL WHERE id = ?", (piece_id,))
+    conn.commit()
+    conn.close()
+    _chess_note(row["client_id"], row["piece_type"],
+                f"{_chess_piece_label(row['piece_type'])} returned to the board on {_chess_square(row['file'], row['rank'])}.")
+    return get_chess_piece(piece_id)
+
+
+def remove_chess_piece(piece_id, note="") -> bool:
+    """Send a piece back to the pawn pool (lead went cold). The row is
+    deleted -- the client's notes keep the history."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM chess_pieces WHERE id = ?", (piece_id,)).fetchone()
+    if not row:
+        conn.close()
+        return False
+    conn.execute("DELETE FROM chess_pieces WHERE id = ?", (piece_id,))
+    conn.commit()
+    conn.close()
+    _chess_note(row["client_id"], "pawn",
+                f"{_chess_piece_label(row['piece_type'])} on {_chess_square(row['file'], row['rank'])} sent back to the pawns.", note)
+    return True

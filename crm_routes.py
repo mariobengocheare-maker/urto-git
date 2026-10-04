@@ -1057,3 +1057,71 @@ def commission_download_file(entry_id):
         as_attachment=bool(request.args.get("download")),
         download_name=entry.get("file_original_name") or "attachment",
     )
+
+
+# --- Transactions-tab Chessboard (build order #175) ---
+
+@crm_bp.route("/api/crm/chess", methods=["GET"])
+def crm_chessboard():
+    return jsonify(crm.get_chessboard())
+
+
+@crm_bp.route("/api/crm/chess/pieces", methods=["POST"])
+def crm_chess_create():
+    data = request.get_json(force=True) or {}
+    try:
+        piece = crm.create_chess_piece(
+            data.get("client_id"), data.get("piece_type"), data.get("file"), data.get("rank"), data.get("note", "")
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(piece)
+
+
+def _chess_action(fn, piece_id, *args):
+    try:
+        piece = fn(piece_id, *args)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not piece:
+        abort(404)
+    return jsonify(piece)
+
+
+@crm_bp.route("/api/crm/chess/pieces/<int:piece_id>", methods=["GET"])
+def crm_chess_get(piece_id):
+    piece = crm.get_chess_piece(piece_id)
+    if not piece:
+        abort(404)
+    return jsonify(piece)
+
+
+@crm_bp.route("/api/crm/chess/pieces/<int:piece_id>/advance", methods=["POST"])
+def crm_chess_advance(piece_id):
+    data = request.get_json(silent=True) or {}
+    return _chess_action(crm.advance_chess_piece, piece_id, data.get("note", ""))
+
+
+@crm_bp.route("/api/crm/chess/pieces/<int:piece_id>/promote", methods=["POST"])
+def crm_chess_promote(piece_id):
+    data = request.get_json(silent=True) or {}
+    return _chess_action(crm.promote_chess_piece, piece_id, data.get("note", ""))
+
+
+@crm_bp.route("/api/crm/chess/pieces/<int:piece_id>/capture", methods=["POST"])
+def crm_chess_capture(piece_id):
+    data = request.get_json(silent=True) or {}
+    return _chess_action(crm.capture_chess_piece, piece_id, data.get("note", ""))
+
+
+@crm_bp.route("/api/crm/chess/pieces/<int:piece_id>/restore", methods=["POST"])
+def crm_chess_restore(piece_id):
+    return _chess_action(crm.restore_chess_piece, piece_id)
+
+
+@crm_bp.route("/api/crm/chess/pieces/<int:piece_id>", methods=["DELETE"])
+def crm_chess_remove(piece_id):
+    data = request.get_json(silent=True) or {}
+    if not crm.remove_chess_piece(piece_id, data.get("note", "")):
+        abort(404)
+    return jsonify({"ok": True})
