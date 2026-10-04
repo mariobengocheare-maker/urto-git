@@ -262,7 +262,7 @@ def crm_map_data():
 
 @crm_bp.route("/api/crm/map/geocode_batch", methods=["POST"])
 def crm_map_geocode_batch():
-    return jsonify(crm.geocode_pending_clients())
+    return jsonify(crm.geocode_pending())
 
 
 @crm_bp.route("/api/crm/clients/<int:client_id>/map_location", methods=["PUT"])
@@ -275,6 +275,18 @@ def crm_place_client(client_id):
     if not client:
         abort(404)
     return jsonify(client)
+
+
+@crm_bp.route("/api/crm/map/place", methods=["PUT"])
+def crm_map_place():
+    data = request.get_json(force=True) or {}
+    try:
+        ok = crm.place_on_map_manually(data.get("kind"), int(data.get("id") or 0), data.get("lat"), data.get("lng"))
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": str(e)}), 400
+    if not ok:
+        abort(404)
+    return jsonify({"ok": True})
 
 
 @crm_bp.route("/api/crm/map/community/<int:list_id>")

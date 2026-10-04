@@ -394,6 +394,28 @@ def _event_reminder_watcher():
 threading.Thread(target=_event_reminder_watcher, daemon=True).start()
 
 
+def _map_geocode_watcher():
+    """Keeps placing CRM clients/closed deals on the Map in the background
+    (build order #174), so pins fill in even with the Map tab closed instead
+    of only while Mario has it open. Paced by map_geo's own per-provider
+    throttles; a 'slow down' from every provider just means sleeping a bit."""
+    time.sleep(20)
+    while True:
+        delay = 60
+        try:
+            r = crm.geocode_pending(time_budget=40, max_items=60)
+            if r.get("rate_limited"):
+                delay = max(30, min(int(r.get("retry_after") or 60), 300))
+            elif r.get("remaining"):
+                delay = 5
+        except Exception as e:
+            print(f"[map] background geocode pass failed: {e}")
+        time.sleep(delay)
+
+
+threading.Thread(target=_map_geocode_watcher, daemon=True).start()
+
+
 _last_alert_date = {"date": None}
 
 

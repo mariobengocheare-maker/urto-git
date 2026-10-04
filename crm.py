@@ -1623,6 +1623,17 @@ def init_db():
         # alongside it. Nullable: existing entries predate this field and
         # must render without a broken "Sold for" sub-line, not a fake $0.
         conn.execute("ALTER TABLE commission_entries ADD COLUMN sale_price REAL")
+    # Map tab closed-deal pins (build order #174): a closed transaction or a
+    # backfilled commission entry is placed on the map from its title (which
+    # is the property address throughout this app) -- same geo columns and
+    # same "geo_address != address means look it up" rule as clients.
+    for table in ("transactions", "commission_entries"):
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "lat" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN lat REAL")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN lng REAL")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN geo_address TEXT")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN geo_status TEXT")
     conn.commit()
     _seed_document_types(conn)
     conn.close()
@@ -4374,85 +4385,160 @@ def _point_in_polygon(lat, lng, poly) -> bool:
     return inside
 
 
-_NEEDS_GEOCODE_SQL = (
-    "address IS NOT NULL AND TRIM(address) != '' "
-    "AND (geo_address IS NULL OR geo_address != address)"
-)
+# Everything the map places on its own. (table, address column, row filter,
+# kind label). Closed transactions and BACKFILLED commission entries (ones
+# not tied to a transaction -- a tied one is already represented by its
+# transaction) become "closed deal" pins; the title is the address in both.
+_GEO_TARGETS = [
+    ("clients", "address", "1=1", "client"),
+    ("transactions", "title", "status = 'closed'", "transaction"),
+    ("commission_entries", "title", "transaction_id IS NULL", "commission"),
+]
+_GEO_TABLE_BY_KIND = {kind: (table, col) for table, col, _, kind in _GEO_TARGETS}
 
 
-def geocode_pending_clients(time_budget: float = 8.0, max_items: int = 40) -> dict:
-    """Places a small batch of not-yet-located clients on the map, then
-    returns so the browser can show progress and call again -- one request
-    per batch keeps every call well inside a web request's lifetime even
-    with Nominatim's ~1/sec pacing. Only ever touches lat/lng/geo_* columns,
-    never anything Mario typed."""
+def _needs_geo_sql(col, where):
+    return (f"{col} IS NOT NULL AND TRIM({col}) != '' AND ({where}) "
+            f"AND (geo_address IS NULL OR geo_address != {col})")
+
+
+def _pending_geocode_count(conn) -> int:
+    return sum(conn.execute(f"SELECT COUNT(*) FROM {t} WHERE {_needs_geo_sql(c, w)}").fetchone()[0]
+               for t, c, w, _ in _GEO_TARGETS)
+
+
+def geocode_pending(time_budget: float = 8.0, max_items: int = 40) -> dict:
+    """Places a small batch of not-yet-located clients/closed deals on the
+    map, then returns -- the hosted server's background watcher calls this
+    on a loop (so pins keep appearing with the map closed), and the Map tab
+    calls it too while open for live progress. Only ever touches the
+    lat/lng/geo_* columns, never anything Mario typed.
+
+    Outcomes per address: placed ('ok'); a genuine no-match ('failed', shown
+    for hand-placement); explicitly another state ('out_of_market', never
+    looked up or shown); or deferred untouched when a provider hiccups.
+    Every provider asking to slow down ends the batch with rate_limited."""
     if not _geocode_lock.acquire(blocking=False):
         return {"busy": True, "processed": 0, "remaining": None}
-    processed = failed = 0
+    processed = failed = deferred = 0
     error = None
+    rate_limited = False
+    retry_after = None
     try:
         start = time.time()
         conn = get_conn()
-        rows = conn.execute(
-            f"SELECT id, address FROM clients WHERE {_NEEDS_GEOCODE_SQL} ORDER BY id LIMIT ?",
-            (max_items,),
-        ).fetchall()
-        for row in rows:
-            if processed and time.time() - start > time_budget:
+        todo = []
+        for table, col, where, _ in _GEO_TARGETS:
+            todo += [(table, r["id"], r["addr"]) for r in conn.execute(
+                f"SELECT id, {col} AS addr FROM {table} WHERE {_needs_geo_sql(col, where)} ORDER BY id LIMIT ?",
+                (max_items,)).fetchall()]
+        for table, row_id, addr in todo[:max_items]:
+            if (processed or deferred) and time.time() - start > time_budget:
                 break
+            if map_geo.names_other_state(addr):
+                conn.execute(f"UPDATE {table} SET lat=NULL, lng=NULL, geo_address=?, geo_status='out_of_market' WHERE id=?",
+                             (addr, row_id))
+                conn.commit()
+                processed += 1
+                continue
             try:
-                hit = map_geo.geocode_address(row["address"])
-            except RuntimeError as e:
-                # Geocoder itself is down/unreachable -- stop, and DON'T mark
-                # this address failed (it may be perfectly good).
-                error = str(e)
+                hit = map_geo.geocode_address(addr)
+            except map_geo.RateLimited as e:
+                rate_limited, retry_after, error = True, e.retry_after, str(e)
                 break
+            except RuntimeError as e:
+                deferred += 1
+                error = str(e)
+                continue
             if hit:
-                conn.execute(
-                    "UPDATE clients SET lat=?, lng=?, geo_address=?, geo_status='ok' WHERE id=?",
-                    (hit[0], hit[1], row["address"], row["id"]),
-                )
+                conn.execute(f"UPDATE {table} SET lat=?, lng=?, geo_address=?, geo_status='ok' WHERE id=?",
+                             (hit[0], hit[1], addr, row_id))
             else:
-                conn.execute(
-                    "UPDATE clients SET lat=NULL, lng=NULL, geo_address=?, geo_status='failed' WHERE id=?",
-                    (row["address"], row["id"]),
-                )
+                conn.execute(f"UPDATE {table} SET lat=NULL, lng=NULL, geo_address=?, geo_status='failed' WHERE id=?",
+                             (addr, row_id))
                 failed += 1
             conn.commit()
             processed += 1
-        remaining = conn.execute(f"SELECT COUNT(*) FROM clients WHERE {_NEEDS_GEOCODE_SQL}").fetchone()[0]
+        remaining = _pending_geocode_count(conn)
         conn.close()
     finally:
         _geocode_lock.release()
     if processed:
-        on_data_changed("clients placed on map")
-    return {"processed": processed, "failed": failed, "remaining": remaining, "error": error,
+        on_data_changed("map pins placed")
+    return {"processed": processed, "failed": failed, "deferred": deferred, "remaining": remaining,
+            "rate_limited": rate_limited, "retry_after": retry_after,
+            "error": error if (rate_limited or (deferred and not processed)) else None,
             "provider": map_geo.provider_name()}
 
 
-def place_client_manually(client_id, lat, lng) -> dict:
+# Kept so anything still calling the build-order-#173 name keeps working.
+geocode_pending_clients = geocode_pending
+
+
+def place_on_map_manually(kind, row_id, lat, lng) -> bool:
+    if kind not in _GEO_TABLE_BY_KIND:
+        raise ValueError("Unknown pin type.")
     lat, lng = float(lat), float(lng)
     if not map_geo.in_market(lat, lng):
         raise ValueError("That spot is outside Miami-Dade / Broward / the Keys.")
+    table, col = _GEO_TABLE_BY_KIND[kind]
     conn = get_conn()
-    row = conn.execute("SELECT address FROM clients WHERE id = ?", (client_id,)).fetchone()
-    if not row:
-        conn.close()
-        return None
-    conn.execute(
-        "UPDATE clients SET lat=?, lng=?, geo_address=?, geo_status='manual' WHERE id=?",
-        (lat, lng, row["address"], client_id),
+    cur = conn.execute(
+        f"UPDATE {table} SET lat=?, lng=?, geo_address={col}, geo_status='manual' WHERE id=?",
+        (lat, lng, row_id),
     )
     conn.commit()
     conn.close()
-    on_data_changed("client placed on map by hand")
+    if not cur.rowcount:
+        return False
+    on_data_changed("pin placed by hand")
+    return True
+
+
+def place_client_manually(client_id, lat, lng) -> dict:
+    if not place_on_map_manually("client", client_id, lat, lng):
+        return None
     return get_client(client_id)
+
+
+def _map_closings(conn) -> tuple:
+    """(located closed deals, failed ones awaiting hand-placement)."""
+    located, unplaced = [], []
+    txns = conn.execute("SELECT * FROM transactions WHERE status = 'closed'").fetchall()
+    for t in txns:
+        ce = conn.execute(
+            "SELECT * FROM commission_entries WHERE transaction_id = ? ORDER BY id LIMIT 1", (t["id"],)
+        ).fetchone()
+        item = {
+            "kind": "transaction", "id": t["id"], "title": t["title"],
+            "closed_date": t["closing_date"] or (ce["closed_date"] if ce else None),
+            "sale_price": t["sale_price"] if t["sale_price"] is not None else (ce["sale_price"] if ce else None),
+            "commission": ce["amount"] if ce else None,
+            "deal_type": ce["deal_type"] if ce else ("rental" if t["transaction_type"] in ("rental", "rental_listing") else "sale"),
+            "represented_as": t["represented_as"],
+        }
+        if t["lat"] is not None and t["lng"] is not None:
+            located.append({**item, "lat": t["lat"], "lng": t["lng"]})
+        elif t["geo_status"] == "failed":
+            unplaced.append({"kind": "transaction", "id": t["id"], "name": t["title"], "address": t["title"]})
+    for c in conn.execute("SELECT * FROM commission_entries WHERE transaction_id IS NULL").fetchall():
+        item = {
+            "kind": "commission", "id": c["id"], "title": c["title"], "closed_date": c["closed_date"],
+            "sale_price": c["sale_price"], "commission": c["amount"],
+            "deal_type": c["deal_type"], "represented_as": c["represented_as"],
+        }
+        if c["lat"] is not None and c["lng"] is not None:
+            located.append({**item, "lat": c["lat"], "lng": c["lng"]})
+        elif c["geo_status"] == "failed":
+            unplaced.append({"kind": "commission", "id": c["id"], "name": c["title"], "address": c["title"]})
+    located.sort(key=lambda d: d.get("closed_date") or "", reverse=True)
+    return located, unplaced
 
 
 def get_map_data() -> dict:
     """Everything the map draws in one request: located clients (colored by
-    follow-up status), every Contact List (with its traced outline, if any),
-    and what still needs placing."""
+    follow-up status), closed deals, every Contact List (with its traced
+    outline, if any), and what still needs placing."""
     clients = list_clients()  # also self-heals stale schedules, like everywhere else
     conn = get_conn()
     list_rows = [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY name COLLATE NOCASE").fetchall()]
@@ -4464,7 +4550,8 @@ def get_map_data() -> dict:
         member_counts[lid] = member_counts.get(lid, 0) + 1
     unit_counts = {r["list_id"]: r["n"] for r in conn.execute(
         "SELECT list_id, COUNT(*) AS n FROM cre_units GROUP BY list_id").fetchall()}
-    pending = conn.execute(f"SELECT COUNT(*) FROM clients WHERE {_NEEDS_GEOCODE_SQL}").fetchone()[0]
+    pending = _pending_geocode_count(conn)
+    closings, closings_unplaced = _map_closings(conn)
     conn.close()
 
     lists = []
@@ -4497,9 +4584,10 @@ def get_map_data() -> dict:
                 "list_ids": sorted(list_ids),
             })
         elif c.get("geo_status") == "failed" and (c.get("address") or "").strip():
-            unplaced.append({"id": c["id"], "name": c["name"], "address": c["address"]})
+            unplaced.append({"kind": "client", "id": c["id"], "name": c["name"], "address": c["address"]})
     return {
-        "clients": located, "unplaced": unplaced, "lists": lists,
+        "clients": located, "closings": closings,
+        "unplaced": unplaced + closings_unplaced, "lists": lists,
         "pending_geocode": pending, "geocoder": map_geo.provider_name(),
         "asset_classes": ASSET_CLASSES,
     }
@@ -4734,6 +4822,10 @@ def get_map_community(list_id) -> dict:
                           "client_id": e["client_id"],
                           "client_name": clients[e["client_id"]]["name"] if e["client_id"] in clients else None,
                           "title": e["title"], "status": None})
+    closings_here = []
+    if boundary:
+        located_closings, _ = _map_closings(conn)
+        closings_here = [d for d in located_closings if _point_in_polygon(d["lat"], d["lng"], boundary)]
     conn.close()
     followups.sort(key=lambda f: (f["date"], f["time"] or ""))
 
@@ -4747,6 +4839,7 @@ def get_map_community(list_id) -> dict:
         "clients": sorted(clients.values(), key=lambda c: c["name"].lower()),
         "member_count": len(member_ids),
         "followups": followups,
+        "closings": closings_here,
         "units": units,
         "cre_summary": cre_summary(units),
         "asset_classes": ASSET_CLASSES,
