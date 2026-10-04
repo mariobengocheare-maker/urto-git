@@ -253,6 +253,92 @@ def crm_complete_list_round(list_id):
     return jsonify(contact_list)
 
 
+# ---- Map tab (build order #173) ----
+
+@crm_bp.route("/api/crm/map/data")
+def crm_map_data():
+    return jsonify(crm.get_map_data())
+
+
+@crm_bp.route("/api/crm/map/geocode_batch", methods=["POST"])
+def crm_map_geocode_batch():
+    return jsonify(crm.geocode_pending_clients())
+
+
+@crm_bp.route("/api/crm/clients/<int:client_id>/map_location", methods=["PUT"])
+def crm_place_client(client_id):
+    data = request.get_json(force=True) or {}
+    try:
+        client = crm.place_client_manually(client_id, data.get("lat"), data.get("lng"))
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": str(e)}), 400
+    if not client:
+        abort(404)
+    return jsonify(client)
+
+
+@crm_bp.route("/api/crm/map/community/<int:list_id>")
+def crm_map_community(list_id):
+    data = crm.get_map_community(list_id)
+    if not data:
+        abort(404)
+    return jsonify(data)
+
+
+@crm_bp.route("/api/crm/contact_lists/<int:list_id>/boundary", methods=["PUT"])
+def crm_set_list_boundary(list_id):
+    data = request.get_json(force=True) or {}
+    try:
+        contact_list = crm.set_contact_list_boundary(list_id, data.get("boundary"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not contact_list:
+        abort(404)
+    return jsonify(contact_list)
+
+
+@crm_bp.route("/api/crm/contact_lists/<int:list_id>/commercial", methods=["PUT"])
+def crm_set_list_commercial(list_id):
+    data = request.get_json(force=True) or {}
+    contact_list = crm.set_contact_list_commercial(list_id, bool(data.get("is_commercial")), data.get("asset_class"))
+    if not contact_list:
+        abort(404)
+    return jsonify(contact_list)
+
+
+@crm_bp.route("/api/crm/contact_lists/<int:list_id>/cre_units", methods=["GET"])
+def crm_list_cre_units(list_id):
+    return jsonify(crm.list_cre_units(list_id))
+
+
+@crm_bp.route("/api/crm/contact_lists/<int:list_id>/cre_units", methods=["POST"])
+def crm_create_cre_unit(list_id):
+    try:
+        unit = crm.create_cre_unit(list_id, request.get_json(force=True) or {})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not unit:
+        abort(404)
+    return jsonify(unit)
+
+
+@crm_bp.route("/api/crm/cre_units/<int:unit_id>", methods=["PUT"])
+def crm_update_cre_unit(unit_id):
+    try:
+        unit = crm.update_cre_unit(unit_id, request.get_json(force=True) or {})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not unit:
+        abort(404)
+    return jsonify(unit)
+
+
+@crm_bp.route("/api/crm/cre_units/<int:unit_id>", methods=["DELETE"])
+def crm_delete_cre_unit(unit_id):
+    crm.delete_cre_unit(unit_id)
+    return jsonify({"ok": True})
+
+
 @crm_bp.route("/api/crm/contact_lists/import_vcard", methods=["POST"])
 def crm_import_vcard():
     if "file" not in request.files:

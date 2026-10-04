@@ -1240,6 +1240,54 @@
     .modal-head h2 { font-size: 1rem; }
   }
 
+
+  /* ===================== Map tab (build order #173) ===================== */
+  .map-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .map-layer-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .map-layer-toggle button { background: transparent; color: var(--text-secondary); border: none; border-radius: 0; padding: 7px 14px; font-size: .85rem; box-shadow: none; }
+  .map-layer-toggle button.active { background: rgba(201,162,39,.18); color: var(--gold-bright); }
+  #mapGeocodeStatus { font-size: .85rem; color: var(--text-secondary); }
+  /* isolation: Leaflet's own panes use z-index 400-1000, which would
+     otherwise paint OVER every .modal-overlay (z-index 100) in the app. */
+  .map-wrap { position: relative; isolation: isolate; }
+  #urtoMap { height: 68vh; min-height: 420px; border-radius: 12px; border: 1px solid var(--border); background: #0b1322; }
+  #urtoMap.map-drawing, #urtoMap.map-drawing .leaflet-interactive { cursor: crosshair !important; }
+  .map-modebar {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1001;
+    background: rgba(12,18,32,.94); border: 1px solid var(--gold); border-radius: 10px;
+    padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    font-size: .88rem; max-width: calc(100% - 20px); box-shadow: 0 6px 24px rgba(0,0,0,.45);
+  }
+  .map-panel {
+    position: absolute; top: 10px; right: 10px; z-index: 1001; width: 370px;
+    max-height: calc(100% - 20px); overflow-y: auto;
+    background: rgba(15,22,38,.97); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+  .map-panel h2 { margin: 0 32px 4px 0; font-size: 1.15rem; }
+  .map-panel h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); margin: 14px 0 6px; }
+  .map-panel-close { position: absolute; top: 8px; right: 10px; background: transparent; border: none; color: var(--text-secondary); font-size: 1.4rem; padding: 2px 6px; box-shadow: none; }
+  .map-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid rgba(38,51,73,.6); font-size: .88rem; }
+  .map-row:last-child { border-bottom: none; }
+  .map-row.clickable { cursor: pointer; }
+  .map-row.clickable:hover { background: rgba(201,162,39,.06); }
+  .map-row .dim, .map-panel .dim { color: var(--text-secondary); }
+  .map-chip { display: inline-block; font-size: .75rem; padding: 2px 8px; border-radius: 999px; background: rgba(79,209,232,.14); color: #7fe0f0; margin: 2px 4px 2px 0; cursor: pointer; }
+  .map-chip.commercial { background: rgba(180,140,255,.16); color: #c9adff; }
+  .cre-summary { font-size: 1rem; font-weight: 700; color: var(--gold-bright); margin: 4px 0 8px; line-height: 1.35; }
+  .map-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: .85rem; color: var(--text-secondary); }
+  .map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .map-dot { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #fff; display: inline-block; }
+  .map-swatch { width: 16px; height: 12px; border-radius: 3px; display: inline-block; border: 2px solid; }
+  .map-below { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  .map-below .card h2 { margin-top: 0; }
+  .leaflet-container { font-family: inherit; }
+  .leaflet-tooltip.map-tip { background: rgba(12,18,32,.95); color: var(--text); border: 1px solid var(--border); box-shadow: none; }
+  @media (max-width: 760px) {
+    #urtoMap { height: 58vh; min-height: 320px; }
+    .map-panel { position: relative; top: auto; right: auto; width: auto; max-height: none; margin-top: 12px; }
+    .map-below { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body class="{{ 'space-mode' if not hosted else '' }}">
@@ -1271,6 +1319,7 @@
   {% endif %}
   <button class="tab-btn {{ 'active' if hosted else '' }}" id="tabCrmBtn">URTO CRM</button>
   <button class="tab-btn" id="tabDialerBtn">URTO Dialer</button>
+  <button class="tab-btn" id="tabMapBtn">Map</button>
   <button class="tab-btn" id="tabTxnBtn">Transactions</button>
   <button class="tab-btn" id="tabShowingBtn">ShowingDay</button>
   <button class="tab-btn" id="tabEosBtn">EOS &amp; Rocks</button>
@@ -1785,6 +1834,61 @@
   </div>
 </section>
 
+<section id="mapSection" style="display:none">
+  <h1>Market Map</h1>
+  <p class="sub">Your CRM clients and the communities you've outlined, across Miami-Dade, Broward and the Keys. Click a house or a community for its details.</p>
+
+  <div class="map-toolbar">
+    <div class="map-layer-toggle">
+      <button type="button" id="mapLayerStreetBtn" class="active">Street</button>
+      <button type="button" id="mapLayerSatBtn">Satellite</button>
+    </div>
+    <span id="mapGeocodeStatus"></span>
+  </div>
+
+  <div class="map-wrap">
+    <div id="urtoMap"></div>
+    <div class="map-modebar" id="mapDrawBar" style="display:none">
+      <span id="mapDrawText"></span>
+      <button type="button" class="ghost small" id="mapDrawUndoBtn">Undo point</button>
+      <button type="button" class="small" id="mapDrawFinishBtn">Finish</button>
+      <button type="button" class="ghost small" id="mapDrawCancelBtn">Cancel</button>
+    </div>
+    <div class="map-modebar" id="mapPlaceBar" style="display:none">
+      <span id="mapPlaceText"></span>
+      <button type="button" class="ghost small" id="mapPlaceCancelBtn">Cancel</button>
+    </div>
+    <div class="map-panel" id="mapPanel" style="display:none">
+      <button type="button" class="map-panel-close" id="mapPanelCloseBtn" title="Close">&times;</button>
+      <div id="mapPanelBody"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div class="map-legend">
+      <span><i class="map-dot" style="background:#ff6b6b"></i> Overdue follow-up</span>
+      <span><i class="map-dot" style="background:#e0b93c"></i> Due today</span>
+      <span><i class="map-dot" style="background:#8bacdb"></i> Upcoming</span>
+      <span><i class="map-dot" style="background:#6b7486"></i> No schedule</span>
+      <span><i class="map-swatch" style="border-color:#4fd1e8; background:rgba(79,209,232,.2)"></i> Community</span>
+      <span><i class="map-swatch" style="border-color:#b48cff; background:rgba(180,140,255,.2)"></i> Commercial asset</span>
+    </div>
+  </div>
+
+  <div class="map-below">
+    <div class="card">
+      <h2>Communities</h2>
+      <div class="sub" style="margin-bottom:8px">Your Contact Lists. Trace a list's outline once and anything inside it counts as part of that community.</div>
+      <div id="mapCommunityList"></div>
+    </div>
+    <div class="card" id="mapUnplacedCard" style="display:none">
+      <h2>Couldn't place automatically</h2>
+      <div class="sub" style="margin-bottom:8px">These addresses weren't found in Miami-Dade / Broward / the Keys. Click 📍 Place, then click the spot on the map.</div>
+      <div id="mapUnplacedList"></div>
+    </div>
+  </div>
+</section>
+
 <section id="eosSection" style="display:none">
   <h1>EOS &amp; Rocks</h1>
   <p class="sub">Your 30/60/90-day priorities, plus a step-by-step waterfall to-do list.</p>
@@ -2170,6 +2274,71 @@
 </div>
 
 <!-- Add / Edit calendar event modal -->
+<div class="modal-overlay" id="creUnitOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="creUnitTitle">Add Lease Unit</h2>
+      <button class="modal-close" id="creUnitCloseBtn">&times;</button>
+    </div>
+    <div class="error-box" id="creUnitError"></div>
+    <form id="creUnitForm">
+      <input type="hidden" id="cuId">
+      <div class="row" style="margin-top:0; gap:12px; flex-wrap:wrap">
+        <div class="form-group" style="flex:1; min-width:140px">
+          <label for="cuLabel">Unit *</label>
+          <input type="text" id="cuLabel" required placeholder="e.g. Unit 3 / Suite 101">
+        </div>
+        <div class="form-group" style="width:130px">
+          <label for="cuSqft">Sq ft</label>
+          <input type="text" id="cuSqft" inputmode="numeric" placeholder="1,000">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="cuTenant">Current tenant</label>
+        <input type="text" id="cuTenant" placeholder="Leave blank if the space is vacant">
+      </div>
+      <div class="row" style="margin-top:0; gap:12px; flex-wrap:wrap">
+        <div class="form-group" style="flex:1; min-width:140px">
+          <label for="cuLeaseStart">Lease start</label>
+          <input type="date" id="cuLeaseStart">
+        </div>
+        <div class="form-group" style="flex:1; min-width:140px">
+          <label for="cuLeaseEnd">Lease ends (comes back on the market)</label>
+          <input type="date" id="cuLeaseEnd">
+        </div>
+      </div>
+      <div class="row" style="margin-top:0; gap:12px; flex-wrap:wrap">
+        <div class="form-group" style="flex:1; min-width:130px">
+          <label for="cuCurrentRent">Current rent ($/sq ft/yr)</label>
+          <input type="text" id="cuCurrentRent" inputmode="decimal" placeholder="optional">
+        </div>
+        <div class="form-group" style="flex:1; min-width:130px">
+          <label for="cuAskingRent">Asking rent when available ($/sq ft/yr)</label>
+          <input type="text" id="cuAskingRent" inputmode="decimal" placeholder="e.g. 32">
+        </div>
+        <div class="form-group" style="width:150px">
+          <label for="cuRentType">Rent type</label>
+          <select id="cuRentType">
+            <option value="">—</option>
+            <option value="NNN">NNN</option>
+            <option value="Modified Gross">Modified Gross</option>
+            <option value="Gross">Gross</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="cuNotes">Notes</label>
+        <textarea id="cuNotes" rows="2" placeholder="e.g. end cap, drive-thru, CAM ~$8/sq ft"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="danger small" id="cuDeleteBtn" style="display:none; background:var(--danger-fg); margin-right:auto">Delete</button>
+        <button type="button" class="ghost" id="creUnitCancelBtn">Cancel</button>
+        <button type="submit" id="cuSubmitBtn">Save Unit</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="modal-overlay" id="eventFormOverlay">
   <div class="modal">
     <div class="modal-head">
@@ -3416,6 +3585,7 @@ const tabCrmBtn = document.getElementById('tabCrmBtn');
 const tabDialerBtn = document.getElementById('tabDialerBtn');
 const tabTxnBtn = document.getElementById('tabTxnBtn');
 const tabShowingBtn = document.getElementById('tabShowingBtn');
+const tabMapBtn = document.getElementById('tabMapBtn');
 const tabEosBtn = document.getElementById('tabEosBtn');
 const tabCommissionBtn = document.getElementById('tabCommissionBtn');
 const homeSection = HOSTED ? null : document.getElementById('homeSection');
@@ -3424,12 +3594,14 @@ const crmSection = document.getElementById('crmSection');
 const dialerSection = document.getElementById('dialerSection');
 const txnSection = document.getElementById('txnSection');
 const showingSection = document.getElementById('showingSection');
+const mapSection = document.getElementById('mapSection');
 const eosSection = document.getElementById('eosSection');
 const commissionSection = document.getElementById('commissionSection');
 
 const TOP_TABS = HOSTED ? [
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
+  { key: 'map', btn: tabMapBtn, section: mapSection, onShow: () => { initMapTab(); } },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
   { key: 'showing', btn: tabShowingBtn, section: showingSection, onShow: () => { initShowingDayTab(); } },
   { key: 'eos', btn: tabEosBtn, section: eosSection, onShow: () => { initEosTab(); } },
@@ -3439,6 +3611,7 @@ const TOP_TABS = HOSTED ? [
   { key: 'lookup', btn: document.getElementById('tabLookupBtn'), section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
+  { key: 'map', btn: tabMapBtn, section: mapSection, onShow: () => { initMapTab(); } },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
   { key: 'showing', btn: tabShowingBtn, section: showingSection, onShow: () => { initShowingDayTab(); } },
   { key: 'eos', btn: tabEosBtn, section: eosSection, onShow: () => { initEosTab(); } },
@@ -7873,6 +8046,604 @@ function buildShowingGoogleMapsUrl(day) {
 showingOpenMapsBtn.addEventListener('click', () => {
   const url = buildShowingGoogleMapsUrl(currentShowingDay);
   if (url) window.open(url, '_blank');
+});
+
+/* ===================== Market Map (build order #173) ===================== */
+// Vendored Leaflet (static/vendor/leaflet, from the npm tarball -- CDNs are
+// off-limits) is loaded lazily the first time the Map tab opens, so nobody
+// pays for it on every page load. Street tiles = OpenStreetMap; satellite =
+// Esri World Imagery + Esri's road/place-name overlays -- both work with no
+// account or key. If a tile provider ever starts refusing, MAP_TILES is the
+// one place to swap it.
+const MAP_TILES = {
+  street: [
+    { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      opts: { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors' } },
+  ],
+  satellite: [
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      opts: { maxZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' } },
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
+      opts: { maxZoom: 19 } },
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+      opts: { maxZoom: 19 } },
+  ],
+};
+const MAP_STATUS_COLORS = { overdue: '#ff6b6b', due_today: '#e0b93c', upcoming: '#8bacdb' };
+const MAP_NO_SCHEDULE_COLOR = '#6b7486';
+const MAP_COMMUNITY_COLOR = '#4fd1e8';
+const MAP_COMMERCIAL_COLOR = '#b48cff';
+const MAP_DRAW_COLOR = '#d4af37';
+
+const mapPanel = document.getElementById('mapPanel');
+const mapPanelBody = document.getElementById('mapPanelBody');
+const mapGeocodeStatus = document.getElementById('mapGeocodeStatus');
+let leafletLoading = null;
+let urtoMap = null, mapTileLayers = [], mapClientLayer = null, mapCommunityLayer = null;
+let mapData = null;
+let mapMode = null;          // null | 'draw' | 'place'
+let mapDraw = null;          // { listId, name, points, layer }
+let mapPlaceClient = null;
+let mapGeocodeRunning = false;
+let mapPanelListId = null;   // community currently shown in the panel
+let mapLayerChoice = 'street';
+try { mapLayerChoice = localStorage.getItem('urtoMapLayer') || 'street'; } catch (e) {}
+
+function ensureLeaflet() {
+  if (window.L) return Promise.resolve();
+  if (leafletLoading) return leafletLoading;
+  leafletLoading = new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = '/static/vendor/leaflet/leaflet.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src = '/static/vendor/leaflet/leaflet.js';
+    js.onload = () => resolve();
+    js.onerror = () => { leafletLoading = null; reject(new Error("Couldn't load the map library.")); };
+    document.head.appendChild(js);
+  });
+  return leafletLoading;
+}
+
+function setMapStatus(text) { mapGeocodeStatus.textContent = text || ''; }
+
+async function initMapTab() {
+  try {
+    await ensureLeaflet();
+  } catch (e) {
+    setMapStatus(e.message);
+    return;
+  }
+  if (!urtoMap) {
+    urtoMap = L.map('urtoMap', {
+      center: [25.76, -80.30], zoom: 10, minZoom: 8,
+      // Miami-Dade + Broward + the Keys, with a little slack to pan into.
+      maxBounds: [[23.9, -82.9], [27.0, -79.2]], maxBoundsViscosity: 0.8,
+      preferCanvas: true,
+    });
+    mapCommunityLayer = L.layerGroup().addTo(urtoMap);
+    mapClientLayer = L.layerGroup().addTo(urtoMap);
+    setMapLayer(mapLayerChoice === 'satellite' ? 'satellite' : 'street');
+    urtoMap.on('click', onMapClick);
+  }
+  // The section was display:none until a moment ago -- Leaflet needs to
+  // re-measure its container or tiles render in a corner.
+  setTimeout(() => urtoMap.invalidateSize(), 60);
+  await loadMapData();
+  runMapGeocodeLoop();
+}
+
+function setMapLayer(kind) {
+  mapLayerChoice = kind;
+  try { localStorage.setItem('urtoMapLayer', kind); } catch (e) {}
+  mapTileLayers.forEach(l => urtoMap.removeLayer(l));
+  mapTileLayers = MAP_TILES[kind].map(t => L.tileLayer(t.url, t.opts).addTo(urtoMap));
+  document.getElementById('mapLayerStreetBtn').classList.toggle('active', kind === 'street');
+  document.getElementById('mapLayerSatBtn').classList.toggle('active', kind === 'satellite');
+}
+document.getElementById('mapLayerStreetBtn').addEventListener('click', () => { if (urtoMap) setMapLayer('street'); });
+document.getElementById('mapLayerSatBtn').addEventListener('click', () => { if (urtoMap) setMapLayer('satellite'); });
+
+async function loadMapData() {
+  try {
+    const res = await fetch('/api/crm/map/data');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    mapData = await res.json();
+  } catch (e) {
+    setMapStatus("Couldn't load map data — " + e.message);
+    return;
+  }
+  renderMapData();
+}
+
+function renderMapData() {
+  if (!urtoMap || !mapData) return;
+  // Communities first, then clients -- with one shared canvas, later layers
+  // paint (and take clicks) on top, so a house inside an outline is still
+  // clickable on its own.
+  mapCommunityLayer.clearLayers();
+  mapClientLayer.clearLayers();
+  for (const l of mapData.lists) {
+    if (!l.boundary) continue;
+    if (mapMode === 'draw' && mapDraw && mapDraw.listId === l.id) continue;  // being redrawn
+    const color = l.is_commercial ? MAP_COMMERCIAL_COLOR : MAP_COMMUNITY_COLOR;
+    const poly = L.polygon(l.boundary, {
+      color, weight: 2, fillColor: color, fillOpacity: 0.16, bubblingMouseEvents: false,
+    });
+    poly.bindTooltip(escapeHtml(l.name), { sticky: true, className: 'map-tip' });
+    poly.on('click', (e) => { if (mapMode) return onMapClick(e); openCommunityPanel(l.id); });
+    poly.addTo(mapCommunityLayer);
+  }
+  for (const c of mapData.clients) {
+    const fill = MAP_STATUS_COLORS[c.followup_status] || MAP_NO_SCHEDULE_COLOR;
+    const m = L.circleMarker([c.lat, c.lng], {
+      radius: 7, color: '#ffffff', weight: 1.5, fillColor: fill, fillOpacity: 0.95, bubblingMouseEvents: false,
+    });
+    m.bindTooltip(escapeHtml(c.name), { className: 'map-tip' });
+    m.on('click', (e) => { if (mapMode) return onMapClick(e); showMapClientPanel(c); });
+    m.addTo(mapClientLayer);
+  }
+  renderMapCommunityList();
+  renderMapUnplaced();
+}
+
+async function runMapGeocodeLoop() {
+  if (mapGeocodeRunning || !mapData) return;
+  if (!mapData.pending_geocode) { setMapStatus(''); return; }
+  mapGeocodeRunning = true;
+  let remaining = mapData.pending_geocode;
+  let busyRetries = 0;
+  try {
+    while (remaining > 0) {
+      setMapStatus(`📍 Placing your clients on the map… ${remaining} to go`);
+      const res = await fetch('/api/crm/map/geocode_batch', { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const r = await res.json();
+      if (r.busy) {
+        // Another tab/device is already placing clients -- wait it out.
+        if (++busyRetries > 10) break;
+        await new Promise(ok => setTimeout(ok, 3000));
+        continue;
+      }
+      if (r.error) {
+        setMapStatus(`The address lookup service isn't reachable right now — ${r.remaining} client(s) not placed yet; they'll be retried next time you open the map.`);
+        return;
+      }
+      remaining = r.remaining;
+      if (r.processed) await loadMapData();
+      else break;
+    }
+    if (remaining === 0) setMapStatus('');
+  } catch (e) {
+    setMapStatus("Couldn't place clients on the map right now — " + e.message);
+  } finally {
+    mapGeocodeRunning = false;
+  }
+}
+
+function showMapPanel() {
+  mapPanel.style.display = 'block';
+  if (window.matchMedia('(max-width: 760px)').matches) {
+    mapPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+function hideMapPanel() {
+  mapPanel.style.display = 'none';
+  mapPanelListId = null;
+}
+document.getElementById('mapPanelCloseBtn').addEventListener('click', hideMapPanel);
+
+function mapListChip(l) {
+  return `<span class="map-chip ${l.is_commercial ? 'commercial' : ''}" data-list-id="${l.id}">${escapeHtml(l.name)}</span>`;
+}
+function wireMapListChips(root) {
+  root.querySelectorAll('.map-chip[data-list-id]').forEach(el => {
+    el.addEventListener('click', () => openCommunityPanel(Number(el.dataset.listId)));
+  });
+}
+
+const MAP_STATUS_LABELS = { overdue: 'Overdue', due_today: 'Due today', upcoming: 'Upcoming' };
+
+function showMapClientPanel(c) {
+  mapPanelListId = null;
+  const lists = (c.list_ids || []).map(id => mapData.lists.find(l => l.id === id)).filter(Boolean);
+  const followup = c.next_followup_date
+    ? `<span class="status-pill ${c.followup_status}">${MAP_STATUS_LABELS[c.followup_status] || ''}</span>
+       ${escapeHtml(formatMissedDate(c.next_followup_date))}${c.frequency_label ? ` · <span class="dim">${escapeHtml(c.frequency_label)}</span>` : ''}`
+    : '<span class="dim">No automatic follow-up</span>';
+  mapPanelBody.innerHTML = `
+    <h2>${escapeHtml(c.name)}</h2>
+    <div class="dim">${escapeHtml(c.address || '')}</div>
+    ${c.phone ? `<div style="margin-top:4px">${escapeHtml(c.phone)}</div>` : ''}
+    <h3>Follow-up</h3>
+    <div>${followup}</div>
+    ${lists.length ? `<h3>Communities</h3><div>${lists.map(mapListChip).join('')}</div>` : ''}
+    <div class="row" style="margin-top:14px; gap:8px; flex-wrap:wrap">
+      <button type="button" class="small" id="mapOpenClientBtn">Open client card</button>
+    </div>`;
+  wireMapListChips(mapPanelBody);
+  document.getElementById('mapOpenClientBtn').addEventListener('click', () => openClientDetail(c.id));
+  showMapPanel();
+}
+
+async function openCommunityPanel(listId) {
+  mapPanelListId = listId;
+  mapPanelBody.innerHTML = '<div class="dim">Loading…</div>';
+  showMapPanel();
+  let d;
+  try {
+    const res = await fetch(`/api/crm/map/community/${listId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    d = await res.json();
+  } catch (e) {
+    mapPanelBody.innerHTML = `<div class="error-box" style="display:block">Couldn't load this community — ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (mapPanelListId !== listId) return;  // clicked something else meanwhile
+  renderCommunityPanel(d);
+}
+
+function creUnitRow(u) {
+  const size = u.sqft ? `${Number(u.sqft).toLocaleString('en-US')} sq ft` : '';
+  const asking = u.asking_rent_psf != null ? `asking $${Number(u.asking_rent_psf).toLocaleString('en-US')}/sq ft${u.rent_type ? ' ' + escapeHtml(u.rent_type) : ''}` : '';
+  let right;
+  if (u.status === 'available') {
+    right = `<span class="status-pill FOUND">Available</span>${asking ? `<div class="dim">${asking}</div>` : ''}`;
+  } else {
+    const ends = u.lease_end ? `lease ends ${escapeHtml(formatMissedDate(u.lease_end))}` : 'no end date';
+    const soon = u.coming_available ? `<span class="status-pill due_today">Opens in ${u.days_until_lease_end + 1} day${u.days_until_lease_end === 0 ? '' : 's'}</span>` : '';
+    right = `${soon}<div class="dim">${escapeHtml(u.tenant || '')} · ${ends}</div>${asking ? `<div class="dim">then ${asking}</div>` : ''}`;
+  }
+  return `<div class="map-row clickable" data-unit-id="${u.id}">
+    <div><b>${escapeHtml(u.unit_label)}</b>${size ? `<div class="dim">${size}</div>` : ''}</div>
+    <div style="text-align:right">${right}</div>
+  </div>`;
+}
+
+function renderCommunityPanel(d) {
+  const schedule = d.interval_days
+    ? `Every <b>${escapeHtml(d.frequency_label || `${d.interval_days} days`)}</b>${d.next_call_date
+        ? ` · next round <span class="status-pill ${d.call_status || ''}">${escapeHtml(formatMissedDate(d.next_call_date))}</span>` : ''}`
+    : '<span class="dim">No shared call schedule</span>';
+  const insideOnly = d.clients.filter(c => !c.on_list).length;
+  const clientSummary = `${d.clients.length} client${d.clients.length === 1 ? '' : 's'} here`
+    + (d.clients.length ? ` <span class="dim">(${d.member_count} on the list${insideOnly ? `, ${insideOnly} more inside the outline` : ''})</span>` : '');
+
+  const followRows = d.followups.map(f => {
+    const when = `${formatMissedDate(f.date)}${f.time ? ' · ' + formatTime12(f.time) : ''}`;
+    const pill = f.status && f.status !== 'upcoming' ? ` <span class="status-pill ${f.status}">${MAP_STATUS_LABELS[f.status]}</span>` : '';
+    return `<div class="map-row ${f.client_id ? 'clickable' : ''}" ${f.client_id ? `data-client-id="${f.client_id}"` : ''}>
+      <div>${escapeHtml(f.client_name || d.name)}<div class="dim">${escapeHtml(f.title)}</div></div>
+      <div style="text-align:right; white-space:nowrap">${escapeHtml(when)}${pill}</div>
+    </div>`;
+  }).join('');
+
+  const clientRows = d.clients.map(c => `
+    <div class="map-row clickable" data-client-id="${c.id}">
+      <div>${escapeHtml(c.name)}<div class="dim">${escapeHtml(c.address || '')}</div></div>
+      <div class="dim" style="text-align:right; white-space:nowrap">${c.on_list ? 'on list' : 'inside outline'}</div>
+    </div>`).join('');
+
+  const classOptions = d.asset_classes.map(a =>
+    `<option value="${escapeHtml(a)}" ${a === d.asset_class ? 'selected' : ''}>${escapeHtml(a)}</option>`).join('');
+
+  mapPanelBody.innerHTML = `
+    <h2>${escapeHtml(d.name)}</h2>
+    ${d.is_commercial ? `<span class="map-chip commercial">${escapeHtml(d.asset_class || 'Commercial')}</span>` : ''}
+    <h3>Shared call schedule</h3>
+    <div>${schedule}</div>
+    <h3>Follow-ups (${d.followups.length})</h3>
+    ${followRows || '<div class="dim">No individual follow-ups with anyone here.</div>'}
+    <h3>Clients</h3>
+    <div>${clientSummary}</div>
+    ${d.clients.length ? `<details style="margin-top:4px"><summary class="dim" style="cursor:pointer">Show clients</summary>${clientRows}</details>` : ''}
+    <h3>Commercial</h3>
+    <label style="display:flex; align-items:center; gap:8px; font-weight:400">
+      <input type="checkbox" id="mapCommercialChk" ${d.is_commercial ? 'checked' : ''}> This is a commercial asset
+    </label>
+    <div id="mapCommercialBody" style="display:${d.is_commercial ? 'block' : 'none'}; margin-top:8px">
+      <div class="form-group" style="margin-bottom:8px">
+        <label for="mapAssetClass">Asset class</label>
+        <select id="mapAssetClass"><option value="">—</option>${classOptions}</select>
+      </div>
+      <div class="cre-summary" id="mapCreSummary">${escapeHtml(d.cre_summary || 'No lease units added yet.')}</div>
+      <div id="mapCreUnits">${d.units.map(creUnitRow).join('')}</div>
+      <button type="button" class="ghost small" id="mapAddUnitBtn" style="margin-top:8px">+ Add unit</button>
+    </div>
+    <div class="row" style="margin-top:16px; gap:8px; flex-wrap:wrap">
+      <button type="button" class="ghost small" id="mapDrawOutlineBtn">${d.boundary ? '✏️ Redraw outline' : '✏️ Draw outline'}</button>
+      ${d.boundary ? '<button type="button" class="ghost small" id="mapRemoveOutlineBtn">Remove outline</button>' : ''}
+      <button type="button" class="ghost small" id="mapManageMembersBtn">👥 Members</button>
+    </div>`;
+
+  mapPanelBody.querySelectorAll('[data-client-id]').forEach(el => {
+    el.addEventListener('click', () => openClientDetail(Number(el.dataset.clientId)));
+  });
+  mapPanelBody.querySelectorAll('[data-unit-id]').forEach(el => {
+    el.addEventListener('click', () => openCreUnitForm(d.id, d.units.find(u => u.id === Number(el.dataset.unitId))));
+  });
+  const commercialChk = document.getElementById('mapCommercialChk');
+  const assetSelect = document.getElementById('mapAssetClass');
+  const saveCommercial = async () => {
+    try {
+      const res = await fetch(`/api/crm/contact_lists/${d.id}/commercial`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_commercial: commercialChk.checked, asset_class: assetSelect.value }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      alert("Couldn't save — " + e.message);
+      return;
+    }
+    await loadMapData();
+    openCommunityPanel(d.id);
+  };
+  commercialChk.addEventListener('change', saveCommercial);
+  assetSelect.addEventListener('change', saveCommercial);
+  document.getElementById('mapAddUnitBtn').addEventListener('click', () => openCreUnitForm(d.id, null));
+  document.getElementById('mapDrawOutlineBtn').addEventListener('click', () => startMapDraw(d.id));
+  const removeBtn = document.getElementById('mapRemoveOutlineBtn');
+  if (removeBtn) removeBtn.addEventListener('click', async () => {
+    if (!confirm(`Remove the outline for "${d.name}"? The Contact List itself and its members stay.`)) return;
+    try {
+      const res = await fetch(`/api/crm/contact_lists/${d.id}/boundary`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ boundary: null }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      alert("Couldn't remove the outline — " + e.message);
+      return;
+    }
+    await loadMapData();
+    openCommunityPanel(d.id);
+  });
+  document.getElementById('mapManageMembersBtn').addEventListener('click', () => openManageMembers(d.id));
+}
+
+function renderMapCommunityList() {
+  const el = document.getElementById('mapCommunityList');
+  if (!mapData.lists.length) {
+    el.innerHTML = '<div class="dim">No Contact Lists yet — create one under URTO CRM → Contact Lists.</div>';
+    return;
+  }
+  el.innerHTML = mapData.lists.map(l => `
+    <div class="map-row">
+      <div>
+        <b>${escapeHtml(l.name)}</b> ${l.is_commercial ? `<span class="map-chip commercial">${escapeHtml(l.asset_class || 'Commercial')}</span>` : ''}
+        <div class="dim" style="font-size:.8rem">${l.member_count} member${l.member_count === 1 ? '' : 's'} · ${l.boundary ? 'outlined' : 'no outline yet'}</div>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center; flex-shrink:0">
+        <button type="button" class="ghost small" data-act="show" data-id="${l.id}">Show</button>
+        <button type="button" class="ghost small" data-act="draw" data-id="${l.id}">${l.boundary ? 'Redraw' : 'Draw outline'}</button>
+      </div>
+    </div>`).join('');
+  el.querySelectorAll('button[data-act]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.id);
+      if (btn.dataset.act === 'draw') return startMapDraw(id);
+      const l = mapData.lists.find(x => x.id === id);
+      if (l && l.boundary) urtoMap.fitBounds(L.polygon(l.boundary).getBounds(), { padding: [40, 40], maxZoom: 17 });
+      openCommunityPanel(id);
+    });
+  });
+}
+
+function renderMapUnplaced() {
+  const card = document.getElementById('mapUnplacedCard');
+  const list = mapData.unplaced || [];
+  card.style.display = list.length ? 'block' : 'none';
+  document.getElementById('mapUnplacedList').innerHTML = list.map(c => `
+    <div class="map-row">
+      <div>${escapeHtml(c.name)}<div class="dim">${escapeHtml(c.address)}</div></div>
+      <button type="button" class="ghost small" data-place-id="${c.id}" style="flex-shrink:0">📍 Place</button>
+    </div>`).join('');
+  card.querySelectorAll('button[data-place-id]').forEach(btn => {
+    btn.addEventListener('click', () => startMapPlace(list.find(c => c.id === Number(btn.dataset.placeId))));
+  });
+}
+
+function scrollMapIntoView() {
+  document.getElementById('urtoMap').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// ---- Drawing a community outline ----
+function startMapDraw(listId) {
+  const l = mapData && mapData.lists.find(x => x.id === listId);
+  if (!l || !urtoMap) return;
+  stopMapModes();
+  mapMode = 'draw';
+  mapDraw = { listId, name: l.name, points: [], layer: L.layerGroup().addTo(urtoMap) };
+  urtoMap.doubleClickZoom.disable();
+  document.getElementById('urtoMap').classList.add('map-drawing');
+  hideMapPanel();
+  if (l.boundary) urtoMap.fitBounds(L.polygon(l.boundary).getBounds(), { padding: [40, 40], maxZoom: 17 });
+  renderMapData();
+  updateMapDrawPreview();
+  document.getElementById('mapDrawBar').style.display = 'flex';
+  scrollMapIntoView();
+}
+
+function updateMapDrawPreview() {
+  const { points, layer, name } = mapDraw;
+  layer.clearLayers();
+  const style = { color: MAP_DRAW_COLOR, weight: 2, dashArray: '6 4', interactive: false };
+  if (points.length >= 3) L.polygon(points, { ...style, fillColor: MAP_DRAW_COLOR, fillOpacity: 0.15 }).addTo(layer);
+  else if (points.length === 2) L.polyline(points, style).addTo(layer);
+  points.forEach(p => L.circleMarker(p, {
+    radius: 5, color: MAP_DRAW_COLOR, weight: 2, fillColor: '#ffffff', fillOpacity: 1, interactive: false,
+  }).addTo(layer));
+  const n = points.length;
+  document.getElementById('mapDrawText').innerHTML =
+    `Outlining <b>${escapeHtml(name)}</b> — click the map to drop each corner (${n} so far${n < 3 ? `, need ${3 - n} more` : ''})`;
+  document.getElementById('mapDrawFinishBtn').disabled = n < 3;
+  document.getElementById('mapDrawUndoBtn').disabled = n === 0;
+}
+
+function onMapClick(e) {
+  if (mapMode === 'draw') {
+    mapDraw.points.push([e.latlng.lat, e.latlng.lng]);
+    updateMapDrawPreview();
+  } else if (mapMode === 'place') {
+    placeMapClientAt(e.latlng);
+  }
+}
+
+function stopMapModes() {
+  if (mapDraw) urtoMap.removeLayer(mapDraw.layer);
+  const wasDrawing = mapMode === 'draw';
+  mapMode = null;
+  mapDraw = null;
+  mapPlaceClient = null;
+  if (urtoMap) urtoMap.doubleClickZoom.enable();
+  document.getElementById('urtoMap').classList.remove('map-drawing');
+  document.getElementById('mapDrawBar').style.display = 'none';
+  document.getElementById('mapPlaceBar').style.display = 'none';
+  if (wasDrawing) renderMapData();  // bring the old outline back
+}
+
+document.getElementById('mapDrawUndoBtn').addEventListener('click', () => {
+  if (!mapDraw) return;
+  mapDraw.points.pop();
+  updateMapDrawPreview();
+});
+document.getElementById('mapDrawCancelBtn').addEventListener('click', stopMapModes);
+document.getElementById('mapPlaceCancelBtn').addEventListener('click', stopMapModes);
+document.getElementById('mapDrawFinishBtn').addEventListener('click', async () => {
+  if (!mapDraw || mapDraw.points.length < 3) return;
+  const { listId, points } = mapDraw;
+  try {
+    const res = await fetch(`/api/crm/contact_lists/${listId}/boundary`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ boundary: points }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  } catch (e) {
+    alert("Couldn't save the outline — " + e.message);
+    return;
+  }
+  stopMapModes();
+  await loadMapData();
+  openCommunityPanel(listId);
+});
+
+// ---- Placing a client the geocoder couldn't find ----
+function startMapPlace(client) {
+  if (!client || !urtoMap) return;
+  stopMapModes();
+  mapMode = 'place';
+  mapPlaceClient = client;
+  document.getElementById('urtoMap').classList.add('map-drawing');
+  hideMapPanel();
+  document.getElementById('mapPlaceText').innerHTML =
+    `Click where <b>${escapeHtml(client.name)}</b> is <span class="dim">(${escapeHtml(client.address)})</span>`;
+  document.getElementById('mapPlaceBar').style.display = 'flex';
+  scrollMapIntoView();
+}
+
+async function placeMapClientAt(latlng) {
+  const client = mapPlaceClient;
+  if (!client) return;
+  try {
+    const res = await fetch(`/api/crm/clients/${client.id}/map_location`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: latlng.lat, lng: latlng.lng }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  } catch (e) {
+    alert("Couldn't place this client — " + e.message);
+    return;
+  }
+  stopMapModes();
+  await loadMapData();
+}
+
+// ---- Commercial lease units ----
+const creUnitOverlay = document.getElementById('creUnitOverlay');
+const creUnitForm = document.getElementById('creUnitForm');
+const creUnitError = document.getElementById('creUnitError');
+const cuSubmitBtn = document.getElementById('cuSubmitBtn');
+let creUnitListId = null;
+let creUnitSubmitting = false;
+
+function openCreUnitForm(listId, unit) {
+  creUnitListId = listId;
+  creUnitError.style.display = 'none';
+  creUnitSubmitting = false;
+  cuSubmitBtn.disabled = false;
+  cuSubmitBtn.textContent = 'Save Unit';
+  document.getElementById('creUnitTitle').textContent = unit ? `Edit ${unit.unit_label}` : 'Add Lease Unit';
+  document.getElementById('cuId').value = unit ? unit.id : '';
+  document.getElementById('cuLabel').value = unit ? unit.unit_label : '';
+  document.getElementById('cuSqft').value = unit && unit.sqft != null ? unit.sqft : '';
+  document.getElementById('cuTenant').value = unit ? (unit.tenant || '') : '';
+  document.getElementById('cuLeaseStart').value = unit ? (unit.lease_start || '') : '';
+  document.getElementById('cuLeaseEnd').value = unit ? (unit.lease_end || '') : '';
+  document.getElementById('cuCurrentRent').value = unit && unit.current_rent_psf != null ? unit.current_rent_psf : '';
+  document.getElementById('cuAskingRent').value = unit && unit.asking_rent_psf != null ? unit.asking_rent_psf : '';
+  document.getElementById('cuRentType').value = unit ? (unit.rent_type || '') : '';
+  document.getElementById('cuNotes').value = unit ? (unit.notes || '') : '';
+  document.getElementById('cuDeleteBtn').style.display = unit ? 'inline-block' : 'none';
+  creUnitOverlay.classList.add('show');
+}
+function closeCreUnitForm() { creUnitOverlay.classList.remove('show'); }
+document.getElementById('creUnitCloseBtn').addEventListener('click', closeCreUnitForm);
+document.getElementById('creUnitCancelBtn').addEventListener('click', closeCreUnitForm);
+
+async function afterCreUnitChange() {
+  closeCreUnitForm();
+  await loadMapData();
+  if (creUnitListId) openCommunityPanel(creUnitListId);
+}
+
+creUnitForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (creUnitSubmitting) return;
+  creUnitSubmitting = true;
+  cuSubmitBtn.disabled = true;
+  cuSubmitBtn.textContent = 'Saving…';
+  const id = document.getElementById('cuId').value;
+  const payload = {
+    unit_label: document.getElementById('cuLabel').value,
+    sqft: document.getElementById('cuSqft').value,
+    tenant: document.getElementById('cuTenant').value,
+    lease_start: document.getElementById('cuLeaseStart').value,
+    lease_end: document.getElementById('cuLeaseEnd').value,
+    current_rent_psf: document.getElementById('cuCurrentRent').value,
+    asking_rent_psf: document.getElementById('cuAskingRent').value,
+    rent_type: document.getElementById('cuRentType').value,
+    notes: document.getElementById('cuNotes').value,
+  };
+  try {
+    const res = await fetch(id ? `/api/crm/cre_units/${id}` : `/api/crm/contact_lists/${creUnitListId}/cre_units`, {
+      method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  } catch (err) {
+    creUnitError.textContent = err.message;
+    creUnitError.style.display = 'block';
+    creUnitSubmitting = false;
+    cuSubmitBtn.disabled = false;
+    cuSubmitBtn.textContent = 'Save Unit';
+    return;
+  }
+  await afterCreUnitChange();
+});
+
+document.getElementById('cuDeleteBtn').addEventListener('click', async () => {
+  const id = document.getElementById('cuId').value;
+  if (!id || !confirm('Delete this unit? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`/api/crm/cre_units/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (err) {
+    creUnitError.textContent = "Couldn't delete — " + err.message;
+    creUnitError.style.display = 'block';
+    return;
+  }
+  await afterCreUnitChange();
 });
 
 /* ===================== EOS & Rocks ===================== */

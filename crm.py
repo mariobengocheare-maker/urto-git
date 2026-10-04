@@ -698,6 +698,7 @@ def _write_full_data_export(backup_dir: Path):
         "call_log": [dict(r) for r in conn.execute("SELECT * FROM call_log ORDER BY id").fetchall()],
         "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
         "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
+        "cre_units": [dict(r) for r in conn.execute("SELECT * FROM cre_units ORDER BY id").fetchall()],
         "events": [dict(r) for r in conn.execute("SELECT * FROM events ORDER BY id").fetchall()],
         "document_types": [dict(r) for r in conn.execute("SELECT * FROM document_types ORDER BY id").fetchall()],
         "transactions": [dict(r) for r in conn.execute("SELECT * FROM transactions ORDER BY id").fetchall()],
@@ -755,7 +756,7 @@ def import_full_data_export(data: dict) -> dict:
         }
 
     table_order = [
-        "clients", "notes", "call_log", "contact_lists", "contact_list_members",
+        "clients", "notes", "call_log", "contact_lists", "contact_list_members", "cre_units",
         "events", "document_types", "transactions", "transaction_documents",
         "lookup_stats", "text_presets",
     ]
@@ -1244,6 +1245,18 @@ def init_db():
         # attendee address instead of Mario typing it in by hand every time
         # -- see build order #89.
         conn.execute("ALTER TABLE clients ADD COLUMN email TEXT")
+    if "lat" not in clients_cols:
+        # Map tab (build order #173) -- where this client's address actually
+        # is. geo_address remembers WHICH address string was geocoded (or
+        # tried and failed), so an address edited later is automatically
+        # re-geocoded on the next map pass (geo_address != address), while an
+        # unchanged one is never looked up twice. geo_status: 'ok' (found
+        # automatically), 'failed' (geocoder found nothing in Mario's market
+        # -- he can place it by hand), 'manual' (placed by hand on the map).
+        conn.execute("ALTER TABLE clients ADD COLUMN lat REAL")
+        conn.execute("ALTER TABLE clients ADD COLUMN lng REAL")
+        conn.execute("ALTER TABLE clients ADD COLUMN geo_address TEXT")
+        conn.execute("ALTER TABLE clients ADD COLUMN geo_status TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1314,6 +1327,37 @@ def init_db():
             list_id INTEGER NOT NULL REFERENCES contact_lists(id) ON DELETE CASCADE,
             client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
             PRIMARY KEY (list_id, client_id)
+        )
+    """)
+    # Map tab (build order #173): a Contact List can be a real place on the
+    # map -- a community/building outline Mario traces by hand (boundary =
+    # JSON list of [lat, lng] vertices) -- and optionally a commercial asset
+    # (is_commercial/asset_class) whose lease units live in cre_units below.
+    list_cols = {row["name"] for row in conn.execute("PRAGMA table_info(contact_lists)").fetchall()}
+    if "boundary" not in list_cols:
+        conn.execute("ALTER TABLE contact_lists ADD COLUMN boundary TEXT")
+    if "is_commercial" not in list_cols:
+        conn.execute("ALTER TABLE contact_lists ADD COLUMN is_commercial INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE contact_lists ADD COLUMN asset_class TEXT")
+    # One row per leasable space in a commercial asset (e.g. one unit of a
+    # retail plaza). Whether it's available is DERIVED (no tenant, or the
+    # lease has already ended) rather than stored, so a lease expiring
+    # simply flips the unit to "available" on that day with nothing to
+    # remember to update.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cre_units (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            list_id INTEGER NOT NULL REFERENCES contact_lists(id) ON DELETE CASCADE,
+            unit_label TEXT NOT NULL,
+            sqft INTEGER,
+            tenant TEXT,
+            lease_start TEXT,
+            lease_end TEXT,
+            current_rent_psf REAL,
+            asking_rent_psf REAL,
+            rent_type TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL
         )
     """)
     conn.execute("""
@@ -4284,3 +4328,426 @@ def remove_commission_entry_file(entry_id: int):
     if had_file:
         _instant_document_mirror()
     return dict(row)
+
+
+# ===================== Map tab (build order #173) =====================
+# Mario: a real map of his market (Miami-Dade, Broward, the Keys) where every
+# CRM client's house shows up in color, every Contact List he's traced as a
+# community/building shows as an outlined area, and clicking a community
+# shows its follow-up picture (+ commercial lease units for a CRE asset).
+# Market stats (sales/listings) were deliberately left out for now -- see
+# the build order for why (needs an MLS/IDX data license).
+
+import map_geo  # noqa: E402  (kept beside the feature it serves)
+
+ASSET_CLASSES = ["Retail", "Office", "Industrial / Flex", "Medical", "Multifamily", "Mixed-use", "Land", "Other"]
+_geocode_lock = threading.Lock()
+
+
+def _parse_boundary(text):
+    if not text:
+        return None
+    try:
+        pts = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(pts, list) or len(pts) < 3:
+        return None
+    return pts
+
+
+def _point_in_polygon(lat, lng, poly) -> bool:
+    """Plain ray-casting test. Treats lng as x and lat as y -- fine at the
+    scale of one community (a few city blocks), where Earth's curvature is
+    irrelevant."""
+    inside = False
+    n = len(poly)
+    j = n - 1
+    for i in range(n):
+        yi, xi = poly[i][0], poly[i][1]
+        yj, xj = poly[j][0], poly[j][1]
+        if (yi > lat) != (yj > lat):
+            x_cross = (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi
+            if lng < x_cross:
+                inside = not inside
+        j = i
+    return inside
+
+
+_NEEDS_GEOCODE_SQL = (
+    "address IS NOT NULL AND TRIM(address) != '' "
+    "AND (geo_address IS NULL OR geo_address != address)"
+)
+
+
+def geocode_pending_clients(time_budget: float = 8.0, max_items: int = 40) -> dict:
+    """Places a small batch of not-yet-located clients on the map, then
+    returns so the browser can show progress and call again -- one request
+    per batch keeps every call well inside a web request's lifetime even
+    with Nominatim's ~1/sec pacing. Only ever touches lat/lng/geo_* columns,
+    never anything Mario typed."""
+    if not _geocode_lock.acquire(blocking=False):
+        return {"busy": True, "processed": 0, "remaining": None}
+    processed = failed = 0
+    error = None
+    try:
+        start = time.time()
+        conn = get_conn()
+        rows = conn.execute(
+            f"SELECT id, address FROM clients WHERE {_NEEDS_GEOCODE_SQL} ORDER BY id LIMIT ?",
+            (max_items,),
+        ).fetchall()
+        for row in rows:
+            if processed and time.time() - start > time_budget:
+                break
+            try:
+                hit = map_geo.geocode_address(row["address"])
+            except RuntimeError as e:
+                # Geocoder itself is down/unreachable -- stop, and DON'T mark
+                # this address failed (it may be perfectly good).
+                error = str(e)
+                break
+            if hit:
+                conn.execute(
+                    "UPDATE clients SET lat=?, lng=?, geo_address=?, geo_status='ok' WHERE id=?",
+                    (hit[0], hit[1], row["address"], row["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE clients SET lat=NULL, lng=NULL, geo_address=?, geo_status='failed' WHERE id=?",
+                    (row["address"], row["id"]),
+                )
+                failed += 1
+            conn.commit()
+            processed += 1
+        remaining = conn.execute(f"SELECT COUNT(*) FROM clients WHERE {_NEEDS_GEOCODE_SQL}").fetchone()[0]
+        conn.close()
+    finally:
+        _geocode_lock.release()
+    if processed:
+        on_data_changed("clients placed on map")
+    return {"processed": processed, "failed": failed, "remaining": remaining, "error": error,
+            "provider": map_geo.provider_name()}
+
+
+def place_client_manually(client_id, lat, lng) -> dict:
+    lat, lng = float(lat), float(lng)
+    if not map_geo.in_market(lat, lng):
+        raise ValueError("That spot is outside Miami-Dade / Broward / the Keys.")
+    conn = get_conn()
+    row = conn.execute("SELECT address FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute(
+        "UPDATE clients SET lat=?, lng=?, geo_address=?, geo_status='manual' WHERE id=?",
+        (lat, lng, row["address"], client_id),
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("client placed on map by hand")
+    return get_client(client_id)
+
+
+def get_map_data() -> dict:
+    """Everything the map draws in one request: located clients (colored by
+    follow-up status), every Contact List (with its traced outline, if any),
+    and what still needs placing."""
+    clients = list_clients()  # also self-heals stale schedules, like everywhere else
+    conn = get_conn()
+    list_rows = [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY name COLLATE NOCASE").fetchall()]
+    memberships = {}
+    for m in conn.execute("SELECT list_id, client_id FROM contact_list_members").fetchall():
+        memberships.setdefault(m["client_id"], set()).add(m["list_id"])
+    member_counts = {}
+    for lid in (l for s in memberships.values() for l in s):
+        member_counts[lid] = member_counts.get(lid, 0) + 1
+    unit_counts = {r["list_id"]: r["n"] for r in conn.execute(
+        "SELECT list_id, COUNT(*) AS n FROM cre_units GROUP BY list_id").fetchall()}
+    pending = conn.execute(f"SELECT COUNT(*) FROM clients WHERE {_NEEDS_GEOCODE_SQL}").fetchone()[0]
+    conn.close()
+
+    lists = []
+    for l in list_rows:
+        lists.append({
+            "id": l["id"], "name": l["name"],
+            "boundary": _parse_boundary(l.get("boundary")),
+            "is_commercial": bool(l.get("is_commercial")),
+            "asset_class": l.get("asset_class"),
+            "frequency_label": l["frequency_label"], "interval_days": l["interval_days"],
+            "next_call_date": l["next_call_date"], "call_status": _list_call_status(l["next_call_date"]),
+            "member_count": member_counts.get(l["id"], 0),
+            "unit_count": unit_counts.get(l["id"], 0),
+        })
+    polys = [(l["id"], l["boundary"]) for l in lists if l["boundary"]]
+
+    located, unplaced = [], []
+    for c in clients:
+        if c.get("lat") is not None and c.get("lng") is not None:
+            list_ids = set(memberships.get(c["id"], set()))
+            for lid, poly in polys:
+                if _point_in_polygon(c["lat"], c["lng"], poly):
+                    list_ids.add(lid)
+            located.append({
+                "id": c["id"], "name": c["name"], "address": c.get("address"), "phone": c.get("phone"),
+                "lat": c["lat"], "lng": c["lng"],
+                "followup_status": c.get("followup_status"),
+                "next_followup_date": c.get("next_followup_date"),
+                "frequency_label": c.get("frequency_label"),
+                "list_ids": sorted(list_ids),
+            })
+        elif c.get("geo_status") == "failed" and (c.get("address") or "").strip():
+            unplaced.append({"id": c["id"], "name": c["name"], "address": c["address"]})
+    return {
+        "clients": located, "unplaced": unplaced, "lists": lists,
+        "pending_geocode": pending, "geocoder": map_geo.provider_name(),
+        "asset_classes": ASSET_CLASSES,
+    }
+
+
+def set_contact_list_boundary(list_id, boundary) -> dict:
+    """boundary = list of [lat, lng] (>= 3 points), or None/[] to remove it."""
+    if boundary:
+        try:
+            pts = [[float(p[0]), float(p[1])] for p in boundary]
+        except (TypeError, ValueError, IndexError):
+            raise ValueError("Boundary points must be [lat, lng] pairs.")
+        if len(pts) < 3:
+            raise ValueError("A boundary needs at least 3 points.")
+        if not all(map_geo.in_market(lat, lng) for lat, lng in pts):
+            raise ValueError("Boundary must be inside Miami-Dade / Broward / the Keys.")
+        stored = json.dumps(pts)
+    else:
+        stored = None
+    conn = get_conn()
+    cur = conn.execute("UPDATE contact_lists SET boundary = ? WHERE id = ?", (stored, list_id))
+    conn.commit()
+    conn.close()
+    if not cur.rowcount:
+        return None
+    on_data_changed("contact list boundary updated")
+    return get_contact_list(list_id)
+
+
+def set_contact_list_commercial(list_id, is_commercial, asset_class) -> dict:
+    asset_class = (asset_class or "").strip() or None
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE contact_lists SET is_commercial = ?, asset_class = ? WHERE id = ?",
+        (1 if is_commercial else 0, asset_class if is_commercial else None, list_id),
+    )
+    conn.commit()
+    conn.close()
+    if not cur.rowcount:
+        return None
+    on_data_changed("contact list commercial settings updated")
+    return get_contact_list(list_id)
+
+
+# ---- Commercial (CRE) lease units ----
+
+_CRE_FIELDS = ("unit_label", "sqft", "tenant", "lease_start", "lease_end",
+               "current_rent_psf", "asking_rent_psf", "rent_type", "notes")
+
+
+def _clean_cre_fields(data: dict) -> dict:
+    def num(v, cast):
+        if v is None or str(v).strip() == "":
+            return None
+        try:
+            return cast(str(v).replace(",", "").replace("$", "").strip())
+        except ValueError:
+            raise ValueError(f"'{v}' isn't a number.")
+
+    def day(v):
+        v = (v or "").strip()
+        if not v:
+            return None
+        date.fromisoformat(v)  # raises ValueError on garbage
+        return v
+
+    out = {
+        "unit_label": (data.get("unit_label") or "").strip(),
+        "sqft": num(data.get("sqft"), lambda s: int(float(s))),
+        "tenant": (data.get("tenant") or "").strip() or None,
+        "lease_start": day(data.get("lease_start")),
+        "lease_end": day(data.get("lease_end")),
+        "current_rent_psf": num(data.get("current_rent_psf"), float),
+        "asking_rent_psf": num(data.get("asking_rent_psf"), float),
+        "rent_type": (data.get("rent_type") or "").strip() or None,
+        "notes": (data.get("notes") or "").strip() or None,
+    }
+    if not out["unit_label"]:
+        raise ValueError("Unit name/number is required.")
+    return out
+
+
+def _cre_unit_to_dict(row) -> dict:
+    d = dict(row)
+    today = _today()
+    end = date.fromisoformat(d["lease_end"]) if d.get("lease_end") else None
+    leased = bool(d.get("tenant")) and (end is None or end >= today)
+    d["status"] = "leased" if leased else "available"
+    d["days_until_lease_end"] = (end - today).days if (leased and end) else None
+    # "Coming available" = a real tenant whose lease runs out within a year
+    # -- the window Mario would actually start pitching the space in.
+    d["coming_available"] = bool(leased and end and (end - today).days <= 365)
+    return d
+
+
+def list_cre_units(list_id) -> list:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM cre_units WHERE list_id = ? ORDER BY unit_label COLLATE NOCASE, id",
+                        (list_id,)).fetchall()
+    conn.close()
+    return [_cre_unit_to_dict(r) for r in rows]
+
+
+def create_cre_unit(list_id, data: dict) -> dict:
+    f = _clean_cre_fields(data)
+    conn = get_conn()
+    if not conn.execute("SELECT 1 FROM contact_lists WHERE id = ?", (list_id,)).fetchone():
+        conn.close()
+        return None
+    cur = conn.execute(
+        f"INSERT INTO cre_units (list_id, {', '.join(_CRE_FIELDS)}, created_at) "
+        f"VALUES (?, {', '.join('?' for _ in _CRE_FIELDS)}, ?)",
+        (list_id, *[f[k] for k in _CRE_FIELDS], _now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM cre_units WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    on_data_changed("lease unit added")
+    return _cre_unit_to_dict(row)
+
+
+def update_cre_unit(unit_id, data: dict) -> dict:
+    f = _clean_cre_fields(data)
+    conn = get_conn()
+    cur = conn.execute(
+        f"UPDATE cre_units SET {', '.join(k + '=?' for k in _CRE_FIELDS)} WHERE id = ?",
+        (*[f[k] for k in _CRE_FIELDS], unit_id),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM cre_units WHERE id = ?", (unit_id,)).fetchone()
+    conn.close()
+    if not cur.rowcount:
+        return None
+    on_data_changed("lease unit updated")
+    return _cre_unit_to_dict(row)
+
+
+def delete_cre_unit(unit_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM cre_units WHERE id = ?", (unit_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("lease unit deleted")
+
+
+def _fmt_psf(v) -> str:
+    return f"${int(v):,}" if float(v) == int(v) else f"${v:,.2f}"
+
+
+def _join_and(items) -> str:
+    items = list(items)
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _fmt_day(iso) -> str:
+    d = date.fromisoformat(iso)
+    return f"{d:%b} {d.day}, {d.year}"
+
+
+def cre_summary(units: list) -> str:
+    """The one-line pitch Mario asked for, e.g. "3 spaces available at
+    $28–$32/sq ft NNN with 1,000, 1,200 and 1,500 sq ft" -- or, when fully
+    leased, when the next space opens up."""
+    if not units:
+        return ""
+    avail = [u for u in units if u["status"] == "available"]
+    if avail:
+        n = len(avail)
+        text = f"{n} space{'s' if n != 1 else ''} available"
+        prices = sorted({u["asking_rent_psf"] for u in avail if u.get("asking_rent_psf") is not None})
+        if prices:
+            text += f" at {_fmt_psf(prices[0])}/sq ft" if len(prices) == 1 else \
+                f" at {_fmt_psf(prices[0])}–{_fmt_psf(prices[-1])}/sq ft"
+            types = {u.get("rent_type") for u in avail if u.get("asking_rent_psf") is not None}
+            if len(types) == 1 and None not in types:
+                text += f" {types.pop()}"
+        sizes = sorted(u["sqft"] for u in avail if u.get("sqft"))
+        if sizes:
+            text += f" with {_join_and(f'{s:,}' for s in sizes)} sq ft"
+        return text
+    upcoming = sorted((u for u in units if u.get("lease_end")), key=lambda u: u["lease_end"])
+    if not upcoming:
+        return "Fully leased"
+    nxt = upcoming[0]
+    text = f"Fully leased — next space ({nxt['unit_label']}) opens when its lease ends {_fmt_day(nxt['lease_end'])}"
+    if nxt.get("asking_rent_psf") is not None:
+        text += f", asking {_fmt_psf(nxt['asking_rent_psf'])}/sq ft"
+    return text
+
+
+def get_map_community(list_id) -> dict:
+    """What clicking a community on the map shows: its shared schedule,
+    every client in it (on the list OR located inside its outline), their
+    individual follow-ups + upcoming one-off events, and -- for a commercial
+    asset -- its lease units and the availability pitch line."""
+    lst = get_contact_list(list_id)
+    if not lst:
+        return None
+    boundary = _parse_boundary(lst.get("boundary"))
+    member_ids = {m["id"] for m in lst["members"]}
+    conn = get_conn()
+    clients = {}
+    for m in lst["members"]:
+        clients[m["id"]] = {**m, "on_list": True, "inside_boundary": False}
+    if boundary:
+        for r in conn.execute("SELECT * FROM clients WHERE lat IS NOT NULL AND lng IS NOT NULL").fetchall():
+            if _point_in_polygon(r["lat"], r["lng"], boundary):
+                if r["id"] in clients:
+                    clients[r["id"]]["inside_boundary"] = True
+                else:
+                    clients[r["id"]] = {**client_to_dict(r), "on_list": False, "inside_boundary": True}
+
+    today_iso = _today().isoformat()
+    followups = []
+    for c in clients.values():
+        if c.get("next_followup_date"):
+            followups.append({"kind": "auto", "date": c["next_followup_date"], "time": None,
+                              "client_id": c["id"], "client_name": c["name"],
+                              "title": f"{c.get('frequency_label') or 'Scheduled'} follow-up",
+                              "status": c.get("followup_status")})
+    ids = list(clients.keys())
+    q = "SELECT * FROM events WHERE date >= ? AND (list_id = ?"
+    params = [today_iso, list_id]
+    if ids:
+        q += f" OR client_id IN ({', '.join('?' for _ in ids)})"
+        params += ids
+    q += ")"
+    for e in conn.execute(q, params).fetchall():
+        followups.append({"kind": "manual", "date": e["date"], "time": e["time"], "event_id": e["id"],
+                          "client_id": e["client_id"],
+                          "client_name": clients[e["client_id"]]["name"] if e["client_id"] in clients else None,
+                          "title": e["title"], "status": None})
+    conn.close()
+    followups.sort(key=lambda f: (f["date"], f["time"] or ""))
+
+    units = list_cre_units(list_id)
+    return {
+        "id": lst["id"], "name": lst["name"],
+        "frequency_label": lst["frequency_label"], "interval_days": lst["interval_days"],
+        "next_call_date": lst["next_call_date"], "call_status": lst["call_status"],
+        "boundary": boundary,
+        "is_commercial": bool(lst.get("is_commercial")), "asset_class": lst.get("asset_class"),
+        "clients": sorted(clients.values(), key=lambda c: c["name"].lower()),
+        "member_count": len(member_ids),
+        "followups": followups,
+        "units": units,
+        "cre_summary": cre_summary(units),
+        "asset_classes": ASSET_CLASSES,
+    }
