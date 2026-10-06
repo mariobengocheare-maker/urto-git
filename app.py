@@ -112,7 +112,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.63.0"
+APP_VERSION = "2.63.1"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -153,6 +153,10 @@ def _get_last_updated_display() -> str:
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Desktop's local DB is no longer the real CRM (Render's is, build order
+# #71) -- keep its backups local only so they never fight Render's real
+# Google Drive backup in the same "URTO Backups" folder (build order #176).
+crm.disable_cloud_mirrors()
 crm.init_db()
 crm.backup_now("startup")
 

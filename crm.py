@@ -143,9 +143,26 @@ _migrate_legacy_data_dir()
 #     point-in-time history (startup, the "Backup Now" button, and a slow
 #     watcher), capped so they don't accumulate forever.
 LATEST_NAME = "urto_crm_latest.db"
+# Desktop's app.py turns this off (disable_cloud_mirrors(), build order #176).
+# Since "one cloud" (build order #71) the desktop's local urto_crm.db only
+# holds the weekly lookup counter -- its client data is frozen at whatever
+# existed before desktop became a client of Render. Mirroring that stale copy
+# into OneDrive / Google Drive for Desktop's "URTO Backups" folder collided
+# with Render's REAL backup, which the Google Drive API pushes into the very
+# same "URTO Backups" folder: two writers on the same files made Google Drive
+# for Desktop dump copies into its lost_and_found folder, and the desktop's
+# full-diff CRM Contacts export kept deleting contacts Render had just added.
+_cloud_mirrors_enabled = True
 _backup_lock = threading.Lock()
 _dirty = False
 _last_backup = {"at": None, "destinations": None}
+
+
+def disable_cloud_mirrors():
+    """Desktop-only: back up to the local backups/ folder only -- never to
+    OneDrive or Google Drive for Desktop. See _cloud_mirrors_enabled."""
+    global _cloud_mirrors_enabled
+    _cloud_mirrors_enabled = False
 
 
 def _detect_google_drive_dir():
@@ -396,12 +413,12 @@ def resolve_backup_dirs() -> list:
     either/or, so this is a list rather than the single-destination design
     the original OneDrive-only backup used. Returns [{"label", "path"}, ...]."""
     dests = []
-    onedrive = os.environ.get("OneDriveConsumer") or os.environ.get("OneDrive")
+    onedrive = (os.environ.get("OneDriveConsumer") or os.environ.get("OneDrive")) if _cloud_mirrors_enabled else None
     if onedrive:
         p = Path(onedrive) / "URTO Backups"
         p.mkdir(parents=True, exist_ok=True)
         dests.append({"label": "OneDrive", "path": p})
-    gdrive = get_google_drive_dir()
+    gdrive = get_google_drive_dir() if _cloud_mirrors_enabled else None
     if gdrive:
         p = gdrive / "URTO Backups"
         p.mkdir(parents=True, exist_ok=True)
