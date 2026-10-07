@@ -6,6 +6,7 @@ follow-up data and schedule math.
 
 import calendar
 import csv
+import hashlib
 import json
 import mimetypes
 import os
@@ -707,7 +708,9 @@ def _write_full_data_export(backup_dir: Path):
             "Full data export of URTO (Mario Bengochea's real-estate CRM/tool). "
             "This file is regenerated automatically every time any data changes. "
             "It describes every client, note, follow-up, contact list, calendar "
-            "event, and transaction currently in the app."
+            "event, transaction, commission, showing route, EOS rock and waterfall "
+            "item currently in the app, plus activity_log: a running, timestamped "
+            "record (Miami time) of every change, newest last."
         ),
         "exported_at": _now().isoformat(timespec="seconds"),
         "clients": [dict(r) for r in conn.execute("SELECT * FROM clients ORDER BY id").fetchall()],
@@ -725,6 +728,12 @@ def _write_full_data_export(backup_dir: Path):
         ],
         "lookup_stats": [dict(r) for r in conn.execute("SELECT * FROM lookup_stats ORDER BY week_start").fetchall()],
         "text_presets": [dict(r) for r in conn.execute("SELECT * FROM text_presets ORDER BY sort_order, id").fetchall()],
+        "commission_entries": [dict(r) for r in conn.execute("SELECT * FROM commission_entries ORDER BY id").fetchall()],
+        "eos_rocks": [dict(r) for r in conn.execute("SELECT * FROM eos_rocks ORDER BY days").fetchall()],
+        "waterfall_items": [dict(r) for r in conn.execute("SELECT * FROM waterfall_items ORDER BY sort_order, id").fetchall()],
+        "showing_days": [dict(r) for r in conn.execute("SELECT * FROM showing_days ORDER BY id").fetchall()],
+        "showing_stops": [dict(r) for r in conn.execute("SELECT * FROM showing_stops ORDER BY id").fetchall()],
+        "activity_log": [dict(r) for r in conn.execute("SELECT * FROM activity_log ORDER BY id").fetchall()],
     }
     conn.close()
     try:
@@ -776,7 +785,8 @@ def import_full_data_export(data: dict) -> dict:
     table_order = [
         "clients", "notes", "call_log", "contact_lists", "contact_list_members", "cre_units",
         "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
-        "lookup_stats", "text_presets",
+        "lookup_stats", "text_presets", "commission_entries", "eos_rocks", "waterfall_items",
+        "showing_days", "showing_stops", "activity_log",
     ]
     counts = {}
     try:
@@ -788,6 +798,10 @@ def import_full_data_export(data: dict) -> dict:
         # exactly what's meant to be replaced by Mario's real (possibly
         # customized) checklist from the export.
         conn.execute("DELETE FROM document_types")
+        # Same for the three seeded (blank) EOS rocks -- replaced by the
+        # exported ones, but only if the export actually carries them.
+        if data.get("eos_rocks"):
+            conn.execute("DELETE FROM eos_rocks")
         for table in table_order:
             counts[table] = _insert_export_rows(conn, table, data.get(table) or [])
         conn.commit()
@@ -862,6 +876,9 @@ def _push_instant_documents_to_google_drive_safe():
         pass
 
 
+_drive_pushed_contact_hashes = {}
+
+
 def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
     """Pushes the same files just written to the "Local" destination up to
     Mario's REAL Google Drive over the API (see google_drive_api.py) —
@@ -881,22 +898,35 @@ def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
         folder_id = google_drive_api.find_or_create_folder(access_token, "URTO Backups")
         save_google_drive_folder_id(folder_id)
 
-    db_bytes = (local_dir / LATEST_NAME).read_bytes()
-    google_drive_api.upload_or_update_file(access_token, LATEST_NAME, db_bytes, "application/x-sqlite3", folder_id)
-
+    # The full JSON export goes first: it's the one file meant to reflect
+    # every single change, so it shouldn't wait behind anything else.
     json_path = local_dir / "URTO_Full_Data_Export.json"
     if json_path.exists():
         google_drive_api.upload_or_update_file(
             access_token, json_path.name, json_path.read_bytes(), "application/json", folder_id,
         )
 
+    db_bytes = (local_dir / LATEST_NAME).read_bytes()
+    google_drive_api.upload_or_update_file(access_token, LATEST_NAME, db_bytes, "application/x-sqlite3", folder_id)
+
+    # CRM Contacts: only re-upload a client's .txt when its content actually
+    # changed since this process last pushed it. Re-sending every client's
+    # file on every save (2 API calls each) made each pass slow enough that
+    # the JSON export lagged behind real changes.
     contacts_dir = local_dir / "CRM Contacts"
     if contacts_dir.exists():
-        contacts_folder_id = google_drive_api.find_or_create_folder(access_token, "CRM Contacts", folder_id)
+        contacts_folder_id = None
         for txt_file in contacts_dir.glob("*.txt"):
+            content = txt_file.read_bytes()
+            digest = hashlib.sha1(content).hexdigest()
+            if _drive_pushed_contact_hashes.get(txt_file.name) == digest:
+                continue
+            if contacts_folder_id is None:
+                contacts_folder_id = google_drive_api.find_or_create_folder(access_token, "CRM Contacts", folder_id)
             google_drive_api.upload_or_update_file(
-                access_token, txt_file.name, txt_file.read_bytes(), "text/plain", contacts_folder_id,
+                access_token, txt_file.name, content, "text/plain", contacts_folder_id,
             )
+            _drive_pushed_contact_hashes[txt_file.name] = digest
 
     if snapshot:
         snaps = sorted(local_dir.glob("urto_crm_[0-9]*.db"))
@@ -1012,7 +1042,10 @@ class _deferred_backup:
     def __enter__(self):
         global on_data_changed
         self._real = on_data_changed
-        on_data_changed = lambda reason="save": mark_dirty()
+        def _cheap(reason="save", detail=""):
+            _log_activity(reason, detail)
+            mark_dirty()
+        on_data_changed = _cheap
         return self
 
     def __exit__(self, *exc):
@@ -1022,7 +1055,70 @@ class _deferred_backup:
         return False
 
 
-def on_data_changed(reason="save"):
+ACTIVITY_LOG_KEEP = 20000
+
+
+def _client_name(client_id) -> str:
+    try:
+        conn = get_conn()
+        r = conn.execute("SELECT name FROM clients WHERE id = ?", (client_id,)).fetchone()
+        conn.close()
+        return r["name"] if r else f"client #{client_id}"
+    except Exception:
+        return f"client #{client_id}"
+
+
+def _log_activity(reason, detail=""):
+    """Appends one row to activity_log. Never allowed to break a save."""
+    try:
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO activity_log (at, action, detail) VALUES (?, ?, ?)",
+            (_now().isoformat(timespec="seconds"), reason or "save", (detail or "")[:500]),
+        )
+        conn.execute(
+            "DELETE FROM activity_log WHERE id <= (SELECT MAX(id) FROM activity_log) - ?",
+            (ACTIVITY_LOG_KEEP,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+# One background worker runs instant backups. A change that lands while a
+# pass is already running just sets _instant_pending, and the worker runs
+# exactly one more pass afterward -- so a burst of edits can't queue up a
+# pile of full backup passes (each with its own Google Drive round-trip),
+# and the last pass always reflects the latest change.
+_instant_state_lock = threading.Lock()
+_instant_pending = False
+_instant_worker_running = False
+_instant_reason = "save"
+
+
+def _instant_backup_worker():
+    global _instant_pending, _instant_worker_running
+    while True:
+        with _instant_state_lock:
+            if not _instant_pending:
+                _instant_worker_running = False
+                return
+            _instant_pending = False
+            reason = _instant_reason
+        try:
+            backup_instant(reason)
+        except Exception:
+            # A backup failure (e.g. a cloud folder briefly locked) must
+            # never break the actual save — the dirty flag means the
+            # watcher retries.
+            pass
+        with _instant_state_lock:
+            if _instant_pending:
+                mark_dirty()  # backup_instant() cleared it; more is still coming
+
+
+def on_data_changed(reason="save", detail=""):
     """Called after any CRM mutation: mirror everywhere right away, and flag
     the DB so the slow watcher also lays down a timestamped history
     snapshot. The mirror itself runs on a background thread rather than
@@ -1037,18 +1133,16 @@ def on_data_changed(reason="save"):
     _write_backup()'s own _backup_lock already serializes concurrent
     mirror passes, so firing this off in a new thread per call is safe --
     it just queues behind the lock rather than racing anything."""
+    global _instant_pending, _instant_worker_running, _instant_reason
+    _log_activity(reason, detail)
     mark_dirty()
-
-    def _run_backup():
-        try:
-            backup_instant(reason)
-        except Exception:
-            # A backup failure (e.g. a cloud folder briefly locked) must
-            # never break the actual save — the dirty flag means the
-            # watcher retries.
-            pass
-
-    threading.Thread(target=_run_backup, daemon=True).start()
+    with _instant_state_lock:
+        _instant_pending = True
+        _instant_reason = reason
+        if _instant_worker_running:
+            return
+        _instant_worker_running = True
+    threading.Thread(target=_instant_backup_worker, daemon=True).start()
 
 
 def backup_if_dirty():
@@ -1532,6 +1626,18 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    # Running record of every change made anywhere in URTO, newest last --
+    # written by on_data_changed() before the backup runs, so each entry is
+    # already in URTO_Full_Data_Export.json by the time it reaches Google
+    # Drive. Capped at ACTIVITY_LOG_KEEP rows.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at TEXT NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT NOT NULL DEFAULT ''
+        )
+    """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS text_presets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1898,7 +2004,7 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
-    on_data_changed("client added")
+    on_data_changed("client added", row["name"] if row else "")
     return client_to_dict(row)
 
 
@@ -1994,18 +2100,19 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
-    on_data_changed("client updated")
+    on_data_changed("client updated", row["name"] if row else "")
     return client_to_dict(row)
 
 
 def delete_client(client_id):
     conn = get_conn()
+    gone = conn.execute("SELECT name FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
     conn.commit()
     conn.close()
     # Refresh the OneDrive mirror right away so the deleted contact is gone
     # from the backup too, not just the local DB.
-    on_data_changed("client deleted")
+    on_data_changed("client deleted", gone["name"] if gone else f"client #{client_id}")
 
 
 def find_duplicate_clients() -> list:
@@ -2148,7 +2255,7 @@ def log_call(client_id) -> dict:
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
-    on_data_changed("call logged")
+    on_data_changed("call logged", row["name"] if row else "")
     return client_to_dict(row)
 
 
@@ -2174,7 +2281,7 @@ def skip_followup(client_id) -> dict:
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
-    on_data_changed("follow-up skipped")
+    on_data_changed("follow-up skipped", row["name"] if row else "")
     return client_to_dict(row)
 
 
@@ -2224,7 +2331,7 @@ def complete_followup(client_id) -> dict:
     conn.commit()
     updated = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
-    on_data_changed("follow-up completed")
+    on_data_changed("follow-up completed", updated["name"] if updated else "")
     return client_to_dict(updated)
 
 
@@ -2688,7 +2795,7 @@ def add_note(client_id, text) -> dict:
     conn.commit()
     note = conn.execute("SELECT * FROM notes WHERE id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
-    on_data_changed("note added")
+    on_data_changed("note added", f"{_client_name(client_id)}: {text}")
     return dict(note)
 
 
@@ -2710,7 +2817,7 @@ def delete_note(client_id, note_id) -> bool:
     conn.close()
     deleted = cur.rowcount > 0
     if deleted:
-        on_data_changed("note deleted")
+        on_data_changed("note deleted", _client_name(client_id))
     return deleted
 
 
@@ -2755,7 +2862,7 @@ def create_event(client_id, title, date_str, time_str, notes, list_id=None, addr
     conn.commit()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
-    on_data_changed("event added")
+    on_data_changed("event added", f"{title} ({date_str}{' ' + time_str if time_str else ''})")
     return _event_to_dict(row)
 
 
@@ -2796,7 +2903,7 @@ def update_event(event_id, client_id, title, date_str, time_str, notes, list_id=
     conn.commit()
     row = conn.execute(EVENT_JOIN_SELECT + " WHERE events.id = ?", (event_id,)).fetchone()
     conn.close()
-    on_data_changed("event updated")
+    on_data_changed("event updated", f"{title} ({date_str}{' ' + time_str if time_str else ''})")
     return _event_to_dict(row)
 
 
@@ -3350,7 +3457,7 @@ def create_transaction(transaction_type: str, title: str) -> dict:
         "SELECT * FROM transaction_documents WHERE transaction_id = ? ORDER BY sort_order, id", (txn_id,)
     ).fetchall()
     conn.close()
-    on_data_changed("transaction created")
+    on_data_changed("transaction created", row["title"] if row else "")
     _instant_document_mirror()
     return _transaction_to_dict(row, [dict(d) for d in docs])
 
@@ -4267,7 +4374,7 @@ def create_commission_entry(title: str, description: str = "", amount: float = 0
     conn.commit()
     row = conn.execute("SELECT * FROM commission_entries WHERE id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
-    on_data_changed("commission entry added")
+    on_data_changed("commission entry added", row["title"] if row else "")
     _maybe_auto_bump_commission_split()
     if file_filename:
         _instant_document_mirror()
