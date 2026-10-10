@@ -3673,24 +3673,39 @@ def _ordinal_word(n: int) -> str:
 
 
 def get_closing_ordinal(transaction_id: int, closing_date_iso: str) -> int:
-    """This transaction's 1-indexed position among every transaction with a
-    closing_date in the same calendar year, ordered chronologically by
-    closing_date -- ties on the same closing_date (more than one deal
-    closing the same day) are broken by id so two same-day closings still
-    get two distinct, sequential ordinals rather than tying. Computed from
-    `closing_date` itself, not commission_entries, since a closing doesn't
-    strictly need a commission entry filled in yet at the moment this
-    fires."""
+    """This transaction's 1-indexed position among EVERY closing Mario has
+    on record in the same calendar year, ordered by date.
+
+    A closing can live in two places: the Commission Tracker (every closed
+    deal, including ones backfilled by hand that never went through
+    Transaction Manager) and Transaction Manager's own closing_date. The
+    old version counted only transactions with a closing_date -- which
+    ignored every closing recorded in the Commission Tracker, so a real 5th
+    closing of the year was announced as the 1st (Mario, from his lock
+    screen). Now both sources are merged, de-duplicated so a transaction and
+    the commission entry it auto-created count once (keyed by the
+    transaction id, dated by the transaction's own closing_date when it has
+    one). Other closings on the same day count as before this one."""
     year = closing_date_iso[:4]
     conn = get_conn()
-    count = conn.execute(
-        "SELECT COUNT(*) AS c FROM transactions WHERE closing_date IS NOT NULL "
-        "AND substr(closing_date, 1, 4) = ? "
-        "AND (closing_date < ? OR (closing_date = ? AND id <= ?))",
-        (year, closing_date_iso, closing_date_iso, transaction_id),
-    ).fetchone()["c"]
+    events = {}
+    for r in conn.execute(
+        "SELECT id, closed_date, transaction_id FROM commission_entries "
+        "WHERE closed_date IS NOT NULL AND substr(closed_date, 1, 4) = ?",
+        (year,),
+    ).fetchall():
+        key = ("t", r["transaction_id"]) if r["transaction_id"] else ("c", r["id"])
+        events[key] = r["closed_date"][:10]
+    for r in conn.execute(
+        "SELECT id, closing_date FROM transactions "
+        "WHERE closing_date IS NOT NULL AND substr(closing_date, 1, 4) = ?",
+        (year,),
+    ).fetchall():
+        events[("t", r["id"])] = r["closing_date"][:10]
     conn.close()
-    return count
+    events[("t", transaction_id)] = closing_date_iso[:10]
+    me = ("t", transaction_id)
+    return 1 + sum(1 for k, d in events.items() if k != me and d <= closing_date_iso[:10])
 
 
 def get_closing_celebration_message(transaction: dict) -> str:
