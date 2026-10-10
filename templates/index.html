@@ -7475,7 +7475,7 @@ txnCommissionRate.addEventListener('input', updateTxnCommissionPreview);
 
 // Explains what the Closing Date field actually does (see build order
 // #121) -- both the auto-close and the celebratory push fire together at
-// 8 PM Miami time on the closing date itself, not the instant the date
+// 8:30 PM Miami time on the closing date itself, not the instant the date
 // starts, so this is worth spelling out rather than leaving Mario to
 // guess at a bare date field's behavior.
 function renderTxnClosingNote(t) {
@@ -7484,9 +7484,9 @@ function renderTxnClosingNote(t) {
   if (t.status === 'closed') {
     txnClosingNote.textContent = t.closing_notified
       ? `🎉 Closed on ${dateLabel} — celebratory notification already sent.`
-      : `Closed. The 8 PM celebratory notification for ${dateLabel} will go out tonight if it hasn't already.`;
+      : `Closed. The 8:30 PM celebratory notification for ${dateLabel} will go out tonight if it hasn't already.`;
   } else {
-    txnClosingNote.textContent = `Will automatically move to Closed and send you a celebratory notification at 8 PM on ${dateLabel}.`;
+    txnClosingNote.textContent = `Will automatically move to Closed and send you a celebratory notification at 8:30 PM on ${dateLabel}.`;
   }
 }
 

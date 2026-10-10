@@ -1578,7 +1578,7 @@ def init_db():
     if "closing_date" not in existing_cols:
         # See build order #121 -- an optional real closing date that drives
         # two automatic behaviors: auto-moving the transaction to Closed
-        # and a celebratory push notification, both at 8 PM Miami time on
+        # and a celebratory push notification, both at 8:30 PM Miami time on
         # the closing date itself (not the instant the date starts).
         conn.execute("ALTER TABLE transactions ADD COLUMN closing_date TEXT")
     if "closing_notified" not in existing_cols:
@@ -3634,7 +3634,7 @@ def update_transaction(transaction_id: int, title: str, status: str,
 
 # ===================== Closing-date auto-close + celebration (build order #121) =====================
 # Mario: give me a closing date field so a transaction automatically moves
-# to Closed and I get a celebratory push, both at 8 PM Miami time on the
+# to Closed and I get a celebratory push, both at 8:30 PM Miami time on the
 # actual closing date (not the instant the date starts, i.e. midnight).
 # `mark_closing_notified()`/`closing_notified` is what makes the push a true
 # once-ever event, persisted rather than in-memory so it survives a Render
@@ -3729,12 +3729,12 @@ def process_due_closings() -> list:
     Two categories, deliberately handled differently:
     - A closing_date already BEFORE today that was never processed (e.g.
       entered after the fact, or the server was down straight through its
-      own 8 PM window on the real day) is closed out silently, with NO
-      celebratory push -- there's no honest "closing day at 8 PM" moment
+      own 8:30 PM window on the real day) is closed out silently, with NO
+      celebratory push -- there's no honest "closing day at 8:30 PM" moment
       left for it.
     - A closing_date of exactly today is only processed once it's
-      actually 8 PM Miami time or later (Mario's explicit ask: the
-      transaction moves to Closed and celebrates AT 8 PM on the day of
+      actually 8:30 PM Miami time or later (Mario's explicit ask: the
+      transaction moves to Closed and celebrates AT 8:30 PM on the day of
       the closing, not at midnight the instant the date starts) -- and
       only these get a celebratory push returned.
     """
@@ -3749,7 +3749,8 @@ def process_due_closings() -> list:
         _finalize_closing(txn_id)
 
     to_celebrate = []
-    if _now().hour >= 20:
+    _n = _now()
+    if (_n.hour, _n.minute) >= (20, 30):
         conn = get_conn()
         rows = conn.execute(
             "SELECT * FROM transactions WHERE closing_date = ? AND closing_notified = 0",
