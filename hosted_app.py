@@ -37,7 +37,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.30.0-hosted"
+APP_VERSION = "1.31.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -513,6 +513,45 @@ def _closing_watcher():
 threading.Thread(target=_closing_watcher, daemon=True).start()
 
 
+# ===================== Google Drive backup health =====================
+# Mario: "If Render shits itself and I can't get this back, I need the
+# G Drive to work." A Drive push only happens when something changes, and
+# a failure used to be swallowed silently -- so a dead Google connection
+# (e.g. the 7-day refresh-token expiry Google applies to apps still in
+# "Testing" mode) could go unnoticed for days. Every 6 hours this forces a
+# full backup (which also proves the connection still works), and if the
+# latest Drive push failed it sends one push notification (at most every
+# 12 hours) telling Mario to reconnect.
+GDRIVE_CHECK_EVERY = 6 * 3600
+GDRIVE_ALERT_EVERY = 12 * 3600
+
+
+def _gdrive_health_watcher():
+    last_check = time.time()  # startup already ran backup_now()
+    last_alert = 0.0
+    while True:
+        time.sleep(300)
+        try:
+            if not google_drive_api.is_configured() or not crm.get_google_oauth_refresh_token():
+                continue
+            now = time.time()
+            if now - last_check >= GDRIVE_CHECK_EVERY:
+                last_check = now
+                crm.backup_now("scheduled Google Drive check")
+            health = crm.get_google_drive_health()
+            if health["error"] and now - last_alert >= GDRIVE_ALERT_EVERY:
+                last_alert = now
+                body = ("Google disconnected URTO's backup. Open URTO, go to URTO CRM and tap "
+                        "Reconnect Google Drive." if health["needs_reconnect"]
+                        else "Your Google Drive backup is failing. Open URTO's CRM tab for details.")
+                _send_push_to_all("URTO — Backup problem ⚠️", body, url="/")
+        except Exception:
+            pass
+
+
+threading.Thread(target=_gdrive_health_watcher, daemon=True).start()
+
+
 # ===================== One-time data import =====================
 # Brings Mario's real existing CRM data over from a backup he already has
 # (the full JSON export crm.py already produces on every save, see
@@ -593,6 +632,10 @@ def google_auth_callback():
         )
     crm.save_google_oauth_refresh_token(refresh_token)
     crm.save_google_oauth_scope(tokens.get("scope", ""))
+    # Clear any old "Google disconnected" error and push a full fresh copy
+    # right away, rather than waiting for the next edit to trigger one.
+    crm._set_setting("gdrive_last_error", "")
+    threading.Thread(target=crm.backup_now, args=("Google Drive reconnected",), daemon=True).start()
     return redirect(url_for("index"))
 
 

@@ -895,8 +895,22 @@ def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
     access_token = google_drive_api.refresh_access_token(refresh_token)
     folder_id = get_google_drive_folder_id()
     if not folder_id:
-        folder_id = google_drive_api.find_or_create_folder(access_token, "URTO Backups")
+        folder_id = google_drive_api.find_or_create_folder(access_token, google_drive_api.BACKUP_FOLDER_NAME)
         save_google_drive_folder_id(folder_id)
+    if _get_setting("google_drive_folder_named") != google_drive_api.BACKUP_FOLDER_NAME:
+        try:
+            google_drive_api.rename_file(access_token, folder_id, google_drive_api.BACKUP_FOLDER_NAME)
+            _set_setting("google_drive_folder_named", google_drive_api.BACKUP_FOLDER_NAME)
+        except Exception as e:
+            # The cached folder was deleted/trashed in Drive -- start a
+            # fresh one instead of failing every push from here on.
+            if getattr(getattr(e, "response", None), "status_code", None) == 404:
+                folder_id = google_drive_api.find_or_create_folder(access_token, google_drive_api.BACKUP_FOLDER_NAME)
+                save_google_drive_folder_id(folder_id)
+                _set_setting("google_drive_folder_named", google_drive_api.BACKUP_FOLDER_NAME)
+                _drive_pushed_contact_hashes.clear()
+            else:
+                raise
 
     # The full JSON export goes first: it's the one file meant to reflect
     # every single change, so it shouldn't wait behind anything else.
@@ -1006,8 +1020,12 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
             try:
                 if _google_drive_api_push(local_dir, snapshot):
                     results.append({"label": "Google Drive (real)", "path": "Google Drive"})
-            except Exception:
-                pass  # a Google API hiccup must never break the rest of the backup
+                    _record_google_drive_result(None)
+            except Exception as e:
+                # A Google API hiccup must never break the rest of the
+                # backup -- but it must never be silent either (it used to
+                # be: if Google cut the connection, nothing anywhere said so).
+                _record_google_drive_result(e)
 
         _dirty = False
         _last_backup = {"at": _now().isoformat(timespec="seconds"), "destinations": results, "reason": reason}
@@ -1150,6 +1168,47 @@ def backup_if_dirty():
         backup_now("auto")
 
 
+def _describe_google_error(e) -> str:
+    resp = getattr(e, "response", None)
+    body = ""
+    if resp is not None:
+        try:
+            body = resp.text[:300]
+        except Exception:
+            body = ""
+    return (f"{e} {body}").strip()[:500]
+
+
+def _record_google_drive_result(error):
+    """Persists the outcome of the latest real Google Drive push so the CRM
+    tab (and hosted_app.py's alert watcher) can show it. Saved in
+    app_settings, not memory, so a Render restart doesn't hide a failure."""
+    if error is None:
+        _set_setting("gdrive_last_ok_at", _now().isoformat(timespec="seconds"))
+        _set_setting("gdrive_last_error", "")
+        return
+    text = _describe_google_error(error)
+    _set_setting("gdrive_last_error", text)
+    _set_setting("gdrive_last_error_at", _now().isoformat(timespec="seconds"))
+
+
+def get_google_drive_health() -> dict:
+    """Is the real Google Drive backup actually working right now?
+    needs_reconnect is true when Google rejected the saved connection
+    (invalid_grant) -- with a Google Cloud app still in "Testing" mode
+    this happens every 7 days, and the only fix is a fresh Connect click
+    (plus publishing the app so it stops recurring)."""
+    error = _get_setting("gdrive_last_error") or ""
+    return {
+        "connected": bool(get_google_oauth_refresh_token()),
+        "last_ok_at": _get_setting("gdrive_last_ok_at"),
+        "error": error,
+        "error_at": _get_setting("gdrive_last_error_at") if error else None,
+        "needs_reconnect": "invalid_grant" in error or "unauthorized_client" in error,
+        "folder_name": google_drive_api.BACKUP_FOLDER_NAME,
+    }
+
+
 def get_backup_status() -> dict:
     onedrive = os.environ.get("OneDriveConsumer") or os.environ.get("OneDrive")
     gdrive = get_google_drive_dir()
@@ -1162,6 +1221,7 @@ def get_backup_status() -> dict:
         "last_backup_destinations": _last_backup.get("destinations"),
         "google_drive_api_available": google_drive_api.is_configured(),
         "google_drive_api_connected": bool(get_google_oauth_refresh_token()),
+        "google_drive_api_health": get_google_drive_health(),
     }
 
 

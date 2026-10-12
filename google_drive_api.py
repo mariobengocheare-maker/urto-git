@@ -35,6 +35,12 @@ DRIVE_API = "https://www.googleapis.com/drive/v3"
 UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/calendar.events"
+# The app's own backup folder in Mario's Drive. Deliberately NOT "URTO
+# Backups": the drive.file scope can't see a folder some other program
+# made, and desktop's old Google-Drive-for-Desktop mirror already owns a
+# folder by that name, so the two showed up side by side as "URTO Backups"
+# and "URTO Backups (1)" and Mario was watching the wrong (dead) one.
+BACKUP_FOLDER_NAME = "URTO Cloud Backup"
 
 CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
@@ -164,6 +170,15 @@ def list_files_in_folder(access_token: str, folder_id: str) -> list:
         {"id": f["id"], "name": f["name"], "is_folder": f.get("mimeType") == "application/vnd.google-apps.folder"}
         for f in res.json().get("files", [])
     ]
+
+
+def rename_file(access_token: str, file_id: str, new_name: str):
+    res = requests.patch(
+        f"{DRIVE_API}/files/{file_id}", headers=_headers(access_token),
+        json={"name": new_name}, timeout=20,
+    )
+    res.raise_for_status()
+    return res.json()
 
 
 def delete_file(access_token: str, file_id: str):

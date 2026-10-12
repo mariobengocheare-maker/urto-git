@@ -1582,7 +1582,7 @@
     </div>
     {% endif %}
     <div id="gdriveApiConnectRow" style="display:none">
-      <span>Connect your real Google Drive so backups reach it instantly, even from your phone with your desktop off:</span>
+      <span id="gdriveApiConnectText">Connect your real Google Drive so backups reach it instantly, even from your phone with your desktop off:</span>
       <a href="{{ hosted_base_url|default('', true) }}/admin/google_auth"><button class="ghost small" type="button">Connect Google Drive</button></a>
     </div>
   </div>
@@ -4034,14 +4034,36 @@ async function refreshBackupStatus() {
     const s = await res.json();
     backupStatusText.innerHTML = `<span class="ok">●</span> Last backup: ${formatBackupTime(s.last_backup_at)}`;
     const chip = (label, on) => `<span class="${on ? 'ok' : 'warn'}">${on ? '●' : '○'} ${label}</span>`;
-    backupDestinations.innerHTML = [
-      HOSTED ? '' : chip('OneDrive', s.onedrive_detected),
-      HOSTED ? '' : chip('Google Drive (local folder)', s.google_drive_detected),
-      s.google_drive_api_available ? chip('Google Drive (real)', s.google_drive_api_connected) : '',
-      chip('Local', true),
-    ].join('');
-    if (gdriveSetupRow) gdriveSetupRow.style.display = s.google_drive_detected ? 'none' : 'flex';
-    gdriveApiConnectRow.style.display = (s.google_drive_api_available && !s.google_drive_api_connected) ? 'flex' : 'none';
+    // Since build order #71/#176 every device reads this from the one
+    // server on Render, and the PC no longer writes to OneDrive / Google
+    // Drive for Desktop -- the old "OneDrive" / "Google Drive (local
+    // folder)" chips and the paste-a-folder-path row only caused confusion.
+    const h = s.google_drive_api_health || {};
+    let driveChip = '';
+    if (s.google_drive_api_available) {
+      if (!s.google_drive_api_connected) {
+        driveChip = chip('Google Drive: not connected', false);
+      } else if (h.error) {
+        driveChip = `<span class="warn" title="${escapeHtml(h.error)}">⚠ Google Drive backup failing${h.last_ok_at ? ` — last good copy ${escapeHtml(formatBackupTime(h.last_ok_at))}` : ''}</span>`;
+      } else {
+        driveChip = chip(`Google Drive (“${escapeHtml(h.folder_name || 'URTO Cloud Backup')}” folder): backed up ${escapeHtml(formatBackupTime(h.last_ok_at))}`, !!h.last_ok_at);
+      }
+    }
+    backupDestinations.innerHTML = [driveChip, chip('Render disk', true)].join('');
+    if (gdriveSetupRow) gdriveSetupRow.style.display = 'none';
+    const needsConnect = s.google_drive_api_available && (!s.google_drive_api_connected || h.error);
+    gdriveApiConnectRow.style.display = needsConnect ? 'flex' : 'none';
+    const connectText = document.getElementById('gdriveApiConnectText');
+    const connectBtn = gdriveApiConnectRow.querySelector('button');
+    if (s.google_drive_api_connected && h.error) {
+      connectText.textContent = h.needs_reconnect
+        ? 'Google disconnected URTO from your Drive, so backups stopped. Reconnect (one click):'
+        : `Google Drive backup error: ${h.error.slice(0, 160)} — reconnecting usually fixes it:`;
+      connectBtn.textContent = 'Reconnect Google Drive';
+    } else {
+      connectText.textContent = 'Connect your real Google Drive so backups reach it instantly, even from your phone with your desktop off:';
+      connectBtn.textContent = 'Connect Google Drive';
+    }
   } catch (e) {
     backupStatusText.textContent = 'Backup status unavailable';
   }
@@ -10073,6 +10095,11 @@ themeAudio.addEventListener('pause', () => {
   themeToggleBtn.textContent = '🎵 Play Theme';
   themeToggleBtn.classList.remove('playing');
 });
+
+// The hosted app opens straight onto the CRM tab without going through
+// showTopTab(), so the backup status bar (incl. the Google Drive health
+// chip) stayed blank until a tab switch. Fill it once at startup.
+if (HOSTED) { try { refreshBackupStatus(); } catch (e) {} }
 
 </script>
 
