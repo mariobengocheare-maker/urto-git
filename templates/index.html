@@ -1203,6 +1203,29 @@
     .theme-toggle-btn { bottom: 12px; right: 12px; padding: 8px 13px; font-size: .74rem; }
   }
 
+  /* Background Sunbiz LLC-owner resolution: a corner progress pill that
+     stays visible on every tab while the modal is minimized. */
+  .bg-task-pill {
+    position: fixed; bottom: 18px; left: 18px; z-index: 60;
+    display: none; align-items: center; gap: 10px;
+    background: rgba(15,22,38,.88); color: var(--text);
+    border: 1px solid rgba(201,162,39,.4); border-radius: 14px;
+    padding: 10px 14px; font-size: .8rem; font-weight: 600; cursor: pointer;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 6px 18px rgba(0,0,0,.4); max-width: calc(100vw - 36px);
+  }
+  .bg-task-pill:hover { border-color: var(--gold); }
+  .bg-task-pill.ready { border-color: var(--gold); color: var(--gold);
+    box-shadow: 0 6px 18px rgba(0,0,0,.4), 0 0 16px rgba(201,162,39,.35); }
+  .bg-task-pill .bt-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bt-track { width: 110px; height: 6px; border-radius: 999px; background: rgba(255,255,255,.12); overflow: hidden; flex: 0 0 auto; }
+  .bt-fill { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg, #b8901f, #f0d27a); transition: width .4s ease; }
+  .entity-resolve-track { width: 100%; height: 8px; border-radius: 999px; background: rgba(255,255,255,.1); overflow: hidden; margin: 2px 0 14px; }
+  @media (max-width: 640px) {
+    .bg-task-pill { bottom: 12px; left: 12px; padding: 8px 11px; font-size: .74rem; max-width: calc(100vw - 150px); }
+    .bt-track { width: 60px; }
+  }
+
   /* ---- Mobile layout ---- */
   @media (max-width: 640px) {
     .topbar { padding: calc(14px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 14px calc(16px + env(safe-area-inset-left)); }
@@ -1394,6 +1417,10 @@
 
 <audio id="themeAudio" src="{{ url_for('static', filename='audio/theme.mp3') }}" loop preload="none"></audio>
 <button id="themeToggleBtn" class="theme-toggle-btn" type="button" title="Play background theme">🎵 Play Theme</button>
+<div id="entityResolvePill" class="bg-task-pill" role="button" title="Open the Sunbiz lookup">
+  <span class="bt-text" id="entityResolvePillText">🏢 Finding LLC owners…</span>
+  <span class="bt-track"><span class="bt-fill" id="entityResolvePillFill"></span></span>
+</div>
 
 <div class="topbar">
   <div class="brand">
@@ -2977,13 +3004,14 @@
   <div class="modal" style="max-width:700px">
     <div class="modal-head">
       <h2>Resolving businesses on Sunbiz…</h2>
-      <button class="modal-close" id="entityResolveCloseBtn">&times;</button>
+      <button class="modal-close" id="entityResolveCloseBtn" title="Minimize — keeps running">&times;</button>
     </div>
     <p class="sub" style="margin-top:-8px;">
       Looking up the real person behind each LLC/business-owned property before we start searching FOREWARN —
       this can take a few minutes for a large batch. This never uses up a FOREWARN search.
     </p>
     <p class="sub" id="entityResolveCount" style="font-weight:600;">Starting…</p>
+    <div class="entity-resolve-track"><div class="bt-fill" id="entityResolveFill"></div></div>
     <div id="entityResolveList" class="cl-member-box" style="max-height:380px; padding:0; display:none;">
       <table class="name-preview-table">
         <thead><tr><th>Business</th><th>Resolved to</th><th>Zip / Address</th></tr></thead>
@@ -2992,6 +3020,7 @@
     </div>
     <div class="modal-actions">
       <button type="button" class="ghost" id="entityResolveCancelBtn">Cancel</button>
+      <button type="button" class="ghost" id="entityResolveMinimizeBtn">➖ Minimize — keep using URTO</button>
       <button type="button" id="entityResolveConfirmBtn" style="display:none;">✅ Looks good — Start Lookup</button>
     </div>
   </div>
@@ -3263,10 +3292,42 @@ const entityResolveCancelBtn = document.getElementById('entityResolveCancelBtn')
 let entityResolveJobId = null;
 let entityResolvePollTimer = null;
 let entityResolvePendingSwaps = [];
+// The file this resolution belongs to, captured when it starts, so dropping
+// a different file while it runs minimized can't change what gets uploaded.
+let entityResolveFile = null;
+let entityResolveDone = false;
+const entityResolveFill = document.getElementById('entityResolveFill');
+const entityResolvePill = document.getElementById('entityResolvePill');
+const entityResolvePillText = document.getElementById('entityResolvePillText');
+const entityResolvePillFill = document.getElementById('entityResolvePillFill');
+
+// Minimizing only hides the box -- the Sunbiz work runs on the server and
+// polling keeps going, so Mario can use the rest of URTO while it finishes.
+function minimizeEntityResolve() {
+  entityResolveOverlay.classList.remove('show');
+  entityResolvePill.style.display = 'flex';
+}
+function reopenEntityResolve() {
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  entityResolvePill.style.display = 'none';
+  entityResolveOverlay.classList.add('show');
+}
+function updateEntityResolveProgress(processed, total, done) {
+  const pct = total ? Math.round((processed / total) * 100) : 0;
+  entityResolveFill.style.width = pct + '%';
+  entityResolvePillFill.style.width = pct + '%';
+  entityResolvePill.classList.toggle('ready', !!done);
+  entityResolvePillText.textContent = done
+    ? `✅ LLC owners ready — review`
+    : `🏢 Finding LLC owners ${processed}/${total}`;
+}
 
 function closeEntityResolve() {
   if (entityResolvePollTimer) { clearInterval(entityResolvePollTimer); entityResolvePollTimer = null; }
   entityResolveOverlay.classList.remove('show');
+  entityResolvePill.style.display = 'none';
+  entityResolveJobId = null;
+  entityResolveDone = false;
   startBtn.disabled = false;
 }
 
@@ -3303,9 +3364,12 @@ async function pollEntityResolve() {
     entityResolveList.style.display = 'block';
     renderEntityResolveResults(data.results);
   }
-  if (data.status === 'done' || data.status === 'stopped' || data.status === 'error') {
+  const finished = data.status === 'done' || data.status === 'stopped' || data.status === 'error';
+  updateEntityResolveProgress(data.processed || 0, data.total || 0, finished);
+  if (finished) {
     clearInterval(entityResolvePollTimer);
     entityResolvePollTimer = null;
+    entityResolveDone = true;
     entityResolveCount.textContent = data.status === 'error'
       ? `Resolved ${data.processed} of ${data.total} before hitting an error (${data.error || 'unknown'}) — you can still continue, anything unresolved will show as SKIPPED.`
       : `Resolved ${data.processed} of ${data.total}. Do these look right?`;
@@ -3317,6 +3381,8 @@ async function pollEntityResolve() {
 
 async function startEntityResolve(swappedIndices) {
   entityResolvePendingSwaps = swappedIndices;
+  entityResolveFile = selectedFile;
+  entityResolveDone = false;
   const form = new FormData();
   form.append('file', selectedFile);
   let data;
@@ -3340,26 +3406,43 @@ async function startEntityResolve(swappedIndices) {
   entityResolveList.style.display = 'none';
   entityResolveBody.innerHTML = '';
   entityResolveConfirmBtn.style.display = 'none';
-  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
-  entityResolveOverlay.classList.add('show');
+  updateEntityResolveProgress(0, data.total, false);
+  reopenEntityResolve();
   pollEntityResolve();
   entityResolvePollTimer = setInterval(pollEntityResolve, 1500);
 }
 
 entityResolveCancelBtn.addEventListener('click', async () => {
+  if (entityResolveJobId && !entityResolveDone &&
+      !confirm('Stop looking up the LLC owners? Anything not finished yet will be lost.')) return;
   if (entityResolveJobId) {
     try { await fetch(`/api/resolve_entities/${entityResolveJobId}/stop`, { method: 'POST' }); } catch (e) {}
   }
   closeEntityResolve();
 });
-document.getElementById('entityResolveCloseBtn').addEventListener('click', () => entityResolveCancelBtn.click());
+document.getElementById('entityResolveCloseBtn').addEventListener('click', minimizeEntityResolve);
+document.getElementById('entityResolveMinimizeBtn').addEventListener('click', minimizeEntityResolve);
+// Clicking the dimmed background around the box minimizes it too.
+entityResolveOverlay.addEventListener('click', (e) => {
+  if (e.target === entityResolveOverlay) minimizeEntityResolve();
+});
+entityResolvePill.addEventListener('click', reopenEntityResolve);
 entityResolveConfirmBtn.addEventListener('click', () => {
   entityResolveOverlay.classList.remove('show');
-  actuallyStartUpload(entityResolvePendingSwaps, entityResolveJobId);
+  entityResolvePill.style.display = 'none';
+  const jobIdToUse = entityResolveJobId;
+  entityResolveJobId = null;
+  entityResolveDone = false;
+  actuallyStartUpload(entityResolvePendingSwaps, jobIdToUse, entityResolveFile);
 });
 
 startBtn.addEventListener('click', async () => {
   if (!selectedFile) return;
+  if (entityResolveJobId) {
+    alert('URTO is still finding the LLC owners for your last file. Finish or cancel that one first.');
+    reopenEntityResolve();
+    return;
+  }
   startBtn.disabled = true;
   errorBox.style.display = 'none';
   namePreviewSwapped = new Set();
@@ -3383,9 +3466,9 @@ startBtn.addEventListener('click', async () => {
   namePreviewOverlay.classList.add('show');
 });
 
-async function actuallyStartUpload(swappedIndices, entityResolveJobId) {
+async function actuallyStartUpload(swappedIndices, entityResolveJobId, file) {
   const form = new FormData();
-  form.append('file', selectedFile);
+  form.append('file', file || selectedFile);
   form.append('delay', delayInput.value);
   form.append('swapped_indices', JSON.stringify(swappedIndices));
   if (entityResolveJobId) form.append('entity_resolve_job_id', entityResolveJobId);
