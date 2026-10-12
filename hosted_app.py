@@ -37,7 +37,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.32.0-hosted"
+APP_VERSION = "1.33.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -97,7 +97,8 @@ _AUTH_CONFIGURED = not _MISSING_AUTH_VARS
 # Routes reachable without a session -- just the login page itself and the
 # handful of static PWA files a not-yet-logged-in browser/service worker
 # needs to even function. None of these expose any real client data.
-_PUBLIC_ENDPOINTS = {"login", "manifest", "service_worker", "static", "notification_briefing_public"}
+_PUBLIC_ENDPOINTS = {"login", "manifest", "service_worker", "static", "notification_briefing_public",
+                     "public_home", "public_privacy"}
 
 
 @app.before_request
@@ -135,6 +136,22 @@ def logout():
 
 
 # ===================== Pages =====================
+
+# Public homepage + privacy policy (build order #183). Google requires both
+# URLs before an OAuth app can leave "Testing" mode -- and Testing mode
+# expires the Google Drive connection every 7 days. No client data on either.
+PUBLIC_CONTACT_EMAIL = "mariobengocheare@gmail.com"
+
+
+@app.route("/home")
+def public_home():
+    return render_template("public_page.html", page="home", contact_email=PUBLIC_CONTACT_EMAIL)
+
+
+@app.route("/privacy")
+def public_privacy():
+    return render_template("public_page.html", page="privacy", contact_email=PUBLIC_CONTACT_EMAIL)
+
 
 @app.route("/")
 def index():

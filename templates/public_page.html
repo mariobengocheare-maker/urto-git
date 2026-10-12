@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ 'URTO — Privacy Policy' if page == 'privacy' else 'URTO' }}</title>
+<link rel="icon" href="/static/urto_icon_180.png">
+<style>
+  :root {
+    color-scheme: dark;
+    --gold: #c9a227;
+    --bg: #0c1220;
+    --card-bg: #131c2e;
+    --text: #e7e9ee;
+    --text-secondary: #97a2b8;
+    --border: #263349;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: radial-gradient(ellipse at top, #16233c 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+    padding: 32px 16px;
+  }
+  .card {
+    max-width: 720px;
+    margin: 0 auto;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 24px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .brand img { width: 44px; height: 44px; border-radius: 10px; }
+  .brand .name { font-size: 1.5rem; font-weight: 700; letter-spacing: .04em; }
+  .brand .tag { font-size: .72rem; color: var(--gold); letter-spacing: .14em; text-transform: uppercase; }
+  h1 { font-size: 1.35rem; margin: 0 0 12px; }
+  h2 { font-size: 1.05rem; margin: 22px 0 6px; color: var(--gold); }
+  p, li { color: var(--text); }
+  .muted { color: var(--text-secondary); font-size: .9rem; }
+  a { color: var(--gold); }
+  ul { padding-left: 20px; }
+  .links { margin-top: 24px; display: flex; gap: 16px; flex-wrap: wrap; font-size: .92rem; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <img src="/static/urto_icon_180.png" alt="">
+      <div>
+        <div class="name">URTO</div>
+        <div class="tag">Ultimate Realtor Tool</div>
+      </div>
+    </div>
+
+    {% if page == 'privacy' %}
+    <h1>Privacy Policy</h1>
+    <p class="muted">Effective October 12, 2026</p>
+
+    <p>URTO is a private tool built for and used only by Mario Bengochea, a real estate agent in Miami-Dade County, Florida. It is not offered to the public, and no one else can sign up for or sign in to it.</p>
+
+    <h2>What URTO stores</h2>
+    <p>URTO stores the real estate client records Mario enters himself: names, phone numbers, email addresses, property addresses, notes, follow-up dates, calendar items, transactions and commission records. This information is kept in URTO's own database and is only accessible after signing in with Mario's password.</p>
+
+    <h2>How URTO uses Google</h2>
+    <p>With Mario's permission, URTO connects to his own Google account for two purposes:</p>
+    <ul>
+      <li><strong>Google Drive</strong> (the <code>drive.file</code> permission): URTO saves backup copies of its own data into a single folder in Mario's Google Drive. With this permission URTO can only see and change files it created itself. It cannot read any other files in the Drive.</li>
+      <li><strong>Google Calendar</strong> (the <code>calendar.events</code> permission): when Mario schedules a virtual meeting in URTO, URTO creates that one calendar event with a Google Meet link and invites the client email Mario entered.</li>
+    </ul>
+    <p>Information received from Google APIs is used only to provide these two features to Mario. It is not sold, shared with anyone else, used for advertising, or used to train any AI or machine-learning model. URTO's use of information received from Google APIs follows the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including its Limited Use requirements.</p>
+
+    <h2>Sharing</h2>
+    <p>URTO does not sell or share any personal information. Data leaves URTO only when Mario himself sends it, for example to his own Google Drive backup or to a client he invites to a meeting.</p>
+
+    <h2>Removing access and data</h2>
+    <p>Google access can be removed at any time from <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>. Backup files in Google Drive can be deleted directly from Drive. Client records can be deleted inside URTO.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about this policy: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
+    {% else %}
+    <h1>A private CRM for one real estate agent</h1>
+    <p>URTO is a private tool built for Mario Bengochea, a real estate agent in Miami-Dade County, Florida. It keeps his client list, follow-up schedule, calendar, transactions and commissions in one place, and backs everything up to his own Google Drive.</p>
+    <p>URTO is not offered to the public. Signing in requires Mario's own password.</p>
+    <p class="muted">Contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
+    {% endif %}
+
+    <div class="links">
+      <a href="/home">Home</a>
+      <a href="/privacy">Privacy Policy</a>
+      <a href="/login">Sign in</a>
+    </div>
+  </div>
+</body>
+</html>
