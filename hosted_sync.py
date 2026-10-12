@@ -255,3 +255,34 @@ def get_json(path: str):
         return res.json()
     except ValueError:
         raise HostedUnreachableError(f"Hosted server returned a non-JSON response for {path}.")
+
+
+def post_json(path: str, payload: dict):
+    """A plain authenticated JSON POST against the hosted server, for
+    server-side code in app.py (e.g. pushing Owner Lookup results into the
+    "Last Skiptraced clients" folder, build order #182). Same session/lock/
+    re-login handling as get_json(); raises HostedUnreachableError on any
+    failure so callers can just retry later."""
+    config = load_config()
+    if not config:
+        raise HostedUnreachableError("Not connected to URTO Cloud yet.")
+
+    url = config["base_url"] + path
+    try:
+        with _session_lock:
+            _ensure_logged_in(config)
+            res = _session.post(url, json=payload, timeout=60, allow_redirects=False)
+            if res.status_code in (302, 303) and "/login" in res.headers.get("Location", ""):
+                global _logged_in_url
+                _logged_in_url = None
+                _ensure_logged_in(config)
+                res = _session.post(url, json=payload, timeout=60, allow_redirects=False)
+    except requests.RequestException:
+        raise HostedUnreachableError("Can't reach URTO Cloud right now — check your internet connection.")
+
+    if res.status_code != 200:
+        raise HostedUnreachableError(f"Hosted server returned status {res.status_code} for {path}.")
+    try:
+        return res.json()
+    except ValueError:
+        raise HostedUnreachableError(f"Hosted server returned a non-JSON response for {path}.")

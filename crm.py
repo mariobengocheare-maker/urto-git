@@ -733,6 +733,7 @@ def _write_full_data_export(backup_dir: Path):
         "waterfall_items": [dict(r) for r in conn.execute("SELECT * FROM waterfall_items ORDER BY sort_order, id").fetchall()],
         "showing_days": [dict(r) for r in conn.execute("SELECT * FROM showing_days ORDER BY id").fetchall()],
         "showing_stops": [dict(r) for r in conn.execute("SELECT * FROM showing_stops ORDER BY id").fetchall()],
+        "skiptrace_results": [dict(r) for r in conn.execute("SELECT * FROM skiptrace_results ORDER BY id").fetchall()],
         "activity_log": [dict(r) for r in conn.execute("SELECT * FROM activity_log ORDER BY id").fetchall()],
     }
     conn.close()
@@ -786,7 +787,7 @@ def import_full_data_export(data: dict) -> dict:
         "clients", "notes", "call_log", "contact_lists", "contact_list_members", "cre_units",
         "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
         "lookup_stats", "text_presets", "commission_entries", "eos_rocks", "waterfall_items",
-        "showing_days", "showing_stops", "activity_log",
+        "showing_days", "showing_stops", "skiptrace_results", "activity_log",
     ]
     counts = {}
     try:
@@ -1696,6 +1697,35 @@ def init_db():
             at TEXT NOT NULL,
             action TEXT NOT NULL,
             detail TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    # "Last Skiptraced clients" (build order #182): every Owner Lookup result
+    # row, kept until Mario saves it (to the CRM / a Contact List) or deletes
+    # it -- so closing URTO mid-batch never throws away paid-for lookups.
+    # Desktop pushes rows here from its per-job result CSVs (see app.py's
+    # _skiptrace_sync_*); (batch_id, row_index) is unique so a re-push is a
+    # no-op, and saved/deleted rows are kept as tombstones (state != 'pending')
+    # so a re-push can never bring them back.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS skiptrace_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT NOT NULL,
+            batch_name TEXT NOT NULL DEFAULT '',
+            batch_started_at TEXT NOT NULL DEFAULT '',
+            row_index INTEGER NOT NULL,
+            owner TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL DEFAULT '',
+            city TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL DEFAULT '',
+            zip TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            input_owner_name TEXT NOT NULL DEFAULT '',
+            state_flag TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            resolved_at TEXT,
+            UNIQUE (batch_id, row_index)
         )
     """)
     conn.execute("""
@@ -3944,6 +3974,135 @@ def delete_text_preset(preset_id: int):
     conn.commit()
     conn.close()
     on_data_changed("text preset removed")
+
+
+# ---------------------------------------------------------------------------
+# Last Skiptraced clients (build order #182)
+# ---------------------------------------------------------------------------
+
+SKIPTRACE_FIELDS = ("owner", "address", "city", "state", "zip", "phone", "status", "notes", "input_owner_name")
+
+
+def add_skiptrace_rows(batch_id: str, batch_name: str, batch_started_at: str, rows: list) -> dict:
+    """Stores Owner Lookup result rows. `rows` items carry `row_index` plus the
+    OUTPUT_FIELDS columns. Idempotent: a (batch_id, row_index) already stored
+    -- pending, saved or deleted -- is left exactly as it is."""
+    batch_id = (batch_id or "").strip()
+    if not batch_id:
+        raise ValueError("batch_id is required")
+    now = _now().isoformat(timespec="seconds")
+    conn = get_conn()
+    added = 0
+    for r in rows or []:
+        try:
+            idx = int(r.get("row_index"))
+        except (TypeError, ValueError):
+            continue
+        vals = [str(r.get(f) or "").strip() for f in SKIPTRACE_FIELDS]
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO skiptrace_results (batch_id, batch_name, batch_started_at, row_index, "
+            + ", ".join(SKIPTRACE_FIELDS) + ", state_flag, created_at) VALUES (?, ?, ?, ?, "
+            + ", ".join("?" for _ in SKIPTRACE_FIELDS) + ", 'pending', ?)",
+            [batch_id, batch_name or "", batch_started_at or "", idx] + vals + [now],
+        )
+        added += cur.rowcount
+    conn.commit()
+    conn.close()
+    if added:
+        on_data_changed("skip trace results saved", f"{added} row(s) from {batch_name or batch_id}")
+    return {"added": added}
+
+
+def list_skiptrace_results(include_all: bool = False) -> dict:
+    """Pending rows grouped by batch, newest batch first. include_all=False
+    (the default) leaves out SKIPPED rows, which never cost a lookup."""
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM skiptrace_results WHERE state_flag = 'pending' ORDER BY batch_started_at DESC, batch_id, row_index"
+    ).fetchall()]
+    conn.close()
+    batches = {}
+    order = []
+    counts = {"pending": 0, "with_phone": 0}
+    for r in rows:
+        if not include_all and r["status"] == "SKIPPED":
+            continue
+        counts["pending"] += 1
+        if r["phone"]:
+            counts["with_phone"] += 1
+        b = batches.get(r["batch_id"])
+        if not b:
+            b = {"batch_id": r["batch_id"], "batch_name": r["batch_name"], "started_at": r["batch_started_at"], "rows": []}
+            batches[r["batch_id"]] = b
+            order.append(r["batch_id"])
+        b["rows"].append(r)
+    return {"batches": [batches[k] for k in order], **counts}
+
+
+def resolve_skiptrace_results(ids: list, action: str) -> dict:
+    """Marks rows 'saved' or 'deleted' -- both take them out of the folder.
+    Rows stay as tombstones so a later re-push from desktop can't revive them."""
+    if action not in ("saved", "deleted"):
+        raise ValueError("action must be 'saved' or 'deleted'")
+    clean = []
+    for i in ids or []:
+        try:
+            clean.append(int(i))
+        except (TypeError, ValueError):
+            pass
+    if not clean:
+        return {"updated": 0}
+    now = _now().isoformat(timespec="seconds")
+    conn = get_conn()
+    q = ",".join("?" for _ in clean)
+    cur = conn.execute(
+        f"UPDATE skiptrace_results SET state_flag = ?, resolved_at = ? WHERE state_flag = 'pending' AND id IN ({q})",
+        [action, now] + clean,
+    )
+    updated = cur.rowcount
+    conn.commit()
+    conn.close()
+    if updated:
+        on_data_changed(f"skip trace results {action}", f"{updated} row(s)")
+    return {"updated": updated}
+
+
+def resolve_skiptrace_batch_rows(batch_id: str, row_indices: list, action: str) -> dict:
+    """Same as resolve_skiptrace_results, but addressed by (batch_id,
+    row_index) -- used by Owner Lookup's own "Retain Found Numbers" button,
+    which only knows the live job's id and row positions. Writes a tombstone
+    for any row desktop hasn't pushed up yet, so that later push is ignored
+    instead of landing in the folder as if it were never saved."""
+    if action not in ("saved", "deleted"):
+        raise ValueError("action must be 'saved' or 'deleted'")
+    batch_id = (batch_id or "").strip()
+    idxs = []
+    for i in row_indices or []:
+        try:
+            idxs.append(int(i))
+        except (TypeError, ValueError):
+            pass
+    if not batch_id or not idxs:
+        return {"updated": 0}
+    now = _now().isoformat(timespec="seconds")
+    conn = get_conn()
+    updated = 0
+    for idx in idxs:
+        conn.execute(
+            "INSERT OR IGNORE INTO skiptrace_results (batch_id, row_index, state_flag, created_at, resolved_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (batch_id, idx, action, now, now),
+        )
+        cur = conn.execute(
+            "UPDATE skiptrace_results SET state_flag = ?, resolved_at = ? "
+            "WHERE batch_id = ? AND row_index = ? AND state_flag = 'pending'",
+            (action, now, batch_id, idx),
+        )
+        updated += cur.rowcount
+    conn.commit()
+    conn.close()
+    on_data_changed(f"skip trace results {action}", f"{len(idxs)} row(s)")
+    return {"updated": updated}
 
 
 def save_push_subscription(endpoint: str, p256dh: str, auth: str):

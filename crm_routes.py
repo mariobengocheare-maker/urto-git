@@ -546,6 +546,46 @@ def remove_text_preset(preset_id):
     return jsonify({"ok": True})
 
 
+@crm_bp.route("/api/crm/skiptrace_results", methods=["GET"])
+def crm_skiptrace_list():
+    return jsonify(crm.list_skiptrace_results(include_all=request.args.get("all") == "1"))
+
+
+@crm_bp.route("/api/crm/skiptrace_results", methods=["POST"])
+def crm_skiptrace_add():
+    data = request.get_json(force=True) or {}
+    try:
+        result = crm.add_skiptrace_rows(
+            data.get("batch_id", ""), data.get("batch_name", ""),
+            data.get("batch_started_at", ""), data.get("rows") or [],
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result)
+
+
+@crm_bp.route("/api/crm/skiptrace_results/resolve", methods=["POST"])
+def crm_skiptrace_resolve():
+    data = request.get_json(force=True) or {}
+    try:
+        result = crm.resolve_skiptrace_results(data.get("ids") or [], data.get("action", ""))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result)
+
+
+@crm_bp.route("/api/crm/skiptrace_results/resolve_batch", methods=["POST"])
+def crm_skiptrace_resolve_batch():
+    data = request.get_json(force=True) or {}
+    try:
+        result = crm.resolve_skiptrace_batch_rows(
+            data.get("batch_id", ""), data.get("row_indices") or [], data.get("action", ""),
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result)
+
+
 @crm_bp.route("/api/crm/calendar")
 def crm_calendar():
     try:

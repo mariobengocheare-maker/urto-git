@@ -545,6 +545,19 @@
   .crm-subtabs { display: flex; gap: 8px; margin-bottom: 18px; }
   .crm-subtabs button { background: rgba(19,28,46,.5); color: var(--text-secondary); border: 1px solid var(--border); }
   .crm-subtabs button.active { background: linear-gradient(180deg, var(--navy-light), var(--navy)); color: #fff; border-color: var(--gold); box-shadow: 0 0 16px rgba(201,162,39,.25); }
+  .st-toolbar { align-items: center; flex-wrap: wrap; }
+  .st-filter { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: .9rem; margin-right: auto; }
+  .st-batch { margin-bottom: 16px; }
+  .st-batch-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .st-batch-head h3 { margin: 0; font-size: 1rem; flex: 1; min-width: 180px; }
+  .st-batch-head .st-meta { color: var(--text-secondary); font-size: .82rem; font-weight: 400; display: block; margin-top: 2px; }
+  .st-row { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: start; padding: 9px 4px; border-top: 1px solid var(--border); }
+  .st-row:first-of-type { border-top: none; }
+  .st-row .st-name { font-weight: 600; }
+  .st-row .st-addr, .st-row .st-notes { color: var(--text-secondary); font-size: .85rem; overflow-wrap: anywhere; }
+  .st-row .st-notes { font-size: .78rem; margin-top: 3px; }
+  .st-row .st-phone { font-weight: 600; white-space: nowrap; text-align: right; }
+  .st-row .st-phone .status-pill { margin-top: 4px; }
 
   .client-list { display: grid; gap: 12px; margin-top: 18px; }
   .client-card {
@@ -1476,6 +1489,10 @@
     <div class="lookup-account-toggle" id="lookupAccountToggle"></div>
   </div>
 
+  <div class="row" style="margin-top:0">
+    <button class="ghost" id="openSkiptraceFolderBtn" type="button">📂 Last Skiptraced clients <span id="skiptraceFolderCount"></span></button>
+  </div>
+
   <div class="card">
     <div id="dropzone" class="dropzone">
       <p><strong>Drag & drop your CSV here</strong></p>
@@ -1591,6 +1608,18 @@
     <button class="active" id="crmTabClientsBtn">Clients</button>
     <button id="crmTabCalendarBtn">Calendar</button>
     <button id="crmTabListsBtn">Contact Lists</button>
+    <button id="crmTabSkiptraceBtn">📂 Last Skiptraced</button>
+  </div>
+
+  <div id="crmSkiptraceView" style="display:none">
+    <p class="sub" style="margin-top:0">Every Owner Lookup result lands here the moment it's found, even if URTO gets closed partway through. It stays here until you save it to your CRM or delete it.</p>
+    <div class="row st-toolbar" style="margin-top:0">
+      <label class="st-filter"><input type="checkbox" id="stOnlyPhones" checked> Only show found numbers</label>
+      <button id="stSaveSelectedBtn" type="button">💾 Save Selected to CRM</button>
+      <button class="ghost" id="stDeleteSelectedBtn" type="button">🗑 Delete Selected</button>
+    </div>
+    <p class="sub" id="stSummary"></p>
+    <div id="stBatches"></div>
   </div>
 
   <div id="crmClientsView">
@@ -3604,15 +3633,17 @@ async function poll() {
     loginBox.style.display = 'none';
     statusDiv.textContent = `Processing: ${data.processed} / ${data.total}`;
   } else if (data.status === 'stopped') {
-    statusDiv.textContent = `Stopped — ${data.processed} / ${data.total} processed.`;
+    statusDiv.textContent = `Stopped — ${data.processed} / ${data.total} processed. Everything found is kept in 📂 Last Skiptraced clients.`;
     stopBtn.style.display = 'none';
     startBtn.disabled = false;
     clearInterval(pollTimer);
+    setTimeout(refreshSkiptraceFolderCount, 3000);
   } else if (data.status === 'done') {
-    statusDiv.textContent = `Done — ${data.processed} / ${data.total} processed.`;
+    statusDiv.textContent = `Done — ${data.processed} / ${data.total} processed. Everything found is kept in 📂 Last Skiptraced clients.`;
     stopBtn.style.display = 'none';
     startBtn.disabled = false;
     clearInterval(pollTimer);
+    setTimeout(refreshSkiptraceFolderCount, 3000);
   } else if (data.status === 'error') {
     showError(data.error || 'Something went wrong.');
     stopBtn.style.display = 'none';
@@ -3641,18 +3672,53 @@ function renderRows(rows) {
   }
 }
 
-/* ---- Retain Found Numbers (save a skip-trace batch's FOUND rows into the
-   CRM, and optionally a Contact List) -- build order #158. Mirrors the
+document.getElementById('retainResultsBtn').addEventListener('click', async () => {
+  if (!jobId) {
+    alert('No Owner Lookup results in this session yet. Run a lookup first.');
+    return;
+  }
+  let data;
+  try {
+    const res = await fetch(`/api/status/${jobId}`);
+    data = await res.json();
+  } catch (e) {
+    alert("Couldn't reach URTO's server — try again.");
+    return;
+  }
+  const batchId = jobId;
+  const found = (data.rows || []).map((r, i) => ({ ...r, _rowIndex: i })).filter(r => r.status === 'FOUND' && r.phone);
+  if (found.length === 0) {
+    alert('No FOUND results with a phone number in the current lookup session yet.');
+    return;
+  }
+  // Saved rows also leave the "Last Skiptraced clients" folder (build order #182).
+  openRetainModal(found, async (savedRows) => {
+    try {
+      await fetch('/api/crm/skiptrace_results/resolve_batch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_id: batchId, row_indices: savedRows.map(r => r._rowIndex), action: 'saved' }),
+      });
+    } catch (e) {}
+    refreshSkiptraceFolderCount();
+  });
+});
+
+document.getElementById('openSkiptraceFolderBtn').addEventListener('click', () => {
+  showTopTab(TOP_TABS.find(t => t.key === 'crm'));
+  openSkiptraceFolder();
+});
+
+{% endif %}
+
+/* ---- Retain Found Numbers (save skip-trace rows into the CRM, and
+   optionally a Contact List) -- build order #158, generalized in #182 so the
+   "Last Skiptraced clients" folder (CRM tab, works on the phone too) uses
+   the same modal via openRetainModal(rows, onSaved). Only Owner Lookup's own
+   button handler stays inside the desktop-only guard. Mirrors the
    Dialer's "Save This List to a Contact List" flow (existing-vs-new list
    picker, phone-based dedup against the CRM before creating anyone), just
    sourced from the current Owner Lookup job's results instead of a loaded
-   dial list. Owner-Lookup-only, so this whole block MUST stay inside the
-   surrounding desktop-only Jinja guard for this script section, same as
-   the rest of Owner Lookup's own setup code just above -- referencing
-   'retainResultsBtn' (only exists in this tab's gated-out-in-hosted-mode
-   markup) from outside that guard would throw on a null element and, per
-   this file's own "one giant script tag" gotcha, silently kill every line
-   of JS after it on the hosted deployment. */
+   dial list. */
 const retainResultsOverlay = document.getElementById('retainResultsOverlay');
 const retainResultsError = document.getElementById('retainResultsError');
 const retainResultsSummary = document.getElementById('retainResultsSummary');
@@ -3668,6 +3734,7 @@ const rrNewCustomAmount = document.getElementById('rrNewCustomAmount');
 const rrNewCustomUnit = document.getElementById('rrNewCustomUnit');
 const retainResultsSubmitBtn = document.getElementById('retainResultsSubmitBtn');
 let retainResultsFound = [];
+let retainResultsOnSaved = null;
 
 function updateRrModeVisibility() {
   const isNew = document.getElementById('rrModeNew').checked;
@@ -3683,28 +3750,12 @@ rrAddToList.addEventListener('change', () => {
   rrListFields.style.display = rrAddToList.checked ? 'block' : 'none';
 });
 
-document.getElementById('retainResultsBtn').addEventListener('click', async () => {
-  if (!jobId) {
-    alert('No Owner Lookup results in this session yet. Run a lookup first.');
-    return;
-  }
-  let data;
-  try {
-    const res = await fetch(`/api/status/${jobId}`);
-    data = await res.json();
-  } catch (e) {
-    alert("Couldn't reach URTO's server — try again.");
-    return;
-  }
-  retainResultsFound = (data.rows || []).filter(r => r.status === 'FOUND' && r.phone);
-  if (retainResultsFound.length === 0) {
-    alert('No FOUND results with a phone number in the current lookup session yet.');
-    return;
-  }
-
+async function openRetainModal(rows, onSaved) {
+  retainResultsFound = rows;
+  retainResultsOnSaved = onSaved || null;
   retainResultsError.style.display = 'none';
   retainResultsError.textContent = '';
-  retainResultsSummary.textContent = `${retainResultsFound.length} found number${retainResultsFound.length === 1 ? '' : 's'} will be saved to your CRM.`;
+  retainResultsSummary.textContent = `${rows.length} contact${rows.length === 1 ? '' : 's'} will be saved to your CRM.`;
   rrAddToList.checked = false;
   rrListFields.style.display = 'none';
   document.getElementById('rrModeExisting').checked = true;
@@ -3723,7 +3774,7 @@ document.getElementById('retainResultsBtn').addEventListener('click', async () =
     rrExistingSelect.innerHTML = '<option value="">Could not load lists</option>';
   }
   retainResultsOverlay.classList.add('show');
-});
+}
 
 document.getElementById('retainResultsCloseBtn').addEventListener('click', () => retainResultsOverlay.classList.remove('show'));
 document.getElementById('retainResultsCancelBtn').addEventListener('click', () => retainResultsOverlay.classList.remove('show'));
@@ -3785,10 +3836,12 @@ retainResultsSubmitBtn.addEventListener('click', async () => {
     }
 
     const clientIds = [];
+    const savedRows = [];
     for (const r of retainResultsFound) {
       const key = normalizePhone(r.phone);
       if (key && byPhone.has(key)) {
         clientIds.push(byPhone.get(key));
+        savedRows.push(r);
         continue;
       }
       const res = await fetch('/api/crm/clients', {
@@ -3803,6 +3856,7 @@ retainResultsSubmitBtn.addEventListener('click', async () => {
       if (res.ok) {
         const c = await res.json();
         clientIds.push(c.id);
+        savedRows.push(r);
         if (key) byPhone.set(key, c.id);
       } else if (res.status === 409) {
         // Another row in this same batch already claimed this phone number
@@ -3810,7 +3864,7 @@ retainResultsSubmitBtn.addEventListener('click', async () => {
         // different cached name) -- reuse that client rather than dropping
         // this row entirely.
         const existing = crmClients.find(c => normalizePhone(c.phone) === key);
-        if (existing) clientIds.push(existing.id);
+        if (existing) { clientIds.push(existing.id); savedRows.push(r); }
       }
     }
 
@@ -3828,6 +3882,7 @@ retainResultsSubmitBtn.addEventListener('click', async () => {
     }
 
     retainResultsOverlay.classList.remove('show');
+    if (retainResultsOnSaved) await retainResultsOnSaved(savedRows);
     alert(`Saved ${uniqueClientIds.length} contact${uniqueClientIds.length === 1 ? '' : 's'} to your CRM` + (wantsList && listId ? ' and added to the list.' : '.'));
   } catch (e) {
     retainResultsError.textContent = "Couldn't reach URTO's server — try again.";
@@ -3837,7 +3892,7 @@ retainResultsSubmitBtn.addEventListener('click', async () => {
     retainResultsSubmitBtn.textContent = 'Save Found Numbers';
   }
 });
-{% endif %}
+
 
 function escapeHtml(s) {
   const div = document.createElement('div');
@@ -3874,7 +3929,7 @@ const TOP_TABS = HOSTED ? [
   { key: 'commission', btn: tabCommissionBtn, section: commissionSection, onShow: () => { initCommissionTab(); } },
 ] : [
   { key: 'home', btn: document.getElementById('tabHomeBtn'), section: homeSection, onShow: null },
-  { key: 'lookup', btn: document.getElementById('tabLookupBtn'), section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); } },
+  { key: 'lookup', btn: document.getElementById('tabLookupBtn'), section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); refreshSkiptraceFolderCount(); } },
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
   { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
   { key: 'map', btn: tabMapBtn, section: mapSection, onShow: () => { initMapTab(); } },
@@ -4438,9 +4493,11 @@ const crmTabListsBtn = document.getElementById('crmTabListsBtn');
 const crmClientsView = document.getElementById('crmClientsView');
 const crmCalendarView = document.getElementById('crmCalendarView');
 const crmListsView = document.getElementById('crmListsView');
+const crmTabSkiptraceBtn = document.getElementById('crmTabSkiptraceBtn');
+const crmSkiptraceView = document.getElementById('crmSkiptraceView');
 
 function showCrmTab(btn, view) {
-  for (const [b, v] of [[crmTabClientsBtn, crmClientsView], [crmTabCalendarBtn, crmCalendarView], [crmTabListsBtn, crmListsView]]) {
+  for (const [b, v] of [[crmTabClientsBtn, crmClientsView], [crmTabCalendarBtn, crmCalendarView], [crmTabListsBtn, crmListsView], [crmTabSkiptraceBtn, crmSkiptraceView]]) {
     b.classList.toggle('active', b === btn);
     v.style.display = v === view ? 'block' : 'none';
   }
@@ -4448,6 +4505,147 @@ function showCrmTab(btn, view) {
 crmTabClientsBtn.addEventListener('click', () => { showCrmTab(crmTabClientsBtn, crmClientsView); loadClients(); });
 crmTabCalendarBtn.addEventListener('click', () => { showCrmTab(crmTabCalendarBtn, crmCalendarView); renderCalendar(); refreshMeetingProvidersStatus(); });
 crmTabListsBtn.addEventListener('click', () => { showCrmTab(crmTabListsBtn, crmListsView); loadContactLists(); });
+crmTabSkiptraceBtn.addEventListener('click', () => openSkiptraceFolder());
+
+/* ===================== Last Skiptraced clients (build order #182) =====================
+   Every Owner Lookup result row, pushed up from desktop as it's found (see
+   app.py's _skiptrace_sync_once), kept until Mario saves it to the CRM or
+   deletes it. Lives in the CRM tab so it works on the phone too. */
+const stBatchesEl = document.getElementById('stBatches');
+const stSummaryEl = document.getElementById('stSummary');
+const stOnlyPhones = document.getElementById('stOnlyPhones');
+let stData = { batches: [] };
+const stSelected = new Set();
+
+function openSkiptraceFolder() {
+  showCrmTab(crmTabSkiptraceBtn, crmSkiptraceView);
+  loadSkiptraceFolder();
+}
+
+async function refreshSkiptraceFolderCount() {
+  const el = document.getElementById('skiptraceFolderCount');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/crm/skiptrace_results');
+    if (!res.ok) return;
+    const d = await res.json();
+    el.textContent = d.with_phone ? `(${d.with_phone} waiting)` : '';
+  } catch (e) {}
+}
+
+function stVisibleRows(batch) {
+  return stOnlyPhones.checked ? batch.rows.filter(r => r.phone) : batch.rows;
+}
+
+async function loadSkiptraceFolder() {
+  stSummaryEl.textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/crm/skiptrace_results');
+    if (!res.ok) throw new Error();
+    stData = await res.json();
+  } catch (e) {
+    stSummaryEl.textContent = "Couldn't load your skip-traced clients — try again in a moment.";
+    return;
+  }
+  const liveIds = new Set(stData.batches.flatMap(b => b.rows.map(r => r.id)));
+  for (const id of [...stSelected]) if (!liveIds.has(id)) stSelected.delete(id);
+  renderSkiptraceFolder();
+}
+
+function renderSkiptraceFolder() {
+  stBatchesEl.innerHTML = '';
+  const batches = stData.batches.filter(b => stVisibleRows(b).length);
+  const total = batches.reduce((n, b) => n + stVisibleRows(b).length, 0);
+  if (!total) {
+    stSummaryEl.textContent = stOnlyPhones.checked && stData.pending
+      ? 'No found numbers waiting. Uncheck "Only show found numbers" to see lookups that came back without one.'
+      : 'Nothing waiting here. New Owner Lookup results will show up as soon as they’re found.';
+  } else {
+    stSummaryEl.textContent = `${total} waiting across ${batches.length} batch${batches.length === 1 ? '' : 'es'}` +
+      (stSelected.size ? ` · ${stSelected.size} selected` : '');
+  }
+  for (const b of batches) {
+    const rows = stVisibleRows(b);
+    const card = document.createElement('div');
+    card.className = 'card st-batch';
+    const allChecked = rows.every(r => stSelected.has(r.id));
+    const when = b.started_at ? formatNoteTime(b.started_at) : '';
+    card.innerHTML = `
+      <div class="st-batch-head">
+        <input type="checkbox" class="st-batch-check" ${allChecked ? 'checked' : ''} title="Select this whole batch">
+        <h3>${escapeHtml(b.batch_name || 'Lookup batch')}<span class="st-meta">${escapeHtml(when)}${when ? ' · ' : ''}${rows.length} contact${rows.length === 1 ? '' : 's'}</span></h3>
+        <button class="small st-batch-save" type="button">💾 Save batch</button>
+        <button class="ghost small st-batch-del" type="button">🗑 Delete batch</button>
+      </div>
+      <div class="st-rows"></div>`;
+    const list = card.querySelector('.st-rows');
+    for (const r of rows) {
+      const row = document.createElement('label');
+      row.className = 'st-row';
+      const addr = composeFullAddress(r.address, r.city, r.state, r.zip);
+      row.innerHTML = `
+        <input type="checkbox" ${stSelected.has(r.id) ? 'checked' : ''}>
+        <div>
+          <div class="st-name">${escapeHtml(r.owner || r.input_owner_name || '(no name)')}</div>
+          <div class="st-addr">${escapeHtml(addr)}</div>
+          ${r.notes ? `<div class="st-notes">${escapeHtml(r.notes.length > 160 ? r.notes.slice(0, 160) + '…' : r.notes)}</div>` : ''}
+        </div>
+        <div class="st-phone">${escapeHtml(r.phone || '—')}<br><span class="status-pill ${escapeHtml(r.status || '')}">${escapeHtml(r.status || '')}</span></div>`;
+      row.querySelector('input').addEventListener('change', (e) => {
+        if (e.target.checked) stSelected.add(r.id); else stSelected.delete(r.id);
+        renderSkiptraceFolder();
+      });
+      list.appendChild(row);
+    }
+    card.querySelector('.st-batch-check').addEventListener('change', (e) => {
+      for (const r of rows) { if (e.target.checked) stSelected.add(r.id); else stSelected.delete(r.id); }
+      renderSkiptraceFolder();
+    });
+    card.querySelector('.st-batch-save').addEventListener('click', () => stSaveRows(rows));
+    card.querySelector('.st-batch-del').addEventListener('click', () => stDeleteRows(rows));
+    stBatchesEl.appendChild(card);
+  }
+}
+
+function stSelectedRows() {
+  return stData.batches.flatMap(b => stVisibleRows(b)).filter(r => stSelected.has(r.id));
+}
+
+async function stResolve(ids, action) {
+  const res = await fetch('/api/crm/skiptrace_results/resolve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, action }),
+  });
+  if (!res.ok) throw new Error();
+}
+
+function stSaveRows(rows) {
+  if (!rows.length) { alert('Check at least one contact first.'); return; }
+  openRetainModal(rows, async (savedRows) => {
+    try { await stResolve(savedRows.map(r => r.id), 'saved'); } catch (e) {}
+    savedRows.forEach(r => stSelected.delete(r.id));
+    await loadSkiptraceFolder();
+    refreshSkiptraceFolderCount();
+  });
+}
+
+async function stDeleteRows(rows) {
+  if (!rows.length) { alert('Check at least one contact first.'); return; }
+  if (!confirm(`Delete ${rows.length} skip-traced contact${rows.length === 1 ? '' : 's'}? This can't be undone.`)) return;
+  try {
+    await stResolve(rows.map(r => r.id), 'deleted');
+  } catch (e) {
+    alert("Couldn't reach URTO's server — try again.");
+    return;
+  }
+  rows.forEach(r => stSelected.delete(r.id));
+  await loadSkiptraceFolder();
+  refreshSkiptraceFolderCount();
+}
+
+stOnlyPhones.addEventListener('change', renderSkiptraceFolder);
+document.getElementById('stSaveSelectedBtn').addEventListener('click', () => stSaveRows(stSelectedRows()));
+document.getElementById('stDeleteSelectedBtn').addEventListener('click', () => stDeleteRows(stSelectedRows()));
 
 /* ===================== Clients ===================== */
 const clientList = document.getElementById('clientList');

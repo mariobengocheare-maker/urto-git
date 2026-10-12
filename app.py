@@ -112,7 +112,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.66.0"
+APP_VERSION = "2.67.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -152,6 +152,136 @@ def _get_last_updated_display() -> str:
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# "Last Skiptraced clients" (build order #182). Every lookup result is
+# already written + flushed to outputs/<job_id>.csv the instant it's found
+# (run_job); this pushes those rows up to the hosted database's
+# skiptrace_results table, where they stay until Mario saves or deletes
+# them -- so closing URTO mid-batch never throws paid-for lookups away.
+# Driven by the CSV files themselves (not the in-memory JOBS dict), so it
+# survives a crash/exit and catches up on the next launch, and also
+# recovers result files from before this feature existed.
+# ---------------------------------------------------------------------------
+
+SKIPTRACE_SYNC_STATE = crm.DATA_DIR / "skiptrace_sync.json"
+SKIPTRACE_RECOVER_DAYS = 14   # older pre-feature result files are left alone
+_skiptrace_sync_lock = threading.Lock()
+_skiptrace_sync_event = threading.Event()
+
+
+def _skiptrace_meta_path(csv_path: Path) -> Path:
+    return csv_path.with_suffix(".meta.json")
+
+
+def _write_skiptrace_meta(job_id: str, batch_name: str):
+    try:
+        _skiptrace_meta_path(OUTPUT_DIR / f"{job_id}.csv").write_text(json.dumps({
+            "batch_name": batch_name,
+            "started_at": datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None).isoformat(timespec="seconds"),
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_skiptrace_sync_state() -> dict:
+    try:
+        return json.loads(SKIPTRACE_SYNC_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_skiptrace_sync_state(state: dict):
+    try:
+        SKIPTRACE_SYNC_STATE.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _read_complete_csv_rows(csv_path: Path) -> list:
+    """Reads a result CSV, ignoring a final half-written line (the file may
+    be mid-write by a running job)."""
+    text = csv_path.read_text(encoding="utf-8-sig")
+    if text and not text.endswith("\n"):
+        text = text[: text.rfind("\n") + 1]
+    return list(csv.DictReader(io.StringIO(text)))
+
+
+def _skiptrace_sync_once() -> int:
+    """Pushes every not-yet-pushed result row. Returns rows pushed. Stops
+    quietly (retried later) if the hosted server can't be reached."""
+    if not _skiptrace_sync_lock.acquire(blocking=False):
+        return 0
+    pushed = 0
+    try:
+        state = _load_skiptrace_sync_state()
+        cutoff = time.time() - SKIPTRACE_RECOVER_DAYS * 86400
+        for csv_path in sorted(OUTPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime):
+            name = csv_path.name
+            done = state.get(name, 0)
+            meta_path = _skiptrace_meta_path(csv_path)
+            mtime = csv_path.stat().st_mtime
+            if name not in state and not meta_path.exists() and mtime < cutoff:
+                state[name] = -1          # old pre-feature file: never import
+                continue
+            if done < 0:
+                continue
+            try:
+                rows = _read_complete_csv_rows(csv_path)
+            except (OSError, UnicodeDecodeError, csv.Error):
+                continue
+            if len(rows) <= done:
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                started = datetime.fromtimestamp(mtime, ZoneInfo("America/New_York"))
+                meta = {
+                    "batch_name": "Recovered lookup batch",
+                    "started_at": started.replace(tzinfo=None).isoformat(timespec="seconds"),
+                }
+            batch_id = csv_path.stem
+            for start in range(done, len(rows), 200):
+                chunk = [dict(r, row_index=i) for i, r in enumerate(rows[start:start + 200], start)]
+                try:
+                    hosted_sync.post_json("/api/crm/skiptrace_results", {
+                        "batch_id": batch_id,
+                        "batch_name": meta.get("batch_name", ""),
+                        "batch_started_at": meta.get("started_at", ""),
+                        "rows": chunk,
+                    })
+                except hosted_sync.HostedUnreachableError:
+                    _save_skiptrace_sync_state(state)
+                    return pushed
+                state[name] = start + len(chunk)
+                pushed += len(chunk)
+                _save_skiptrace_sync_state(state)
+        _save_skiptrace_sync_state(state)
+    finally:
+        _skiptrace_sync_lock.release()
+    return pushed
+
+
+def _skiptrace_sync_watcher():
+    while True:
+        try:
+            _skiptrace_sync_once()
+        except Exception:
+            pass
+        _skiptrace_sync_event.wait(30)
+        _skiptrace_sync_event.clear()
+
+
+threading.Thread(target=_skiptrace_sync_watcher, daemon=True).start()
+
+
+def _final_skiptrace_sync():
+    """Last push before the server exits; anything it misses stays in the
+    CSV and goes up on the next launch."""
+    try:
+        _skiptrace_sync_once()
+    except Exception:
+        pass
 
 # Desktop's local DB is no longer the real CRM (Render's is, build order
 # #71) -- keep its backups local only so they never fight Render's real
@@ -359,6 +489,7 @@ def _delayed_shutdown_check():
         # what actually finishes the exit once that settles.
         _stop_all_jobs()
         if _safe_to_exit():
+            _final_skiptrace_sync()
             os._exit(0)
 
 
@@ -397,6 +528,7 @@ def _watchdog():
             # finish.
             _stop_all_jobs()
             if _safe_to_exit():
+                _final_skiptrace_sync()
                 os._exit(0)
 
 
@@ -443,6 +575,7 @@ def run_job(job_id, rows):
                 out_row = build_output_row(row, result)
                 writer.writerow(out_row)
                 out_f.flush()
+                _skiptrace_sync_event.set()
 
                 with JOBS_LOCK:
                     job["rows"].append(out_row)
@@ -908,6 +1041,7 @@ def upload():
         "error": None,
         "created_at": time.time(),
     }
+    _write_skiptrace_meta(job_id, file.filename or "Lookup batch")
 
     thread = threading.Thread(target=run_job_safe, args=(job_id, rows), daemon=True)
     thread.start()
