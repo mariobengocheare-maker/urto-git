@@ -25,6 +25,7 @@ events, never the rest of Calendar settings/other calendars.
 """
 
 import io
+import json
 import os
 
 import requests
@@ -93,9 +94,15 @@ def _headers(access_token):
     return {"Authorization": f"Bearer {access_token}"}
 
 
+def _q(value: str) -> str:
+    """Escapes a value for a Drive search query, which wraps strings in
+    single quotes -- a client named O'Brien would otherwise break the query."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 def find_or_create_folder(access_token: str, name: str, parent_id: str = None) -> str:
     """Returns the folder's file id, creating it (once) if it doesn't exist yet."""
-    query = f"name = '{name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    query = f"name = '{_q(name)}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     if parent_id:
         query += f" and '{parent_id}' in parents"
     res = requests.get(
@@ -116,7 +123,7 @@ def find_or_create_folder(access_token: str, name: str, parent_id: str = None) -
 
 
 def _find_file(access_token: str, name: str, folder_id: str):
-    query = f"name = '{name}' and '{folder_id}' in parents and trashed = false"
+    query = f"name = '{_q(name)}' and '{folder_id}' in parents and trashed = false"
     res = requests.get(
         f"{DRIVE_API}/files", headers=_headers(access_token),
         params={"q": query, "fields": "files(id,name)", "spaces": "drive"}, timeout=20,
@@ -126,29 +133,42 @@ def _find_file(access_token: str, name: str, folder_id: str):
     return files[0]["id"] if files else None
 
 
-def upload_or_update_file(access_token: str, name: str, content: bytes, mimetype: str, folder_id: str):
+_LOOKUP = object()
+
+
+def upload_or_update_file(access_token: str, name: str, content: bytes, mimetype: str, folder_id: str,
+                          existing_id=_LOOKUP):
     """Creates the file if it doesn't exist in folder_id yet, otherwise
     overwrites its content in place -- so re-running this for the same
-    logical file (e.g. urto_crm_latest.db) never creates duplicates."""
-    existing_id = _find_file(access_token, name, folder_id)
+    logical file (e.g. urto_crm_latest.db) never creates duplicates.
+
+    A caller that already knows the file's id (from one folder listing,
+    instead of one search per file) passes it as existing_id, or None when
+    it knows the file isn't there yet -- saving a search request per file.
+    A known id that turns out to be gone (deleted in Drive) falls back to
+    creating the file fresh."""
+    if existing_id is _LOOKUP:
+        existing_id = _find_file(access_token, name, folder_id)
     if existing_id:
         res = requests.patch(
             f"{UPLOAD_API}/files/{existing_id}?uploadType=media",
             headers={**_headers(access_token), "Content-Type": mimetype},
             data=content, timeout=60,
         )
-    else:
-        boundary = "urtoboundary"
-        metadata = f'{{"name": "{name}", "parents": ["{folder_id}"]}}'
-        body = (
-            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{metadata}\r\n"
-            f"--{boundary}\r\nContent-Type: {mimetype}\r\n\r\n"
-        ).encode("utf-8") + content + f"\r\n--{boundary}--".encode("utf-8")
-        res = requests.post(
-            f"{UPLOAD_API}/files?uploadType=multipart",
-            headers={**_headers(access_token), "Content-Type": f"multipart/related; boundary={boundary}"},
-            data=body, timeout=60,
-        )
+        if res.status_code != 404:
+            res.raise_for_status()
+            return res.json()
+    boundary = "urtoboundary"
+    metadata = json.dumps({"name": name, "parents": [folder_id]})
+    body = (
+        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{metadata}\r\n"
+        f"--{boundary}\r\nContent-Type: {mimetype}\r\n\r\n"
+    ).encode("utf-8") + content + f"\r\n--{boundary}--".encode("utf-8")
+    res = requests.post(
+        f"{UPLOAD_API}/files?uploadType=multipart",
+        headers={**_headers(access_token), "Content-Type": f"multipart/related; boundary={boundary}"},
+        data=body, timeout=60,
+    )
     res.raise_for_status()
     return res.json()
 
@@ -161,15 +181,25 @@ def list_files_in_folder(access_token: str, folder_id: str) -> list:
     backup destination already gets. `is_folder` lets a caller recurse into
     subfolders (e.g. one per transaction) while pruning leaf files."""
     query = f"'{folder_id}' in parents and trashed = false"
-    res = requests.get(
-        f"{DRIVE_API}/files", headers=_headers(access_token),
-        params={"q": query, "fields": "files(id,name,mimeType)", "spaces": "drive"}, timeout=20,
-    )
-    res.raise_for_status()
-    return [
-        {"id": f["id"], "name": f["name"], "is_folder": f.get("mimeType") == "application/vnd.google-apps.folder"}
-        for f in res.json().get("files", [])
-    ]
+    items, page_token = [], None
+    while True:
+        params = {"q": query, "fields": "nextPageToken,files(id,name,mimeType)", "spaces": "drive",
+                  "pageSize": 1000}
+        if page_token:
+            params["pageToken"] = page_token
+        res = requests.get(f"{DRIVE_API}/files", headers=_headers(access_token), params=params, timeout=30)
+        res.raise_for_status()
+        data = res.json()
+        items.extend(
+            {"id": f["id"], "name": f["name"], "is_folder": f.get("mimeType") == "application/vnd.google-apps.folder"}
+            for f in data.get("files", [])
+        )
+        # Drive returns at most one page per request (100 files by default);
+        # without following nextPageToken a folder with more files than that
+        # (CRM Contacts) would look half empty.
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            return items
 
 
 def rename_file(access_token: str, file_id: str, new_name: str):

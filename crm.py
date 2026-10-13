@@ -19,6 +19,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -563,57 +564,98 @@ def _mirror_documents_folder(backup_dir: Path):
 def _push_documents_to_google_drive(access_token: str, root_folder_id: str):
     """Pushes the same Transaction Manager + Commission Tracker files
     `_mirror_documents_folder()` writes locally up to Mario's REAL Google
-    Drive too — closing the gap where uploaded FILES (unlike the DB/JSON/
-    contacts data, which rides the whole-file DB mirror automatically)
-    previously never reached Google Drive on the hosted deployment at all.
-    Mirrors the same nested-folder structure under the existing "URTO
-    Backups" root, creating subfolders on demand and caching their ids for
-    the duration of this one pass, then recursively PRUNES the three known
-    root folders (Transaction Checklist Documents / Transactions /
-    Commission Files) against what's actually expected right now.
+    Drive, in the same nested folder structure, then removes anything in
+    those folders that's no longer expected (a removed document, a deleted
+    transaction) -- the same deletion-propagation every other backup
+    destination gets.
 
-    Pruning has to be a full recursive walk of each root, not just "check
-    the folders we just uploaded into" — if the LAST file under some
-    subfolder (e.g. the only document type for a checklist, or a
-    transaction's only doc) gets removed, nothing uploads there this pass
-    at all, so that subfolder would never be visited for cleanup otherwise.
-    This mirrors `_mirror_documents_folder()`'s local behavior, which
-    naturally handles this via a full `rglob()` of the filesystem root.
+    The three root folders are walked FIRST (a full recursive listing, so a
+    subfolder whose last file was removed still gets cleaned up). That
+    listing also says which files Drive already has, so only files that are
+    new, changed since this server last sent them, or missing from Drive
+    are uploaded -- several at a time. Re-sending every file one by one on
+    every pass is what made a full backup take minutes.
     Every step is individually tolerant of failure -- one bad file/folder
     must never abort the rest."""
-    folder_id_cache = {(): root_folder_id}
+    with _drive_docs_lock:
+        state = _get_drive_state(root_folder_id)
+        sent = state["documents"]
 
-    def _folder_id_for(rel_parts):
-        if rel_parts in folder_id_cache:
-            return folder_id_cache[rel_parts]
-        parent_id = _folder_id_for(rel_parts[:-1])
-        fid = google_drive_api.find_or_create_folder(access_token, rel_parts[-1], parent_id)
-        folder_id_cache[rel_parts] = fid
-        return fid
-
-    expected = {}
-    for rel_parts, filename, src in _iter_document_backup_files():
-        try:
-            folder_id = _folder_id_for(rel_parts)
-            mimetype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-            google_drive_api.upload_or_update_file(access_token, filename, src.read_bytes(), mimetype, folder_id)
+        items = []
+        expected = {}
+        for rel_parts, filename, src in _iter_document_backup_files():
             expected.setdefault(rel_parts, set()).add(filename)
-        except Exception:
-            continue
+            items.append((rel_parts, filename, src))
 
-    for root_name in ("Transaction Checklist Documents", "Transactions", "Commission Files"):
-        try:
-            root_id = google_drive_api.find_or_create_folder(access_token, root_name, root_folder_id)
-            _prune_drive_folder(access_token, root_id, (root_name,), expected)
-        except Exception:
-            continue
+        found_files = {}   # (rel_parts, filename) -> Drive file id
+        folder_id_cache = {(): root_folder_id}
+        for root_name in ("Transaction Checklist Documents", "Transactions", "Commission Files"):
+            try:
+                root_id = google_drive_api.find_or_create_folder(access_token, root_name, root_folder_id)
+                folder_id_cache[(root_name,)] = root_id
+                _prune_drive_folder(access_token, root_id, (root_name,), expected, found_files, folder_id_cache)
+            except Exception:
+                continue
+
+        def _folder_id_for(rel_parts):
+            if rel_parts in folder_id_cache:
+                return folder_id_cache[rel_parts]
+            parent_id = _folder_id_for(rel_parts[:-1])
+            fid = google_drive_api.find_or_create_folder(access_token, rel_parts[-1], parent_id)
+            folder_id_cache[rel_parts] = fid
+            return fid
+
+        pending = []
+        for rel_parts, filename, src in items:
+            key = "/".join(rel_parts + (filename,))
+            try:
+                content = src.read_bytes()
+            except Exception:
+                continue
+            digest = hashlib.sha1(content).hexdigest()
+            existing_id = found_files.get((rel_parts, filename))
+            if existing_id and sent.get(key) == digest:
+                continue
+            try:
+                folder_id = _folder_id_for(rel_parts)
+            except Exception:
+                continue
+            mimetype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            pending.append((key, filename, content, digest, mimetype, folder_id, existing_id))
+
+        def _upload(item):
+            key, filename, content, digest, mimetype, folder_id, existing_id = item
+            google_drive_api.upload_or_update_file(
+                access_token, filename, content, mimetype, folder_id, existing_id=existing_id,
+            )
+            return key, digest
+
+        if pending:
+            with ThreadPoolExecutor(max_workers=DRIVE_PUSH_WORKERS) as pool:
+                for fut in [pool.submit(_upload, item) for item in pending]:
+                    try:
+                        key, digest = fut.result()
+                        sent[key] = digest
+                    except Exception:
+                        continue
+        # Forget files that no longer exist locally, so the saved state
+        # doesn't grow forever.
+        live_keys = {"/".join(r + (f,)) for r, f, _ in items}
+        for key in list(sent):
+            if key not in live_keys:
+                sent.pop(key, None)
+        _save_drive_state()
 
 
-def _prune_drive_folder(access_token: str, folder_id: str, rel_parts: tuple, expected: dict) -> bool:
+def _prune_drive_folder(access_token: str, folder_id: str, rel_parts: tuple, expected: dict,
+                        found_files: dict = None, found_folders: dict = None) -> bool:
     """Recursively deletes anything under folder_id that isn't listed in
     `expected` (a rel_parts -> {filenames} map), removing now-empty
     subfolders too. Returns True if folder_id itself ends up completely
-    empty, so the caller can remove it as well."""
+    empty, so the caller can remove it as well. When given, found_files
+    collects the id of every expected file Drive already has, and
+    found_folders the id of every subfolder kept, so the caller can update
+    them in place without searching for each one again."""
     try:
         children = google_drive_api.list_files_in_folder(access_token, folder_id)
     except Exception:
@@ -623,13 +665,25 @@ def _prune_drive_folder(access_token: str, folder_id: str, rel_parts: tuple, exp
     for child in children:
         try:
             if child.get("is_folder"):
-                child_empty = _prune_drive_folder(access_token, child["id"], rel_parts + (child["name"],), expected)
-                if child_empty:
+                child_parts = rel_parts + (child["name"],)
+                child_empty = _prune_drive_folder(
+                    access_token, child["id"], child_parts, expected, found_files, found_folders,
+                )
+                if child_empty and child_parts not in expected:
                     google_drive_api.delete_file(access_token, child["id"])
                 else:
                     remaining += 1
+                    if found_folders is not None:
+                        found_folders.setdefault(child_parts, child["id"])
             elif child["name"] in expected_names:
                 remaining += 1
+                if found_files is not None:
+                    key = (rel_parts, child["name"])
+                    if key in found_files:
+                        # A duplicate copy of the same file -- keep one.
+                        google_drive_api.delete_file(access_token, child["id"])
+                    else:
+                        found_files[key] = child["id"]
             else:
                 google_drive_api.delete_file(access_token, child["id"])
         except Exception:
@@ -877,7 +931,127 @@ def _push_instant_documents_to_google_drive_safe():
         pass
 
 
-_drive_pushed_contact_hashes = {}
+# How many files go up to Google Drive at once. Sending them one at a time
+# made a full backup (one file per client) take several minutes.
+DRIVE_PUSH_WORKERS = 6
+
+# What this server has already sent to Google Drive (a content hash per
+# file, plus the Drive file id for each client's contact file), saved on the
+# persistent disk so a restart or redeploy doesn't mean re-uploading every
+# file again. Tied to one Drive folder id -- a new folder starts fresh.
+_DRIVE_STATE_PATH = DATA_DIR / "drive_push_state.json"
+_drive_state = None
+_drive_state_lock = threading.Lock()
+_drive_docs_lock = threading.Lock()
+
+
+def _get_drive_state(folder_id: str) -> dict:
+    global _drive_state
+    with _drive_state_lock:
+        if _drive_state is None:
+            try:
+                _drive_state = json.loads(_DRIVE_STATE_PATH.read_text())
+            except Exception:
+                _drive_state = {}
+        if _drive_state.get("folder_id") != folder_id:
+            _drive_state = {"folder_id": folder_id}
+        _drive_state.setdefault("contacts", {})
+        _drive_state.setdefault("documents", {})
+        return _drive_state
+
+
+def _save_drive_state():
+    with _drive_state_lock:
+        if _drive_state is None:
+            return
+        try:
+            tmp = _DRIVE_STATE_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(_drive_state))
+            tmp.replace(_DRIVE_STATE_PATH)
+        except Exception:
+            pass
+
+
+def _push_contacts_to_google_drive(access_token: str, folder_id: str, contacts_dir: Path, verify: bool):
+    """Uploads each client's CRM Contacts .txt whose content changed since
+    this server last sent it, several at a time. On a verify pass (every
+    full backup) the Drive folder is listed once: files someone deleted in
+    Drive get re-sent, and files for clients no longer in the CRM are
+    removed, matching the local export. Raises only if every single upload
+    failed (a real problem worth reporting), not on one bad file."""
+    files = sorted(contacts_dir.glob("*.txt"))
+    state = _get_drive_state(folder_id)
+    cache = state["contacts"]
+
+    contacts_folder_id = state.get("contacts_folder_id")
+    on_drive = None
+    if verify or not contacts_folder_id:
+        found_id = google_drive_api.find_or_create_folder(access_token, "CRM Contacts", folder_id)
+        if found_id != contacts_folder_id:
+            cache.clear()
+        contacts_folder_id = state["contacts_folder_id"] = found_id
+    if verify:
+        on_drive = {}
+        for item in google_drive_api.list_files_in_folder(access_token, contacts_folder_id):
+            if item.get("is_folder"):
+                continue
+            if item["name"] in on_drive:
+                google_drive_api.delete_file(access_token, item["id"])  # duplicate copy
+            else:
+                on_drive[item["name"]] = item["id"]
+        local_names = {f.name for f in files}
+        # Only prune when the local export clearly worked (it always has at
+        # least one file when the CRM has clients), never against an empty
+        # folder that might just mean the export failed this pass.
+        if local_names:
+            for name, file_id in on_drive.items():
+                if name not in local_names:
+                    try:
+                        google_drive_api.delete_file(access_token, file_id)
+                    except Exception:
+                        pass
+        for name in list(cache):
+            if name not in local_names:
+                cache.pop(name, None)
+
+    pending = []
+    for txt_file in files:
+        content = txt_file.read_bytes()
+        digest = hashlib.sha1(content).hexdigest()
+        entry = cache.get(txt_file.name) or {}
+        if on_drive is not None:
+            existing_id = on_drive.get(txt_file.name)
+            if existing_id and entry.get("hash") == digest:
+                continue
+        else:
+            if entry.get("hash") == digest:
+                continue
+            existing_id = entry.get("id") or google_drive_api._LOOKUP
+        pending.append((txt_file.name, content, digest, existing_id))
+
+    if not pending:
+        _save_drive_state()
+        return
+
+    def _upload(item):
+        name, content, digest, existing_id = item
+        res = google_drive_api.upload_or_update_file(
+            access_token, name, content, "text/plain", contacts_folder_id, existing_id=existing_id,
+        )
+        return name, digest, (res or {}).get("id")
+
+    failures, last_error = 0, None
+    with ThreadPoolExecutor(max_workers=DRIVE_PUSH_WORKERS) as pool:
+        for fut in [pool.submit(_upload, item) for item in pending]:
+            try:
+                name, digest, file_id = fut.result()
+                cache[name] = {"hash": digest, "id": file_id}
+            except Exception as e:
+                failures += 1
+                last_error = e
+    _save_drive_state()
+    if failures and failures == len(pending):
+        raise last_error
 
 
 def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
@@ -909,7 +1083,6 @@ def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
                 folder_id = google_drive_api.find_or_create_folder(access_token, google_drive_api.BACKUP_FOLDER_NAME)
                 save_google_drive_folder_id(folder_id)
                 _set_setting("google_drive_folder_named", google_drive_api.BACKUP_FOLDER_NAME)
-                _drive_pushed_contact_hashes.clear()
             else:
                 raise
 
@@ -924,24 +1097,9 @@ def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
     db_bytes = (local_dir / LATEST_NAME).read_bytes()
     google_drive_api.upload_or_update_file(access_token, LATEST_NAME, db_bytes, "application/x-sqlite3", folder_id)
 
-    # CRM Contacts: only re-upload a client's .txt when its content actually
-    # changed since this process last pushed it. Re-sending every client's
-    # file on every save (2 API calls each) made each pass slow enough that
-    # the JSON export lagged behind real changes.
     contacts_dir = local_dir / "CRM Contacts"
     if contacts_dir.exists():
-        contacts_folder_id = None
-        for txt_file in contacts_dir.glob("*.txt"):
-            content = txt_file.read_bytes()
-            digest = hashlib.sha1(content).hexdigest()
-            if _drive_pushed_contact_hashes.get(txt_file.name) == digest:
-                continue
-            if contacts_folder_id is None:
-                contacts_folder_id = google_drive_api.find_or_create_folder(access_token, "CRM Contacts", folder_id)
-            google_drive_api.upload_or_update_file(
-                access_token, txt_file.name, content, "text/plain", contacts_folder_id,
-            )
-            _drive_pushed_contact_hashes[txt_file.name] = digest
+        _push_contacts_to_google_drive(access_token, folder_id, contacts_dir, verify=snapshot)
 
     if snapshot:
         snaps = sorted(local_dir.glob("urto_crm_[0-9]*.db"))
@@ -962,7 +1120,7 @@ def _google_drive_api_push(local_dir: Path, snapshot: bool) -> bool:
     return True
 
 
-def _write_backup(reason, snapshot: bool, keep=30) -> dict:
+def _write_backup(reason, snapshot: bool, keep=30, push_drive=True) -> dict:
     """Copy the live DB to every backup destination (OneDrive/Google
     Drive/Local — see resolve_backup_dirs()). Always refreshes the live
     mirror, the human-readable CRM Contacts export, and the full JSON data
@@ -1017,7 +1175,7 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
             except Exception:
                 continue
 
-        if local_dir is not None:
+        if local_dir is not None and push_drive:
             try:
                 if _google_drive_api_push(local_dir, snapshot):
                     results.append({"label": "Google Drive (real)", "path": "Google Drive"})
@@ -1033,9 +1191,63 @@ def _write_backup(reason, snapshot: bool, keep=30) -> dict:
         return _last_backup
 
 
-def backup_now(reason="manual", keep=30) -> dict:
+_full_backup_running = 0
+_full_backup_again = False
+_full_backup_state_lock = threading.Lock()
+
+
+def _end_full_backup():
+    """Called when a full backup finishes. If another one was asked for
+    while it ran (e.g. Google was reconnected mid-pass, so this pass may
+    have used the old connection), run exactly one more in the background."""
+    global _full_backup_running, _full_backup_again
+    with _full_backup_state_lock:
+        _full_backup_running -= 1
+        again = _full_backup_again and _full_backup_running == 0
+        if again:
+            _full_backup_again = False
+    if again:
+        start_backup_in_background("follow-up")
+
+
+def backup_now(reason="manual", keep=30, push_drive=True) -> dict:
     """Full backup: refresh the live mirror and write a timestamped snapshot."""
-    return _write_backup(reason, snapshot=True, keep=keep)
+    global _full_backup_running
+    with _full_backup_state_lock:
+        _full_backup_running += 1
+    try:
+        return _write_backup(reason, snapshot=True, keep=keep, push_drive=push_drive)
+    finally:
+        _end_full_backup()
+
+
+def is_full_backup_running() -> bool:
+    return _full_backup_running > 0
+
+
+def start_backup_in_background(reason="manual") -> bool:
+    """Runs a full backup without making the caller wait for it. A full
+    backup can take a while on the hosted server (it re-checks everything
+    in Google Drive), and a "Backup Now" click used to sit on "Backing up…"
+    the whole time. If one is already running, this one is queued to run
+    right after it (once, however many times it's asked) and returns False."""
+    global _full_backup_running, _full_backup_again
+    with _full_backup_state_lock:
+        if _full_backup_running > 0:
+            _full_backup_again = True
+            return False
+        _full_backup_running += 1
+
+    def _run():
+        try:
+            _write_backup(reason, snapshot=True)
+        except Exception:
+            pass
+        finally:
+            _end_full_backup()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True
 
 
 def backup_instant(reason="save") -> dict:
@@ -1219,6 +1431,7 @@ def get_backup_status() -> dict:
         "google_drive_detected": bool(gdrive),
         "google_drive_dir": str(gdrive) if gdrive else None,
         "last_backup_at": _last_backup["at"],
+        "backup_running": is_full_backup_running(),
         "last_backup_destinations": _last_backup.get("destinations"),
         "google_drive_api_available": google_drive_api.is_configured(),
         "google_drive_api_connected": bool(get_google_oauth_refresh_token()),
@@ -1371,7 +1584,7 @@ def restore_from_snapshot(snapshot_path: str) -> dict:
     # otherwise overwrite it with the current (possibly broken) live state
     # before we ever get a chance to copy from it.
     restore_bytes = src.read_bytes()
-    backup_now("pre-restore safety snapshot")
+    backup_now("pre-restore safety snapshot", push_drive=False)
     DB_PATH.write_bytes(restore_bytes)
     on_data_changed("restored from backup")
     return {"ok": True, "restored_from": str(src)}

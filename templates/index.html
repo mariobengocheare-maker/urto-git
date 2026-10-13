@@ -4100,6 +4100,8 @@ async function refreshBackupStatus() {
         driveChip = chip('Google Drive: not connected', false);
       } else if (h.error) {
         driveChip = `<span class="warn" title="${escapeHtml(h.error)}">⚠ Google Drive backup failing${h.last_ok_at ? ` — last good copy ${escapeHtml(formatBackupTime(h.last_ok_at))}` : ''}</span>`;
+      } else if (s.backup_running && !h.last_ok_at) {
+        driveChip = chip(`Google Drive (“${escapeHtml(h.folder_name || 'URTO Cloud Backup')}” folder): first backup in progress…`, true);
       } else {
         driveChip = chip(`Google Drive (“${escapeHtml(h.folder_name || 'URTO Cloud Backup')}” folder): backed up ${escapeHtml(formatBackupTime(h.last_ok_at))}`, !!h.last_ok_at);
       }
@@ -4119,8 +4121,10 @@ async function refreshBackupStatus() {
       connectText.textContent = 'Connect your real Google Drive so backups reach it instantly, even from your phone with your desktop off:';
       connectBtn.textContent = 'Connect Google Drive';
     }
+    setBackupRunning(!!s.backup_running);
   } catch (e) {
     backupStatusText.textContent = 'Backup status unavailable';
+    if (backupNowBtn.disabled) setBackupRunning(true);  // keep checking
   }
 }
 
@@ -4182,16 +4186,25 @@ if (gdriveDirSaveBtn) {
   });
 }
 
+// A full backup runs in the background on the server (it can take a while
+// the first time it sends everything to Google Drive), so the button
+// doesn't wait on one long request: it starts the backup, then checks the
+// status every few seconds until the server says it's finished.
+let backupPollTimer = null;
+function setBackupRunning(running) {
+  backupNowBtn.disabled = running;
+  backupNowBtn.textContent = running ? 'Backing up…' : 'Backup Now';
+  if (running && !backupPollTimer) {
+    backupPollTimer = setTimeout(() => { backupPollTimer = null; refreshBackupStatus(); }, 3000);
+  }
+}
+
 backupNowBtn.addEventListener('click', async () => {
-  backupNowBtn.disabled = true;
-  backupNowBtn.textContent = 'Backing up…';
+  setBackupRunning(true);
   try {
     await fetch('/api/backup/run', { method: 'POST' });
-    await refreshBackupStatus();
-  } finally {
-    backupNowBtn.disabled = false;
-    backupNowBtn.textContent = 'Backup Now';
-  }
+  } catch (e) {}
+  await refreshBackupStatus();
 });
 
 /* ---- Data-loss safety net: unmissable warning + one-click restore ---- */

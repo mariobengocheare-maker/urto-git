@@ -37,7 +37,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.33.0-hosted"
+APP_VERSION = "1.34.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -48,7 +48,10 @@ APP_VERSION = "1.33.0-hosted"
 SERVER_STARTED_DISPLAY = datetime.now(ZoneInfo("America/New_York")).strftime("%b %d, %Y %I:%M %p %Z (Miami Time)")
 
 crm.init_db()
-crm.backup_now("startup")
+# In the background: a full backup includes the Google Drive push, and
+# running it inline here would hold up the server starting (long enough,
+# with a big CRM, for gunicorn to give up on the worker and restart it).
+crm.start_backup_in_background("startup")
 
 
 def _backup_watcher():
@@ -652,7 +655,7 @@ def google_auth_callback():
     # Clear any old "Google disconnected" error and push a full fresh copy
     # right away, rather than waiting for the next edit to trigger one.
     crm._set_setting("gdrive_last_error", "")
-    threading.Thread(target=crm.backup_now, args=("Google Drive reconnected",), daemon=True).start()
+    crm.start_backup_in_background("Google Drive reconnected")
     return redirect(url_for("index"))
 
 

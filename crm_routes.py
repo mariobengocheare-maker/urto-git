@@ -490,7 +490,10 @@ def meeting_providers_status():
 
 @crm_bp.route("/api/backup/run", methods=["POST"])
 def backup_run():
-    return jsonify(crm.backup_now("manual"))
+    # Runs in the background; the page polls /api/backup/status until
+    # backup_running goes false (a full pass can take a while on Render).
+    started = crm.start_backup_in_background("manual")
+    return jsonify({"started": started, **crm.get_backup_status()})
 
 
 @crm_bp.route("/api/backup/google_drive_dir", methods=["POST"])
