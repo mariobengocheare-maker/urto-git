@@ -84,6 +84,27 @@ class HostedUnreachableError(Exception):
     pass
 
 
+class HostedOfflineError(HostedUnreachableError):
+    """The server couldn't be reached at all (no internet, DNS failure,
+    connection refused) -- as opposed to reaching it and getting an error."""
+    pass
+
+
+# Set by app.py to offline_mode.should_serve_offline. When it says we're
+# offline, requests don't even try the network (each try would otherwise
+# wait for a connection timeout, and they queue behind one another on
+# _session_lock -- that queue is what froze the whole page when the wifi
+# dropped, build order #185).
+offline_hint = None
+
+
+def _offline_now() -> bool:
+    try:
+        return bool(offline_hint and offline_hint())
+    except Exception:
+        return False
+
+
 def _ensure_logged_in(config: dict):
     global _logged_in_url
     base_url = config["base_url"]
@@ -93,11 +114,11 @@ def _ensure_logged_in(config: dict):
         res = _session.post(
             f"{base_url}/login",
             data={"username": config["username"], "password": config["password"]},
-            timeout=15,
+            timeout=(5, 15),
             allow_redirects=False,
         )
     except requests.RequestException:
-        raise HostedUnreachableError("Can't reach URTO Cloud right now — check your internet connection.")
+        raise HostedOfflineError("Can't reach URTO Cloud right now — check your internet connection.")
     # A successful login redirects (302) to the app; a wrong password
     # re-renders the login page (200) with an error instead. Any OTHER
     # status (500/502/503/504, or a bare empty response) is NOT evidence of
@@ -158,9 +179,19 @@ def proxy_request(flask_request, subpath_with_prefix: str):
             {"Content-Type": "application/json"},
         )
 
+    unreachable = (
+        json.dumps({"error": "Can't reach URTO Cloud right now — check your internet connection."}).encode(),
+        502,
+        {"Content-Type": "application/json", "X-URTO-Unreachable": "1"},
+    )
+    if _offline_now():
+        return unreachable
+
     try:
         url = config["base_url"] + subpath_with_prefix
-        kwargs = {"timeout": 30, "allow_redirects": False}
+        # Short connect timeout: with the wifi up but no internet, a request
+        # would otherwise hang for the full timeout before failing.
+        kwargs = {"timeout": (5, 60), "allow_redirects": False}
         if flask_request.query_string:
             url += "?" + flask_request.query_string.decode()
 
@@ -194,6 +225,8 @@ def proxy_request(flask_request, subpath_with_prefix: str):
         # from the same page load could race on the same Session's cookie
         # jar and intermittently go out unauthenticated.
         with _session_lock:
+            if _offline_now():
+                return unreachable
             _ensure_logged_in(config)
             res = _session.request(flask_request.method, url, **kwargs)
 
@@ -206,11 +239,21 @@ def proxy_request(flask_request, subpath_with_prefix: str):
                 _ensure_logged_in(config)
                 res = _session.request(flask_request.method, url, **kwargs)
 
+    except HostedOfflineError:
+        return unreachable
     except HostedUnreachableError as e:
         return json.dumps({"error": str(e)}).encode(), 502, {"Content-Type": "application/json"}
+    except requests.ConnectionError:
+        # Couldn't connect at all -- the request never reached the server,
+        # so it's safe to answer it from the PC's offline copy instead.
+        return unreachable
     except requests.RequestException:
+        # Connected but the answer never came back (read timeout): the
+        # server may already have saved it, so don't redo it offline.
+        if flask_request.method == "GET":
+            return unreachable
         return (
-            json.dumps({"error": "Can't reach URTO Cloud right now — check your internet connection."}).encode(),
+            json.dumps({"error": "URTO Cloud didn't answer in time. Check whether your change saved before trying again."}).encode(),
             502,
             {"Content-Type": "application/json"},
         )
@@ -232,6 +275,8 @@ def get_json(path: str):
     configured, unreachable, or the response isn't valid JSON -- callers
     should treat that as "couldn't check, fail open" rather than a hard
     error, same as this module's other functions."""
+    if _offline_now():
+        raise HostedOfflineError("URTO is offline right now.")
     config = load_config()
     if not config:
         raise HostedUnreachableError("Not connected to URTO Cloud yet.")
@@ -240,12 +285,12 @@ def get_json(path: str):
     try:
         with _session_lock:
             _ensure_logged_in(config)
-            res = _session.get(url, timeout=30, allow_redirects=False)
+            res = _session.get(url, timeout=(5, 30), allow_redirects=False)
             if res.status_code in (302, 303) and "/login" in res.headers.get("Location", ""):
                 global _logged_in_url
                 _logged_in_url = None
                 _ensure_logged_in(config)
-                res = _session.get(url, timeout=30, allow_redirects=False)
+                res = _session.get(url, timeout=(5, 30), allow_redirects=False)
     except requests.RequestException:
         raise HostedUnreachableError("Can't reach URTO Cloud right now — check your internet connection.")
 
@@ -263,6 +308,8 @@ def post_json(path: str, payload: dict):
     "Last Skiptraced clients" folder, build order #182). Same session/lock/
     re-login handling as get_json(); raises HostedUnreachableError on any
     failure so callers can just retry later."""
+    if _offline_now():
+        raise HostedOfflineError("URTO is offline right now.")
     config = load_config()
     if not config:
         raise HostedUnreachableError("Not connected to URTO Cloud yet.")
@@ -271,12 +318,12 @@ def post_json(path: str, payload: dict):
     try:
         with _session_lock:
             _ensure_logged_in(config)
-            res = _session.post(url, json=payload, timeout=60, allow_redirects=False)
+            res = _session.post(url, json=payload, timeout=(5, 60), allow_redirects=False)
             if res.status_code in (302, 303) and "/login" in res.headers.get("Location", ""):
                 global _logged_in_url
                 _logged_in_url = None
                 _ensure_logged_in(config)
-                res = _session.post(url, json=payload, timeout=60, allow_redirects=False)
+                res = _session.post(url, json=payload, timeout=(5, 60), allow_redirects=False)
     except requests.RequestException:
         raise HostedUnreachableError("Can't reach URTO Cloud right now — check your internet connection.")
 

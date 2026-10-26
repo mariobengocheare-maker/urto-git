@@ -522,6 +522,13 @@
     border-radius: 6px; padding: 5px 9px; color: var(--text-secondary); font-size: .8rem;
   }
   #gdriveSetupMsg { font-size: .78rem; }
+  .offline-banner {
+    display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 16px; text-align: center; font-size: .92rem; line-height: 1.4;
+    background: rgba(201, 162, 39, 0.14); border-bottom: 1px solid rgba(201, 162, 39, 0.45); color: var(--text);
+  }
+  .offline-banner.syncing { background: rgba(80, 160, 255, 0.12); border-bottom-color: rgba(80, 160, 255, 0.45); }
+  .offline-banner.problem { background: rgba(230, 80, 80, 0.14); border-bottom-color: rgba(230, 80, 80, 0.5); }
   #gdriveApiConnectRow {
     display: none; align-items: center; gap: 8px; width: 100%;
     padding-top: 8px; border-top: 1px solid rgba(201,162,39,.12); font-size: .8rem;
@@ -1448,6 +1455,13 @@
     </div>
   </div>
 </div>
+
+{% if not hosted %}
+<div id="offlineBanner" class="offline-banner" style="display:none">
+  <span id="offlineBannerText"></span>
+  <button type="button" class="ghost small" id="offlineBannerDismiss" style="display:none">Dismiss</button>
+</div>
+{% endif %}
 
 <div class="app-body">
 <div class="tabs">
@@ -4044,6 +4058,66 @@ if (!HOSTED) {
   // version is available, it's already spawned a separate process to kill
   // itself and relaunch with the new files (see app.py's /api/check_update),
   // and this just needs to wait for that to finish, then reload for real.
+  // Offline mode (build order #185): with no internet, the PC answers from
+  // its own saved copy of the cloud data and keeps changes until the
+  // connection is back. This banner says so, and how many are waiting.
+  const offlineBanner = document.getElementById('offlineBanner');
+  const offlineBannerText = document.getElementById('offlineBannerText');
+  const offlineBannerDismiss = document.getElementById('offlineBannerDismiss');
+  let offlineWasShown = false;
+  async function refreshOfflineBanner() {
+    let s;
+    try {
+      const r = await fetch('/api/offline/status', { cache: 'no-store' });
+      if (!r.ok) return;
+      s = await r.json();
+    } catch (e) { return; }
+    const problems = s.problems || [];
+    const pendingText = s.pending ? ` ${s.pending} change${s.pending === 1 ? '' : 's'} waiting to sync.` : '';
+    offlineBanner.classList.remove('syncing', 'problem');
+    offlineBannerDismiss.style.display = 'none';
+    if (s.offline) {
+      offlineBannerText.textContent = s.has_copy
+        ? `📴 No internet — URTO is using the copy saved on this PC${s.copy_saved_at ? ` (from ${formatBackupTime(s.copy_saved_at)})` : ''}. Calls, notes and edits still save here and go to the cloud as soon as you're back online.${pendingText}`
+        : '📴 No internet, and this PC doesn\'t have a saved copy of your data yet — it saves one automatically the next time you\'re online.';
+    } else if (s.syncing || s.pending) {
+      offlineBanner.classList.add('syncing');
+      offlineBannerText.textContent = `🔄 Back online — sending ${s.pending || ''} change${s.pending === 1 ? '' : 's'} made while offline…`;
+    } else if (problems.length) {
+      offlineBanner.classList.add('problem');
+      offlineBannerText.textContent = `⚠ ${problems.length} change${problems.length === 1 ? '' : 's'} made while offline couldn't be saved: ` +
+        problems.map(p => `${p.what} (${p.why})`).join('; ');
+      offlineBannerDismiss.style.display = '';
+    } else {
+      offlineBanner.style.display = 'none';
+      if (offlineWasShown) {
+        // Just came back online and everything synced: show fresh data.
+        offlineWasShown = false;
+        try { refreshBackupStatus(); } catch (e) {}
+        try { if (crmSection.style.display !== 'none') loadClients(); } catch (e) {}
+      }
+      return;
+    }
+    offlineBanner.style.display = 'flex';
+    offlineWasShown = true;
+  }
+  offlineBannerDismiss.addEventListener('click', async () => {
+    try { await fetch('/api/offline/clear_problems', { method: 'POST' }); } catch (e) {}
+    refreshOfflineBanner();
+  });
+  // Any answer that came from the saved copy shows the banner right away,
+  // instead of waiting for the next check.
+  const _urtoFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const res = await _urtoFetch(...args);
+    try {
+      if (res.headers.get('X-URTO-Offline') && offlineBanner.style.display === 'none') refreshOfflineBanner();
+    } catch (e) {}
+    return res;
+  };
+  refreshOfflineBanner();
+  setInterval(refreshOfflineBanner, 10000);
+
   fetch('/api/check_update', { method: 'POST' }).then(r => r.json()).then(data => {
     if (!data || !data.update_available) return;
     const banner = document.createElement('div');
@@ -4087,6 +4161,19 @@ async function refreshBackupStatus() {
   try {
     const res = await fetch('/api/backup/status');
     const s = await res.json();
+    if (s.offline) {
+      backupStatusText.innerHTML = `<span class="warn">📴</span> Offline — cloud backups pick up again automatically when you're back online`;
+      backupDestinations.innerHTML = '';
+      gdriveApiConnectRow.style.display = 'none';
+      setBackupRunning(false);
+      return;
+    }
+    if (s.error && !('last_backup_at' in s)) {
+      backupStatusText.textContent = `Backup status unavailable: ${s.error}`;
+      backupDestinations.innerHTML = '';
+      setBackupRunning(false);
+      return;
+    }
     backupStatusText.innerHTML = `<span class="ok">●</span> Last backup: ${formatBackupTime(s.last_backup_at)}`;
     const chip = (label, on) => `<span class="${on ? 'ok' : 'warn'}">${on ? '●' : '○'} ${label}</span>`;
     // Since build order #71/#176 every device reads this from the one

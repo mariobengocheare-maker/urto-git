@@ -513,6 +513,17 @@ def backup_health():
     return jsonify(crm.check_data_health())
 
 
+@crm_bp.route("/api/backup/offline_copy")
+def backup_offline_copy():
+    # The desktop app's offline copy (see offline_mode.py). Answers 304 when
+    # nothing has changed since the copy the desktop already has.
+    etag = crm.offline_copy_etag()
+    if request.headers.get("If-None-Match") == etag:
+        return "", 304, {"ETag": etag}
+    data = crm.make_offline_copy_bytes()
+    return data, 200, {"Content-Type": "application/x-sqlite3", "ETag": etag, "Cache-Control": "no-store"}
+
+
 @crm_bp.route("/api/backup/snapshots")
 def backup_snapshots():
     return jsonify(crm.list_available_snapshots())

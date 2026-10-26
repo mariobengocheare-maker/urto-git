@@ -6,3 +6,7 @@ flasklog.txt
 backups/
 documents/
 last_updated.txt
+offline/
+skiptrace_sync.json
+hosted_sync.json
+drive_push_state.json

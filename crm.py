@@ -1526,6 +1526,54 @@ def _read_data_health_counts():
     return current, best
 
 
+# ---- Offline copy for the desktop app (build order #185) ----
+# The PC version keeps a copy of this database so it can keep working when
+# the internet is down (see offline_mode.py). These keys are removed from
+# the copy: they're only useful on the server, and the copy must never be
+# able to reach Google, Microsoft or the phone on its own.
+_OFFLINE_COPY_STRIP_SETTINGS = (
+    "google_oauth_refresh_token", "microsoft_oauth_refresh_token", "briefing_api_token",
+    "google_drive_folder_id",
+)
+
+
+def offline_copy_etag() -> str:
+    """Changes whenever the database file does, so the desktop can ask
+    "anything new?" cheaply instead of downloading the copy every time."""
+    try:
+        st = DB_PATH.stat()
+        return f'"{st.st_mtime_ns}-{st.st_size}"'
+    except OSError:
+        return '"none"'
+
+
+def make_offline_copy_bytes() -> bytes:
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".db", dir=str(DATA_DIR))
+    os.close(fd)
+    try:
+        src = get_conn()
+        dst = sqlite3.connect(tmp)
+        try:
+            src.backup(dst)
+        finally:
+            src.close()
+        dst.execute(
+            f"DELETE FROM app_settings WHERE key IN ({','.join('?' * len(_OFFLINE_COPY_STRIP_SETTINGS))})",
+            _OFFLINE_COPY_STRIP_SETTINGS,
+        )
+        dst.execute("DELETE FROM push_subscriptions")
+        dst.commit()
+        dst.execute("VACUUM")  # don't leave the removed keys in free pages
+        dst.close()
+        return Path(tmp).read_bytes()
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def check_data_health() -> dict:
     """Compares the LIVE database's client count against the most recent
     known backup mirror (urto_crm_latest.db, whichever destination has the

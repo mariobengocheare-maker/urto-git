@@ -30,6 +30,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 
 import crm
 import hosted_sync
+import offline_mode
 from input_parser import OUTPUT_FIELDS, build_output_row, load_rows, address_tokens, text_contains_address
 
 # `playwright.sync_api` (and lookup_engine.py/llc_lookup.py, which both
@@ -59,8 +60,29 @@ app = Flask(__name__)
 def _hosted_proxy_view(subpath=""):
     prefix = request.url_rule.rule.split("/<path:subpath>")[0].rstrip("/")
     full_path = f"{prefix}/{subpath}" if subpath else prefix
+    # No internet (or offline changes still waiting to be sent): answer from
+    # the PC's saved copy instead -- see offline_mode.py (build order #185).
+    if hosted_sync.is_configured() and offline_mode.should_serve_offline():
+        body, status, headers = offline_mode.serve(request, full_path)
+        return Response(body, status=status, headers=headers)
     body, status, headers = hosted_sync.proxy_request(request, full_path)
+    if headers.get("X-URTO-Unreachable"):
+        offline_mode.mark_offline()
+        body, status, headers = offline_mode.serve(request, full_path)
+    elif request.method != "GET" and status < 400:
+        offline_mode.note_online_change()
     return Response(body, status=status, headers=headers)
+
+
+@app.route("/api/offline/status")
+def offline_status():
+    return jsonify(offline_mode.status())
+
+
+@app.route("/api/offline/clear_problems", methods=["POST"])
+def offline_clear_problems():
+    offline_mode.clear_problems()
+    return jsonify(offline_mode.status())
 
 
 for _prefix in hosted_sync.PROXY_PREFIXES:
@@ -112,7 +134,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.67.2"
+APP_VERSION = "2.68.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -289,6 +311,11 @@ def _final_skiptrace_sync():
 crm.disable_cloud_mirrors()
 crm.init_db()
 crm.backup_now("startup")
+
+# Keep a copy of the cloud data on this PC so URTO keeps working with no
+# internet (build order #185).
+hosted_sync.offline_hint = offline_mode.should_serve_offline
+offline_mode.start()
 
 
 def _backup_watcher():
