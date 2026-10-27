@@ -59,6 +59,7 @@ SEG_TABLE = {
     "pieces": "chess_pieces", "transactions": "transactions",
     "document_types": "document_types", "notes": "notes", "text_presets": "text_presets",
     "transaction_documents": "transaction_documents", "skiptrace_results": "skiptrace_results",
+    "dialer_calls": "dialer_calls",
 }
 # Body keys that carry ids.
 BODY_KEY_TABLE = {
@@ -279,7 +280,7 @@ def _create_table(method: str, path: str):
     last = path.rstrip("/").split("/")[-1]
     if last in ("clients", "contact_lists", "events", "cre_units", "showing_days", "stops",
                 "commission_entries", "waterfall_items", "pieces", "transactions",
-                "document_types", "notes", "text_presets"):
+                "document_types", "notes", "text_presets", "dialer_calls"):
         return SEG_TABLE[last]
     return None
 

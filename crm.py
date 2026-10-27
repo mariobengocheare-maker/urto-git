@@ -770,6 +770,7 @@ def _write_full_data_export(backup_dir: Path):
         "clients": [dict(r) for r in conn.execute("SELECT * FROM clients ORDER BY id").fetchall()],
         "notes": [dict(r) for r in conn.execute("SELECT * FROM notes ORDER BY id").fetchall()],
         "call_log": [dict(r) for r in conn.execute("SELECT * FROM call_log ORDER BY id").fetchall()],
+        "dialer_calls": [dict(r) for r in conn.execute("SELECT * FROM dialer_calls ORDER BY id").fetchall()],
         "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
         "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
         "cre_units": [dict(r) for r in conn.execute("SELECT * FROM cre_units ORDER BY id").fetchall()],
@@ -838,7 +839,7 @@ def import_full_data_export(data: dict) -> dict:
         }
 
     table_order = [
-        "clients", "notes", "call_log", "contact_lists", "contact_list_members", "cre_units",
+        "clients", "notes", "call_log", "dialer_calls", "contact_lists", "contact_list_members", "cre_units",
         "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
         "lookup_stats", "text_presets", "commission_entries", "eos_rocks", "waterfall_items",
         "showing_days", "showing_stops", "skiptrace_results", "activity_log",
@@ -2069,6 +2070,33 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    # Daily call goal (EOS tab + Dialer progress bar) -- one row per call
+    # placed from the Dialer, for ANY entry (a CRM client or not), unlike
+    # call_log which only exists per client. call_date is the Miami calendar
+    # day, stored so day/week/month counts never depend on the server clock.
+    # client_id is ON DELETE SET NULL: deleting a client must never take
+    # calls Mario already made off his count.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dialer_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            called_at TEXT NOT NULL,
+            call_date TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dialer_calls_date ON dialer_calls(call_date)")
+    # One-time: copy the calls already logged for CRM clients into it, so the
+    # week/month/year counters start with real history instead of zero.
+    if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'dialer_calls_backfilled'").fetchone():
+        conn.execute("""
+            INSERT INTO dialer_calls (called_at, call_date, name, phone, client_id)
+            SELECT cl.called_at, substr(cl.called_at, 1, 10), COALESCE(c.name, ''), COALESCE(c.phone, ''), cl.client_id
+            FROM call_log cl LEFT JOIN clients c ON c.id = cl.client_id
+            WHERE cl.kind = 'call' ORDER BY cl.called_at, cl.id
+        """)
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('dialer_calls_backfilled', '1')")
     # Commission Tracker -- transaction_id is ON DELETE SET NULL (not
     # CASCADE): a commission already earned and recorded must never
     # disappear just because the transaction record itself is later
@@ -2539,6 +2567,7 @@ def merge_clients(keep_id, remove_ids) -> dict:
                 continue
             conn.execute("UPDATE notes SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute("UPDATE call_log SET client_id = ? WHERE client_id = ?", (keep_id, rid))
+            conn.execute("UPDATE dialer_calls SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute("UPDATE events SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute(
                 """INSERT OR IGNORE INTO contact_list_members (list_id, client_id)
@@ -4716,6 +4745,190 @@ def set_waterfall_item_completed(item_id: int, completed: bool) -> dict:
     conn.close()
     on_data_changed("waterfall item completion changed")
     return next((i for i in list_waterfall_items() if i["id"] == item_id), None)
+
+
+# ===================== Daily call goal =====================
+# Mario's rule: 75 calls from the Dialer every day. A day that falls short
+# carries its shortfall to the next day, and the next, until it's made up --
+# the EOS checklist grows one row per short day. Calls pay off the OLDEST
+# open day first. Calls beyond what's owed are never banked for later days.
+
+DAILY_CALL_GOAL_DEFAULT = 75
+DIALER_CALL_DEDUP_SECONDS = 20   # a double-click on Call shouldn't count twice
+
+
+def _call_goal_history() -> list:
+    """[{"from": "YYYY-MM-DD", "goal": n}, ...] oldest first. The first
+    entry's date is the day tracking started -- days before it never owe
+    anything. Created on first use, so the backlog starts the day Mario
+    first sees the tracker, not on some earlier date."""
+    try:
+        hist = json.loads(_get_setting("daily_call_goal_history") or "[]")
+    except ValueError:
+        hist = []
+    hist = [h for h in hist if isinstance(h, dict) and h.get("from") and int(h.get("goal") or 0) >= 0]
+    if not hist:
+        hist = [{"from": _today().isoformat(), "goal": DAILY_CALL_GOAL_DEFAULT}]
+        _set_setting("daily_call_goal_history", json.dumps(hist))
+    return sorted(hist, key=lambda h: h["from"])
+
+
+def _goal_for_day(hist: list, day: str) -> int:
+    goal = int(hist[0]["goal"])
+    for h in hist:
+        if h["from"] <= day:
+            goal = int(h["goal"])
+    return goal
+
+
+def set_daily_call_goal(goal: int) -> dict:
+    """Changes the goal from today on; days already gone keep what they owed."""
+    goal = int(goal)
+    if goal < 0 or goal > 1000:
+        raise RuntimeError("Pick a daily goal between 0 and 1000 calls.")
+    today = _today().isoformat()
+    hist = [h for h in _call_goal_history() if h["from"] != today]
+    hist.append({"from": today, "goal": goal})
+    if hist[0]["from"] > today:
+        hist[0]["from"] = today
+    _set_setting("daily_call_goal_history", json.dumps(sorted(hist, key=lambda h: h["from"])))
+    on_data_changed("daily call goal changed", f"{goal} calls a day")
+    return get_call_goal_status()
+
+
+def get_call_goal_status() -> dict:
+    hist = _call_goal_history()
+    today = _today()
+    today_s = today.isoformat()
+    start = min(datetime.strptime(hist[0]["from"], "%Y-%m-%d").date(), today)
+    conn = get_conn()
+    counts = {r["call_date"]: r["n"] for r in conn.execute(
+        "SELECT call_date, COUNT(*) AS n FROM dialer_calls WHERE call_date >= ? GROUP BY call_date",
+        (start.isoformat(),),
+    ).fetchall()}
+
+    def count_since(day):
+        return conn.execute("SELECT COUNT(*) FROM dialer_calls WHERE call_date >= ? AND call_date <= ?",
+                            (day.isoformat(), today_s)).fetchone()[0]
+
+    week_start = today - timedelta(days=today.weekday())
+    stats = {
+        "today": counts.get(today_s, 0),
+        "week": count_since(week_start),
+        "month": count_since(today.replace(day=1)),
+        "year": count_since(today.replace(month=1, day=1)),
+        "all_time": conn.execute("SELECT COUNT(*) FROM dialer_calls").fetchone()[0],
+        "week_start": week_start.isoformat(),
+    }
+    feed = [dict(r) for r in conn.execute(
+        "SELECT id, called_at, name, phone, client_id FROM dialer_calls WHERE call_date = ? "
+        "ORDER BY called_at DESC, id DESC LIMIT 500",
+        (today_s,),
+    ).fetchall()]
+    conn.close()
+
+    # Walk every day before today: each adds what it owes, then that day's
+    # calls pay off the oldest open days first. What's left open is the backlog.
+    open_days = []   # [date, owed, remaining]
+    day = start
+    while day < today:
+        d = day.isoformat()
+        owed = _goal_for_day(hist, d)
+        if owed:
+            open_days.append([d, owed, owed])
+        left = counts.get(d, 0)
+        for od in open_days:
+            if left <= 0:
+                break
+            pay = min(od[2], left)
+            od[2] -= pay
+            left -= pay
+        open_days = [od for od in open_days if od[2] > 0]
+        day += timedelta(days=1)
+
+    goal_today = _goal_for_day(hist, today_s)
+    open_days.append([today_s, goal_today, goal_today])
+    left = counts.get(today_s, 0)
+    rows = []
+    for d, owed, remaining in open_days:
+        pay = min(remaining, max(left, 0))
+        left -= pay
+        rows.append({
+            "date": d, "owed": owed, "is_today": d == today_s,
+            "short_at_start": remaining,     # what this row needed when today began
+            "made_today": pay,
+            "remaining": remaining - pay,
+            "done": remaining - pay == 0,
+        })
+    backlog = sum(r["short_at_start"] for r in rows if not r["is_today"])
+    required = sum(r["short_at_start"] for r in rows)
+    return {
+        "goal": goal_today,
+        "start_date": start.isoformat(),
+        "today": today_s,
+        "made_today": stats["today"],
+        "backlog": backlog,
+        "required_today": required,
+        "remaining_today": sum(r["remaining"] for r in rows),
+        "rows": rows,
+        "stats": stats,
+        "feed": feed,
+    }
+
+
+def log_dialer_call(name: str = "", phone: str = "", client_id=None) -> dict:
+    """One call placed from the Dialer, for any entry. If it's a CRM client
+    it's also logged on that client (log_call: last called, call history,
+    follow-up schedule), so the Dialer only has to make this one request."""
+    name = (name or "").strip()[:200]
+    phone = (phone or "").strip()[:60]
+    now = _now()
+    key = _normalize_phone_key(phone)
+    conn = get_conn()
+    try:
+        cid = int(client_id) if client_id not in (None, "") else None
+    except (TypeError, ValueError):
+        cid = None
+    if cid is not None and not conn.execute("SELECT 1 FROM clients WHERE id = ?", (cid,)).fetchone():
+        cid = None
+    duplicate_of = None
+    if key:
+        cutoff = (now - timedelta(seconds=DIALER_CALL_DEDUP_SECONDS)).isoformat(timespec="seconds")
+        for r in conn.execute("SELECT id, phone FROM dialer_calls WHERE called_at >= ? ORDER BY id DESC",
+                              (cutoff,)).fetchall():
+            if _normalize_phone_key(r["phone"]) == key:
+                duplicate_of = r["id"]
+                break
+    if duplicate_of:
+        conn.close()
+        return {"id": duplicate_of, "duplicate": True, "client": get_client(cid) if cid else None,
+                "goal": get_call_goal_status()}
+    cur = conn.execute(
+        "INSERT INTO dialer_calls (called_at, call_date, name, phone, client_id) VALUES (?, ?, ?, ?, ?)",
+        (now.isoformat(timespec="seconds"), now.date().isoformat(), name, phone, cid),
+    )
+    call_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    client = log_call(cid) if cid else None
+    if not cid:
+        on_data_changed("dialer call logged", name or phone)
+    return {"id": call_id, "duplicate": False, "client": client, "goal": get_call_goal_status()}
+
+
+def delete_dialer_call(call_id: int) -> bool:
+    """Takes a mis-click back off the count. Only the daily count -- a CRM
+    client's own call history isn't touched."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM dialer_calls WHERE id = ?", (call_id,)).fetchone()
+    if not row:
+        conn.close()
+        return False
+    conn.execute("DELETE FROM dialer_calls WHERE id = ?", (call_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("dialer call removed", row["name"] or row["phone"])
+    return True
 
 
 # ===================== Commission Tracker =====================

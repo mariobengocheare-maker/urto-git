@@ -964,6 +964,35 @@ def waterfall_complete(item_id):
     return jsonify(item)
 
 
+# ===================== Daily call goal =====================
+
+@crm_bp.route("/api/crm/call_goal", methods=["GET"])
+def call_goal_status():
+    return jsonify(crm.get_call_goal_status())
+
+
+@crm_bp.route("/api/crm/call_goal", methods=["PUT"])
+def call_goal_update():
+    data = request.get_json(force=True) or {}
+    try:
+        return jsonify(crm.set_daily_call_goal(data.get("goal")))
+    except (RuntimeError, TypeError, ValueError) as e:
+        return jsonify({"error": str(e) if isinstance(e, RuntimeError) else "Enter a number of calls."}), 400
+
+
+@crm_bp.route("/api/crm/dialer_calls", methods=["POST"])
+def dialer_call_log():
+    data = request.get_json(force=True) or {}
+    return jsonify(crm.log_dialer_call(data.get("name", ""), data.get("phone", ""), data.get("client_id")))
+
+
+@crm_bp.route("/api/crm/dialer_calls/<int:call_id>", methods=["DELETE"])
+def dialer_call_delete(call_id):
+    if not crm.delete_dialer_call(call_id):
+        abort(404)
+    return jsonify({"ok": True, "goal": crm.get_call_goal_status()})
+
+
 # ===================== Commission Tracker =====================
 
 @crm_bp.route("/api/crm/commission_settings", methods=["GET"])

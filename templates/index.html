@@ -894,17 +894,150 @@
   .day-view-row.completed .day-view-time { color: var(--success-fg); }
   .day-view-row.manual .day-view-time { color: var(--gold); }
 
-  .eos-rock-card input, .eos-rock-card textarea { width: 100%; }
-  .waterfall-item {
-    display: flex; align-items: center; gap: 12px;
-    padding: 11px 8px; border-bottom: 1px solid var(--border);
+  /* ---- Daily call goal (EOS tab + Dialer strip) ---- */
+  .goal-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .goal-head h2 { margin: 0; flex: 1; min-width: 0; }
+  .goal-icon-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text-secondary);
+    border-radius: 999px; padding: 4px 11px; font-size: .78rem; cursor: pointer;
   }
-  .waterfall-item:last-child { border-bottom: none; }
-  .waterfall-item.locked { opacity: .45; }
-  .waterfall-item input[type="checkbox"] { width: 18px; height: 18px; flex-shrink: 0; }
-  .waterfall-item .waterfall-title { flex: 1; min-width: 0; }
+  .goal-icon-btn:hover, .goal-icon-btn.open { border-color: var(--gold); color: var(--gold-bright); }
+  .goal-big { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 14px 0 6px; }
+  .goal-big-num { font-size: 2.6rem; font-weight: 700; line-height: 1; color: var(--text); font-variant-numeric: tabular-nums; }
+  .goal-big-of { color: var(--text-secondary); font-size: 1.05rem; }
+  .goal-big-left { margin-left: auto; font-weight: 600; color: var(--gold-bright); }
+  .goal-big-left.done { color: var(--success-fg); }
+  .goal-bar {
+    position: relative; height: 12px; border-radius: 999px; overflow: hidden;
+    background: rgba(255,255,255,.06); border: 1px solid var(--border);
+  }
+  .goal-bar-fill {
+    height: 100%; width: 0; border-radius: 999px;
+    background: linear-gradient(90deg, #8a6d14, var(--gold-bright) 70%, #f3dc8a);
+    box-shadow: 0 0 12px rgba(212,175,55,.45); transition: width .5s ease;
+  }
+  .goal-bar-fill.done { background: linear-gradient(90deg, #2f8f57, var(--success-fg)); box-shadow: 0 0 12px rgba(107,214,148,.45); }
+  .goal-sub { color: var(--text-secondary); font-size: .85rem; margin-top: 8px; }
+  .goal-sub b { color: var(--danger-fg); }
+  .goal-stats {
+    display: none; margin-top: 12px; padding: 10px; border-radius: 10px;
+    border: 1px dashed var(--border); background: rgba(255,255,255,.02);
+    grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+  }
+  .goal-stats.show { display: grid; }
+  .goal-stat { text-align: center; min-width: 0; }
+  .goal-stat-num { font-size: 1.05rem; font-weight: 700; color: var(--gold-bright); font-variant-numeric: tabular-nums; }
+  .goal-stat-label { font-size: .7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .05em; }
+  .goal-settings { display: none; margin-top: 12px; gap: 8px; align-items: center; flex-wrap: wrap; font-size: .85rem; color: var(--text-secondary); }
+  .goal-settings.show { display: flex; }
+  .goal-settings input { width: 80px; }
+  .goal-checklist { margin-top: 16px; max-height: 360px; overflow-y: auto; padding-right: 2px; }
+  .goal-row {
+    display: flex; align-items: center; gap: 12px; padding: 10px 10px; margin-bottom: 6px;
+    border-radius: 10px; border: 1px solid var(--border); background: rgba(255,255,255,.02);
+  }
+  .goal-row.stacked { border-color: rgba(255,138,138,.35); background: rgba(255,138,138,.05); }
+  .goal-row.done { border-color: rgba(107,214,148,.35); background: rgba(107,214,148,.05); }
+  .goal-check {
+    width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    border: 2px solid var(--border); font-size: .8rem; font-weight: 700; color: transparent;
+  }
+  .goal-row.done .goal-check { border-color: var(--success-fg); background: var(--success-fg); color: #0d2a19; }
+  .goal-row.stacked:not(.done) .goal-check { border-color: var(--danger-fg); }
+  .goal-row-main { flex: 1; min-width: 0; }
+  .goal-row-label { font-weight: 600; font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .goal-row.done .goal-row-label { color: var(--text-secondary); text-decoration: line-through; }
+  .goal-row-mini { height: 5px; margin-top: 6px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; }
+  .goal-row-mini > div { height: 100%; background: var(--gold-bright); }
+  .goal-row.done .goal-row-mini > div { background: var(--success-fg); }
+  .goal-row.stacked:not(.done) .goal-row-mini > div { background: var(--danger-fg); }
+  .goal-row-count { flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: .88rem; color: var(--text-secondary); }
+
+  .dialer-goal { margin-bottom: 14px; padding: 12px 14px; cursor: pointer; }
+  .dialer-goal-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: .9rem; }
+  .dialer-goal-top .dg-count { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .dialer-goal-top .dg-left { margin-left: auto; color: var(--gold-bright); font-weight: 600; }
+  .dialer-goal-top .dg-left.done { color: var(--success-fg); }
+  .dialer-goal-top .dg-caret { color: var(--text-secondary); transition: transform .2s; }
+  .dialer-goal.open .dg-caret { transform: rotate(180deg); }
+  .dialer-goal-live { width: 8px; height: 8px; border-radius: 50%; background: var(--success-fg); box-shadow: 0 0 8px var(--success-fg); flex-shrink: 0; animation: goalPulse 2s infinite; }
+  @keyframes goalPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .dialer-goal-panel { display: none; margin-top: 12px; cursor: default; }
+  .dialer-goal.open .dialer-goal-panel { display: block; }
+  .dg-feed { max-height: 280px; overflow-y: auto; border-top: 1px solid var(--border); margin-top: 8px; }
+  .dg-feed-row { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border-bottom: 1px solid var(--border); font-size: .88rem; }
+  .dg-feed-row:last-child { border-bottom: none; }
+  .dg-feed-time { width: 70px; flex-shrink: 0; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .dg-feed-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dg-feed-phone { color: var(--text-secondary); flex-shrink: 0; }
+  .dg-feed-del { background: transparent; border: none; color: var(--text-secondary); cursor: pointer; padding: 2px 6px; font-size: .9rem; }
+  .dg-feed-del:hover { color: var(--danger-fg); }
+  .dg-feed-empty { padding: 12px 2px; color: var(--text-secondary); font-size: .88rem; }
+
+  /* ---- Waterfall to-do: a cascade of steps joined by a line ---- */
+  .wf-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .wf-head h2 { margin: 0; flex: 1; }
+  .wf-progress-text { color: var(--text-secondary); font-size: .85rem; }
+  .wf-progress { height: 6px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; margin: 10px 0 18px; }
+  .wf-progress > div { height: 100%; background: linear-gradient(90deg, #2a6bb3, #5fd0ff, var(--gold-bright)); transition: width .5s ease; }
+  .waterfall-list { position: relative; }
+  .waterfall-item { position: relative; display: flex; align-items: flex-start; gap: 14px; padding-bottom: 14px; }
+  .waterfall-item::before {
+    content: ''; position: absolute; left: 17px; top: 38px; bottom: -2px; width: 2px;
+    background: var(--border);
+  }
+  .waterfall-item:last-child::before { display: none; }
+  .waterfall-item.completed::before { background: linear-gradient(180deg, var(--gold-bright), rgba(212,175,55,.35)); }
+  .wf-node {
+    width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; position: relative; z-index: 1;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: .9rem;
+    border: 2px solid var(--border); background: var(--card-bg); color: var(--text-secondary);
+    cursor: pointer; padding: 0; transition: transform .15s, box-shadow .2s;
+  }
+  .wf-node:disabled { cursor: not-allowed; }
+  .waterfall-item.current .wf-node {
+    border-color: var(--gold-bright); color: var(--gold-bright);
+    box-shadow: 0 0 0 4px rgba(212,175,55,.15), 0 0 16px rgba(212,175,55,.35);
+  }
+  .waterfall-item.current .wf-node:hover { transform: scale(1.08); }
+  .waterfall-item.completed .wf-node {
+    border-color: var(--gold-bright); color: #2a2200;
+    background: linear-gradient(135deg, #f3dc8a, var(--gold-bright) 55%, #8a6d14);
+  }
+  .wf-body {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px 6px 12px; border-radius: 10px; border: 1px solid transparent;
+    transition: background .2s, border-color .2s;
+  }
+  .waterfall-item.current .wf-body { border-color: rgba(212,175,55,.45); background: rgba(212,175,55,.07); }
+  .waterfall-item.locked .wf-body { opacity: .5; }
+  .wf-body .waterfall-title {
+    flex: 1; min-width: 0; background: transparent; border: 1px solid transparent;
+    padding: 5px 6px; border-radius: 6px; color: var(--text); font-size: .95rem;
+  }
+  .wf-body .waterfall-title:focus { border-color: var(--border); background: rgba(255,255,255,.04); }
   .waterfall-item.completed .waterfall-title { text-decoration: line-through; color: var(--text-secondary); }
-  .waterfall-item .waterfall-lock-note { font-size: .78rem; color: var(--text-secondary); font-style: italic; }
+  .wf-tag { flex-shrink: 0; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px; border-radius: 999px; }
+  .wf-tag.next { color: #2a2200; background: var(--gold-bright); }
+  .wf-tag.locked { color: var(--text-secondary); border: 1px solid var(--border); }
+  .wf-tag.done { color: var(--success-fg); border: 1px solid rgba(107,214,148,.4); }
+  .wf-del { opacity: 0; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; padding: 4px 6px; transition: opacity .15s; }
+  .waterfall-item:hover .wf-del, .wf-del:focus { opacity: 1; }
+  .wf-del:hover { color: var(--danger-fg); }
+  @media (hover: none) { .wf-del { opacity: .6; } }
+  .wf-add { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
+  .wf-add-node {
+    width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; border: 2px dashed var(--border);
+    display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 1.1rem;
+  }
+  .wf-add input { flex: 1; min-width: 0; }
+  .wf-empty { color: var(--text-secondary); padding: 6px 0 14px 50px; font-size: .9rem; }
+  @media (max-width: 640px) {
+    .goal-big-num { font-size: 2.1rem; }
+    .goal-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .goal-row-label { white-space: normal; }
+    .wf-tag.locked { display: none; }
+  }
 
   .commission-total-card {
     position: relative;
@@ -1701,6 +1834,21 @@
   <h1>URTO Dialer</h1>
   <p class="sub">Load a list, then press Enter to call the current number or use the arrow keys to move through the list. Calling hands off to whatever phone app is set up on this PC (e.g. Phone Link) — URTO doesn't place calls itself.</p>
 
+  <div class="card dialer-goal" id="dialerGoal" title="Click to see today's calls">
+    <div class="dialer-goal-top">
+      <span class="dialer-goal-live"></span>
+      <span>Today's calls</span>
+      <span class="dg-count" id="dialerGoalCount">0 / 75</span>
+      <span class="dg-left" id="dialerGoalLeft"></span>
+      <span class="dg-caret">▾</span>
+    </div>
+    <div class="goal-bar"><div class="goal-bar-fill" id="dialerGoalFill"></div></div>
+    <div class="dialer-goal-panel" id="dialerGoalPanel">
+      <div class="goal-sub" id="dialerGoalSub" style="margin-top:0"></div>
+      <div class="dg-feed" id="dialerGoalFeed"></div>
+    </div>
+  </div>
+
   <div class="source-bar">
     <button class="active" id="dialerSourcePasteBtn">Paste / Upload List</button>
     <button id="dialerSourceCrmBtn">From CRM Clients</button>
@@ -2067,51 +2215,42 @@
 
 <section id="eosSection" style="display:none">
   <h1>EOS &amp; Rocks</h1>
-  <p class="sub">Your 30/60/90-day priorities, plus a step-by-step waterfall to-do list.</p>
+  <p class="sub">Your daily call checklist (any day you come up short stacks onto the next), plus a step-by-step waterfall to-do list.</p>
 
-  <div class="row" id="eosRocksRow" style="gap:16px; align-items:stretch; flex-wrap:wrap; margin-bottom:22px">
-    <div class="card eos-rock-card" data-rock="rock_30" style="flex:1; min-width:260px">
-      <h2 style="margin-top:0">30-Day Rock</h2>
-      <input type="text" class="eos-rock-title" placeholder="What's the rock?">
-      <textarea class="eos-rock-desc" rows="3" placeholder="Details (optional)" style="margin-top:8px"></textarea>
-      <div class="form-group" style="margin-top:10px; margin-bottom:0">
-        <label>Start date</label>
-        <input type="date" class="eos-rock-start">
-      </div>
-      <div class="sub eos-rock-end" style="margin-top:8px"></div>
-      <button class="ghost small eos-rock-save" style="margin-top:10px">Save</button>
+  <div class="card" id="callGoalCard" style="margin-bottom:22px">
+    <div class="goal-head">
+      <h2>📞 Daily Calls</h2>
+      <button type="button" class="goal-icon-btn" id="callGoalStatsBtn">📊 Call counts</button>
+      <button type="button" class="goal-icon-btn" id="callGoalSettingsBtn" title="Change the daily goal">⚙</button>
     </div>
-    <div class="card eos-rock-card" data-rock="rock_60" style="flex:1; min-width:260px">
-      <h2 style="margin-top:0">60-Day Rock</h2>
-      <input type="text" class="eos-rock-title" placeholder="What's the rock?">
-      <textarea class="eos-rock-desc" rows="3" placeholder="Details (optional)" style="margin-top:8px"></textarea>
-      <div class="form-group" style="margin-top:10px; margin-bottom:0">
-        <label>Start date</label>
-        <input type="date" class="eos-rock-start">
-      </div>
-      <div class="sub eos-rock-end" style="margin-top:8px"></div>
-      <button class="ghost small eos-rock-save" style="margin-top:10px">Save</button>
+    <div class="goal-stats" id="callGoalStats"></div>
+    <div class="goal-settings" id="callGoalSettings">
+      Calls per day:
+      <input type="number" id="callGoalInput" min="0" max="1000" step="1">
+      <button type="button" class="small" id="callGoalSaveBtn">Save</button>
+      <span id="callGoalSettingsMsg"></span>
     </div>
-    <div class="card eos-rock-card" data-rock="rock_90" style="flex:1; min-width:260px">
-      <h2 style="margin-top:0">90-Day Rock</h2>
-      <input type="text" class="eos-rock-title" placeholder="What's the rock?">
-      <textarea class="eos-rock-desc" rows="3" placeholder="Details (optional)" style="margin-top:8px"></textarea>
-      <div class="form-group" style="margin-top:10px; margin-bottom:0">
-        <label>Start date</label>
-        <input type="date" class="eos-rock-start">
-      </div>
-      <div class="sub eos-rock-end" style="margin-top:8px"></div>
-      <button class="ghost small eos-rock-save" style="margin-top:10px">Save</button>
+    <div class="goal-big">
+      <span class="goal-big-num" id="callGoalMade">0</span>
+      <span class="goal-big-of" id="callGoalOf">of 75 calls today</span>
+      <span class="goal-big-left" id="callGoalLeft"></span>
     </div>
+    <div class="goal-bar"><div class="goal-bar-fill" id="callGoalFill"></div></div>
+    <div class="goal-sub" id="callGoalSub"></div>
+    <div class="goal-checklist" id="callGoalChecklist"></div>
   </div>
 
   <div class="card">
-    <h2 style="margin-top:0">Waterfall To-Do</h2>
-    <p class="sub">Each item unlocks only once the one before it is checked off.</p>
-    <div id="waterfallList"></div>
-    <div class="row" style="margin-top:14px">
-      <input type="text" id="waterfallNewItem" placeholder="Add a new step…" style="flex:1">
-      <button id="waterfallAddBtn">+ Add Step</button>
+    <div class="wf-head">
+      <h2>🌊 Waterfall To-Do</h2>
+      <span class="wf-progress-text" id="waterfallProgressText"></span>
+    </div>
+    <div class="wf-progress"><div id="waterfallProgressFill" style="width:0"></div></div>
+    <div class="waterfall-list" id="waterfallList"></div>
+    <div class="wf-add">
+      <div class="wf-add-node">+</div>
+      <input type="text" id="waterfallNewItem" placeholder="Add the next step…">
+      <button id="waterfallAddBtn">Add Step</button>
     </div>
   </div>
 </section>
@@ -3935,7 +4074,7 @@ const commissionSection = document.getElementById('commissionSection');
 
 const TOP_TABS = HOSTED ? [
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
-  { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
+  { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: () => { refreshCallGoal(); } },
   { key: 'map', btn: tabMapBtn, section: mapSection, onShow: () => { initMapTab(); } },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
   { key: 'showing', btn: tabShowingBtn, section: showingSection, onShow: () => { initShowingDayTab(); } },
@@ -3945,7 +4084,7 @@ const TOP_TABS = HOSTED ? [
   { key: 'home', btn: document.getElementById('tabHomeBtn'), section: homeSection, onShow: null },
   { key: 'lookup', btn: document.getElementById('tabLookupBtn'), section: lookupSection, onShow: () => { refreshWeeklyLookupCount(); refreshSkiptraceFolderCount(); } },
   { key: 'crm', btn: tabCrmBtn, section: crmSection, onShow: () => { loadClients(); refreshBackupStatus(); checkDataHealth(); } },
-  { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: null },
+  { key: 'dialer', btn: tabDialerBtn, section: dialerSection, onShow: () => { refreshCallGoal(); } },
   { key: 'map', btn: tabMapBtn, section: mapSection, onShow: () => { initMapTab(); } },
   { key: 'txn', btn: tabTxnBtn, section: txnSection, onShow: () => { showTxnListView(); } },
   { key: 'showing', btn: tabShowingBtn, section: showingSection, onShow: () => { initShowingDayTab(); } },
@@ -7779,11 +7918,18 @@ document.getElementById('dictateDiscardBtn').addEventListener('click', resetDict
 // There's no reliable browser event for "the tel: call actually happened" —
 // clicking to call is treated as the call, same approximation the rest of
 // the Dialer (dictation, follow-up text) already relies on.
+// Every Dialer call counts toward the daily goal (CRM client or not); for a
+// CRM client the same request also stamps their last-called / history.
 function logCallForEntry(entry) {
-  if (!entry || !entry.clientId) return;
-  fetch(`/api/crm/clients/${entry.clientId}/log_call`, { method: 'POST' })
-    .then(() => {
-      if (dialerList[dialerIndex] === entry) updateDialerClientInfo(entry);
+  if (!entry) return;
+  fetch('/api/crm/dialer_calls', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: entry.name || '', phone: entry.phone || '', client_id: entry.clientId || null }),
+  })
+    .then(res => res.ok ? res.json() : null)
+    .then(data => {
+      if (data && data.goal) renderCallGoal(data.goal);
+      if (entry.clientId && dialerList[dialerIndex] === entry) updateDialerClientInfo(entry);
     })
     .catch(() => {});
 }
@@ -9720,101 +9866,208 @@ const waterfallNewItem = document.getElementById('waterfallNewItem');
 const waterfallAddBtn = document.getElementById('waterfallAddBtn');
 let eosLoaded = false;
 
-function formatEosDate(dateStr) {
-  if (!dateStr) return null;
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-}
-
 async function initEosTab() {
-  await loadEosRocks();
+  refreshCallGoal();
   if (!eosLoaded) {
     eosLoaded = true;
     await loadWaterfallItems();
   }
 }
 
-async function loadEosRocks() {
-  const res = await fetch('/api/crm/eos_rocks');
-  const rocks = res.ok ? await res.json() : [];
-  for (const rock of rocks) {
-    const card = document.querySelector(`.eos-rock-card[data-rock="${rock.rock_key}"]`);
-    if (!card) continue;
-    card.querySelector('.eos-rock-title').value = rock.title || '';
-    card.querySelector('.eos-rock-desc').value = rock.description || '';
-    card.querySelector('.eos-rock-start').value = rock.start_date || '';
-    const endEl = card.querySelector('.eos-rock-end');
-    if (rock.start_date && rock.end_date) {
-      endEl.textContent = `From ${formatEosDate(rock.start_date)} — by ${formatEosDate(rock.end_date)}`;
-    } else {
-      endEl.textContent = 'Set a start date to see the target date.';
-    }
-  }
+/* ===================== Daily call goal ===================== */
+// One status object (GET /api/crm/call_goal) drives both the EOS checklist
+// and the Dialer's progress strip, so they can never disagree.
+let callGoalStatus = null;
+const callGoalChecklist = document.getElementById('callGoalChecklist');
+const dialerGoalEl = document.getElementById('dialerGoal');
+
+function formatGoalDay(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-document.querySelectorAll('.eos-rock-save').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    const card = btn.closest('.eos-rock-card');
-    const rockKey = card.getAttribute('data-rock');
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
-    try {
-      await fetch(`/api/crm/eos_rocks/${rockKey}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: card.querySelector('.eos-rock-title').value,
-          description: card.querySelector('.eos-rock-desc').value,
-          start_date: card.querySelector('.eos-rock-start').value,
-        }),
-      });
-      await loadEosRocks();
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Save';
-    }
-  });
+function callTimeLabel(called_at) {
+  const m = /T(\d{2}):(\d{2})/.exec(called_at || '');
+  return m ? formatTime12(`${m[1]}:${m[2]}`) : '';
+}
+
+function renderCallGoal(st) {
+  if (!st) return;
+  callGoalStatus = st;
+  const req = st.required_today;
+  const doneAll = st.remaining_today === 0;
+  const pct = req > 0 ? Math.min(100, Math.round(100 * (req - st.remaining_today) / req)) : 100;
+  const leftText = doneAll ? '✅ Goal hit' : `${st.remaining_today} to go`;
+  const stackText = st.backlog > 0
+    ? `${st.goal} for today + <b>${st.backlog} stacked</b> from earlier days`
+    : `Goal: ${st.goal} calls a day. Short days stack onto the next.`;
+
+  // EOS card
+  document.getElementById('callGoalMade').textContent = st.made_today;
+  document.getElementById('callGoalOf').textContent = `of ${req} call${req === 1 ? '' : 's'} today`;
+  const leftEl = document.getElementById('callGoalLeft');
+  leftEl.textContent = leftText;
+  leftEl.classList.toggle('done', doneAll);
+  const fill = document.getElementById('callGoalFill');
+  fill.style.width = pct + '%';
+  fill.classList.toggle('done', doneAll);
+  document.getElementById('callGoalSub').innerHTML = stackText;
+  callGoalChecklist.innerHTML = st.rows.map(r => {
+    const got = r.short_at_start - r.remaining;
+    const rowPct = r.short_at_start > 0 ? Math.round(100 * got / r.short_at_start) : 100;
+    const label = r.is_today
+      ? `Today — ${r.owed} calls`
+      : `${formatGoalDay(r.date)} — ${r.short_at_start} call${r.short_at_start === 1 ? '' : 's'} short (stacked)`;
+    const cls = ['goal-row'];
+    if (!r.is_today) cls.push('stacked');
+    if (r.done) cls.push('done');
+    return `<div class="${cls.join(' ')}">
+      <div class="goal-check">✓</div>
+      <div class="goal-row-main">
+        <div class="goal-row-label">${escapeHtml(label)}</div>
+        <div class="goal-row-mini"><div style="width:${rowPct}%"></div></div>
+      </div>
+      <div class="goal-row-count">${got} / ${r.short_at_start}</div>
+    </div>`;
+  }).join('');
+  const s = st.stats;
+  document.getElementById('callGoalStats').innerHTML = [
+    ['This week', s.week], ['This month', s.month], ['This year', s.year], ['All time', s.all_time],
+  ].map(([label, n]) => `<div class="goal-stat"><div class="goal-stat-num">${n.toLocaleString()}</div><div class="goal-stat-label">${label}</div></div>`).join('');
+  const goalInput = document.getElementById('callGoalInput');
+  if (document.activeElement !== goalInput) goalInput.value = st.goal;
+
+  // Dialer strip
+  document.getElementById('dialerGoalCount').textContent = `${st.made_today} / ${req}`;
+  const dLeft = document.getElementById('dialerGoalLeft');
+  dLeft.textContent = leftText;
+  dLeft.classList.toggle('done', doneAll);
+  const dFill = document.getElementById('dialerGoalFill');
+  dFill.style.width = pct + '%';
+  dFill.classList.toggle('done', doneAll);
+  document.getElementById('dialerGoalSub').innerHTML = stackText +
+    ` · This week: ${s.week.toLocaleString()} · Month: ${s.month.toLocaleString()} · Year: ${s.year.toLocaleString()}`;
+  document.getElementById('dialerGoalFeed').innerHTML = st.feed.length
+    ? st.feed.map(c => `<div class="dg-feed-row">
+        <span class="dg-feed-time">${callTimeLabel(c.called_at)}</span>
+        <span class="dg-feed-name">${escapeHtml(c.name || 'Unknown')}</span>
+        <span class="dg-feed-phone">${escapeHtml(c.phone || '')}</span>
+        <button type="button" class="dg-feed-del" data-del-call="${c.id}" title="Didn't actually call — take it off the count">✕</button>
+      </div>`).join('')
+    : '<div class="dg-feed-empty">No calls yet today — load a list and press Enter to call.</div>';
+}
+
+async function refreshCallGoal() {
+  try {
+    const res = await fetch('/api/crm/call_goal');
+    if (res.ok) renderCallGoal(await res.json());
+  } catch (e) { /* keep showing the last numbers */ }
+}
+
+document.getElementById('callGoalStatsBtn').addEventListener('click', (e) => {
+  const open = document.getElementById('callGoalStats').classList.toggle('show');
+  e.currentTarget.classList.toggle('open', open);
 });
+document.getElementById('callGoalSettingsBtn').addEventListener('click', (e) => {
+  const open = document.getElementById('callGoalSettings').classList.toggle('show');
+  e.currentTarget.classList.toggle('open', open);
+});
+document.getElementById('callGoalSaveBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('callGoalSettingsMsg');
+  const goal = parseInt(document.getElementById('callGoalInput').value, 10);
+  msg.textContent = '';
+  try {
+    const res = await fetch('/api/crm/call_goal', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { msg.textContent = data.error || "Couldn't save."; return; }
+    renderCallGoal(data);
+    msg.textContent = 'Saved — counts from today on.';
+  } catch (e) {
+    msg.textContent = "Couldn't reach URTO's server — try again.";
+  }
+});
+
+dialerGoalEl.addEventListener('click', (e) => {
+  if (e.target.closest('.dialer-goal-panel')) return;
+  const open = dialerGoalEl.classList.toggle('open');
+  if (open) refreshCallGoal();
+});
+document.getElementById('dialerGoalFeed').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-del-call]');
+  if (!btn) return;
+  if (!confirm("Take this call off today's count?")) return;
+  try {
+    const res = await fetch(`/api/crm/dialer_calls/${btn.dataset.delCall}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.goal) renderCallGoal(data.goal); else refreshCallGoal();
+  } catch (e) { refreshCallGoal(); }
+});
+
+// Live: keep both views current (calls can also come from the phone).
+setInterval(() => {
+  if (dialerSection.style.display !== 'none' || eosSection.style.display !== 'none') refreshCallGoal();
+}, 20000);
 
 /* ===================== Waterfall to-do ===================== */
 async function loadWaterfallItems() {
   const res = await fetch('/api/crm/waterfall_items');
   const items = res.ok ? await res.json() : [];
+  const doneCount = items.filter(i => i.completed_at).length;
+  document.getElementById('waterfallProgressText').textContent = items.length
+    ? (doneCount === items.length ? `All ${items.length} steps done 🎉` : `${doneCount} of ${items.length} steps done`)
+    : '';
+  document.getElementById('waterfallProgressFill').style.width =
+    (items.length ? Math.round(100 * doneCount / items.length) : 0) + '%';
   if (!items.length) {
-    waterfallList.innerHTML = '<div class="sub">No steps yet — add your first one below.</div>';
+    waterfallList.innerHTML = '<div class="wf-empty">No steps yet — add your first one below.</div>';
     return;
   }
-  waterfallList.innerHTML = items.map(item => {
+  const currentId = (items.find(i => i.unlocked && !i.completed_at) || {}).id;
+  waterfallList.innerHTML = items.map((item, idx) => {
     const classes = ['waterfall-item'];
     if (!item.unlocked) classes.push('locked');
     if (item.completed_at) classes.push('completed');
+    if (item.id === currentId) classes.push('current');
+    const node = item.completed_at ? '✓' : (item.unlocked ? String(idx + 1) : '🔒');
+    const tag = item.completed_at ? '<span class="wf-tag done">Done</span>'
+      : item.id === currentId ? '<span class="wf-tag next">Up next</span>'
+      : '<span class="wf-tag locked">Locked</span>';
+    const nodeTitle = item.completed_at ? 'Mark as not done' : (item.unlocked ? 'Mark as done' : 'Finish the step above first');
     return `
       <div class="${classes.join(' ')}" data-item-id="${item.id}">
-        <input type="checkbox" ${item.completed_at ? 'checked' : ''} ${item.unlocked ? '' : 'disabled'}>
-        <input type="text" class="waterfall-title" value="${escapeHtml(item.title)}" ${item.completed_at ? 'disabled' : ''}>
-        ${!item.unlocked ? '<span class="waterfall-lock-note">🔒 locked</span>' : ''}
-        <button class="ghost small" data-remove-waterfall="${item.id}">🗑</button>
+        <button type="button" class="wf-node" data-toggle-waterfall="${item.completed_at ? '0' : '1'}"
+          title="${nodeTitle}" ${item.unlocked ? '' : 'disabled'}>${node}</button>
+        <div class="wf-body">
+          <input type="text" class="waterfall-title" value="${escapeHtml(item.title)}" ${item.completed_at ? 'disabled' : ''}>
+          ${tag}
+          <button type="button" class="wf-del" data-remove-waterfall="${item.id}" title="Delete step">🗑</button>
+        </div>
       </div>
     `;
   }).join('');
 }
 
-waterfallList.addEventListener('change', async (e) => {
-  const row = e.target.closest('.waterfall-item');
-  if (!row) return;
-  const itemId = row.dataset.itemId;
-  if (e.target.type === 'checkbox') {
-    try {
-      const res = await fetch(`/api/crm/waterfall_items/${itemId}/complete`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ completed: e.target.checked }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        alert(data.error || "Couldn't update that step.");
-      }
-    } finally {
-      loadWaterfallItems();
+waterfallList.addEventListener('click', async (e) => {
+  const node = e.target.closest('[data-toggle-waterfall]');
+  if (!node || node.disabled) return;
+  const row = node.closest('.waterfall-item');
+  node.disabled = true;
+  try {
+    const res = await fetch(`/api/crm/waterfall_items/${row.dataset.itemId}/complete`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ completed: node.dataset.toggleWaterfall === '1' }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || "Couldn't update that step.");
     }
+  } catch (err) {
+    alert("Couldn't reach URTO's server — try again.");
+  } finally {
+    loadWaterfallItems();
   }
 });
 
