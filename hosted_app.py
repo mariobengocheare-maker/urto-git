@@ -37,7 +37,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.37.0-hosted"
+APP_VERSION = "1.38.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -349,9 +349,12 @@ def send_morning_digest():
         body += f" {len(manual_items)} other item{'s' if len(manual_items) != 1 else ''} scheduled."
     try:
         goal = crm.get_call_goal_status()
-        body += f" Call goal: {goal['required_today']}"
-        body += f" ({goal['backlog']} stacked)." if goal["backlog"] else "."
-        if goal["streak"]["current"] > 0:
+        if goal["today_off"]:
+            body += f" No-work day ({goal['today_off']}) — no call goal today."
+        elif goal["started"]:
+            body += f" Call goal: {goal['required_today']}"
+            body += f" ({goal['backlog']} stacked)." if goal["backlog"] else "."
+        if goal["started"] and goal["streak"]["current"] > 0:
             body += f" Day {goal['streak']['current'] + 1} 🔥 — don't break the streak."
     except Exception:
         pass

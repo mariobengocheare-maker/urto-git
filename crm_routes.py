@@ -984,6 +984,35 @@ def call_goal_update():
         return jsonify({"error": str(e) if isinstance(e, RuntimeError) else "Enter a number of calls."}), 400
 
 
+@crm_bp.route("/api/crm/call_goal/year", methods=["GET"])
+def call_goal_year():
+    try:
+        year = int(request.args.get("year"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "year is required"}), 400
+    return jsonify(crm.get_call_year(year))
+
+
+@crm_bp.route("/api/crm/no_work_days", methods=["GET"])
+def no_work_days_list():
+    return jsonify(crm.list_no_work_days(request.args.get("start"), request.args.get("end")))
+
+
+@crm_bp.route("/api/crm/no_work_days/<day>", methods=["PUT"])
+def no_work_day_set(day):
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(crm.set_no_work_day(day, data.get("label", "")))
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@crm_bp.route("/api/crm/no_work_days/<day>", methods=["DELETE"])
+def no_work_day_remove(day):
+    crm.remove_no_work_day(day)
+    return jsonify({"ok": True})
+
+
 @crm_bp.route("/api/crm/dialer_calls/<int:call_id>/outcome", methods=["PUT"])
 def dialer_call_outcome(call_id):
     data = request.get_json(force=True) or {}
@@ -1050,7 +1079,8 @@ def commission_list():
     sort = request.args.get("sort", "date_desc")
     limit = int(request.args.get("limit", 20))
     offset = int(request.args.get("offset", 0))
-    return jsonify(crm.list_commission_entries(sort=sort, limit=limit, offset=offset))
+    year = request.args.get("year") or None
+    return jsonify(crm.list_commission_entries(sort=sort, limit=limit, offset=offset, year=year))
 
 
 @crm_bp.route("/api/crm/commission_entries/<int:entry_id>", methods=["GET"])

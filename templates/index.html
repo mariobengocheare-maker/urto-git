@@ -1005,6 +1005,35 @@
   .heat-cell.hit { background: var(--gold-bright); box-shadow: 0 0 6px rgba(212,175,55,.55); }
   .heat-cell.future { background: transparent; border: 1px dashed rgba(255,255,255,.08); }
   .heat-cell.today { outline: 1px solid var(--text); outline-offset: 1px; }
+  .heat-cell.before { background: transparent; border: 1px solid rgba(255,255,255,.04); }
+  .heat-cell.outside { visibility: hidden; }
+  .heat-cell.off { background: rgba(94,200,190,.28); }
+  .heat-cell.off.hit { background: var(--gold-bright); }
+  .heat-view-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; font-size: .82rem; color: var(--text-secondary); }
+  .heat-view-row select { width: auto; padding: 4px 8px; font-size: .82rem; }
+  .heatmap.year { grid-template-rows: repeat(7, 11px); grid-auto-columns: 11px; gap: 2px; }
+  .heatmap.year .heat-cell { width: 11px; height: 11px; border-radius: 2px; }
+  .heat-months { display: grid; grid-auto-flow: column; grid-auto-columns: 11px; gap: 2px; font-size: .62rem; color: var(--text-secondary); margin-top: 8px; overflow: hidden; white-space: nowrap; }
+  .call-year-summary { margin-top: 12px; }
+  .call-year-totals { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .call-year-totals > div { background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; min-width: 96px; }
+  .call-year-totals b { display: block; font-size: 1.2rem; color: var(--gold-bright); }
+  .call-year-totals span { font-size: .72rem; color: var(--text-secondary); }
+  .call-year-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .call-year-table th, .call-year-table td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border); }
+  .call-year-table th:first-child, .call-year-table td:first-child { text-align: left; }
+  .call-year-table th { color: var(--text-secondary); font-weight: 600; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+  .call-year-table tr.empty td { color: var(--text-secondary); opacity: .55; }
+  .goal-notice { padding: 14px 16px; border-radius: 12px; border: 1px dashed rgba(212,175,55,.45); background: rgba(212,175,55,.06); font-size: .9rem; }
+  .goal-notice.off { border-color: rgba(94,200,190,.5); background: rgba(94,200,190,.08); }
+  .sc-missed { font-size: .82rem; color: var(--text-secondary); margin: -4px 0 10px; }
+  .sc-missed b { color: #7fd8cf; }
+  .cal-cell.no-work { background: repeating-linear-gradient(135deg, rgba(94,200,190,.07) 0 8px, transparent 8px 16px); }
+  .cal-chip.nowork { background: rgba(94,200,190,.25); color: #bff3ec; border: 1px solid rgba(94,200,190,.5); }
+  .day-view-nowork { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-size: .88rem; }
+  .day-view-nowork input { flex: 1; min-width: 140px; }
+  .commission-year-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .commission-year-row select { width: auto; padding: 6px 10px; }
   .heat-legend { display: flex; align-items: center; gap: 4px; font-size: .72rem; color: var(--text-secondary); margin-top: 6px; }
   .heat-legend .heat-cell { width: 10px; height: 10px; }
   .badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
@@ -2334,8 +2363,14 @@
           <div class="streak-sub" id="streakSub"></div>
         </div>
       </div>
+      <div class="heat-view-row">
+        <label for="heatViewSelect">Show:</label>
+        <select id="heatViewSelect"><option value="recent">Last 12 weeks</option></select>
+      </div>
+      <div class="heat-months" id="callHeatMonths" style="display:none"></div>
       <div class="heatmap" id="callHeatmap"></div>
-      <div class="heat-legend">Less <span class="heat-cell"></span><span class="heat-cell l1"></span><span class="heat-cell l2"></span><span class="heat-cell l3"></span><span class="heat-cell hit"></span> Goal hit</div>
+      <div class="heat-legend">Less <span class="heat-cell"></span><span class="heat-cell l1"></span><span class="heat-cell l2"></span><span class="heat-cell l3"></span><span class="heat-cell hit"></span> Goal hit · <span class="heat-cell off"></span> Day off</div>
+      <div class="call-year-summary" id="callYearSummary" style="display:none"></div>
       <div class="badge-row" id="callBadges"></div>
     </div>
   </div>
@@ -2352,11 +2387,12 @@
       <button type="button" class="ghost small" id="scNextBtn">›</button>
       <span class="sc-summary" id="scSummary"></span>
     </div>
+    <div class="sc-missed" id="scMissed"></div>
     <div class="sc-targets" id="scTargets">
       <div class="sc-targets-grid" id="scTargetsGrid"></div>
       <div class="row" style="margin-top:10px; gap:8px; align-items:center">
         <button type="button" class="small" id="scTargetsSaveBtn">Save targets</button>
-        <span id="scTargetsMsg" style="font-size:.82rem; color:var(--text-secondary)">Leave blank for no target. Calls default to your daily goal × 7.</span>
+        <span id="scTargetsMsg" style="font-size:.82rem; color:var(--text-secondary)">Leave blank for no target. Calls default to your daily goal × 7. Each day off you mark on the Calendar cuts that week's targets 20%.</span>
       </div>
     </div>
     <table class="sc-table" id="scTable"></table>
@@ -2380,7 +2416,12 @@
 
 <section id="commissionSection" style="display:none">
   <h1>Commission Tracker</h1>
-  <p class="sub">Your lifetime commissions, in one place.</p>
+  <p class="sub">Your commissions, in one place.</p>
+
+  <div class="commission-year-row">
+    <label for="commissionYearSelect" style="margin:0">Showing:</label>
+    <select id="commissionYearSelect"></select>
+  </div>
 
   <div class="card commission-total-card">
     <div class="commission-total-main">
@@ -2945,6 +2986,7 @@
       <button class="modal-close" id="dayViewCloseBtn">&times;</button>
     </div>
     <div class="day-view-list" id="dayViewList"></div>
+    <div class="day-view-nowork" id="dayViewNoWork"></div>
     <div class="modal-actions">
       <button type="button" class="ghost" id="dayViewCloseBtn2">Close</button>
       <button type="button" id="dayViewAddBtn">+ Add Event</button>
@@ -6422,10 +6464,19 @@ document.getElementById('calAddEventBtn').addEventListener('click', () => {
   openEventForm(todayIsoDate(), null); // local date, not toISOString()'s UTC one -- see renderCalendar()'s own comment
 });
 
+let calNoWorkDays = {};   // 'YYYY-MM-DD' -> label, for the month on screen
+
 async function renderCalendar() {
   calMonthLabel.textContent = `${MONTH_NAMES[calMonth - 1]} ${calYear}`;
-  const res = await fetch(`/api/crm/calendar?year=${calYear}&month=${calMonth}`);
+  const monthStart = `${calYear}-${String(calMonth).padStart(2,'0')}-01`;
+  const monthEnd = `${calYear}-${String(calMonth).padStart(2,'0')}-${String(new Date(calYear, calMonth, 0).getDate()).padStart(2,'0')}`;
+  const [res, offRes] = await Promise.all([
+    fetch(`/api/crm/calendar?year=${calYear}&month=${calMonth}`),
+    fetch(`/api/crm/no_work_days?start=${monthStart}&end=${monthEnd}`).catch(() => null),
+  ]);
   const events = res.ok ? await res.json() : [];
+  calNoWorkDays = {};
+  if (offRes && offRes.ok) for (const d of await offRes.json()) calNoWorkDays[d.day] = d.label;
 
   const eventsByDay = {};
   for (const e of events) {
@@ -6457,7 +6508,7 @@ async function renderCalendar() {
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${calYear}-${String(calMonth).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const cell = document.createElement('div');
-    cell.className = 'cal-cell' + (dateStr === todayStr ? ' today' : '');
+    cell.className = 'cal-cell' + (dateStr === todayStr ? ' today' : '') + (calNoWorkDays[dateStr] ? ' no-work' : '');
     cell.title = "Click to see this day's events";
     const dayNum = document.createElement('div');
     dayNum.className = 'cal-daynum';
@@ -6469,6 +6520,13 @@ async function renderCalendar() {
     const chipList = document.createElement('div');
     chipList.className = 'cal-chip-list';
     cell.appendChild(chipList);
+    if (calNoWorkDays[dateStr]) {
+      const chip = document.createElement('div');
+      chip.className = 'cal-chip nowork';
+      chip.textContent = `🏖 ${calNoWorkDays[dateStr]}`;
+      chip.title = 'Day off — no call goal, and it cuts this week\'s scorecard targets 20%';
+      chipList.appendChild(chip);
+    }
     for (const e of (eventsByDay[dateStr] || [])) {
       const chip = document.createElement('div');
       const label = e.kind === 'manual' ? (e.list_name ? `💰 ${e.time ? formatTime12(e.time) + ' ' : ''}${e.title}` : `${e.time ? formatTime12(e.time) + ' ' : ''}${e.title}`)
@@ -6510,7 +6568,7 @@ function openDayView(dateStr, dayEvents) {
   dayViewTitle.textContent = formatDayViewDate(dateStr);
   const sorted = [...dayEvents].sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
   if (!sorted.length) {
-    dayViewList.innerHTML = '<div class="day-view-empty">No events today.</div>';
+    dayViewList.innerHTML = '<div class="day-view-empty">No events this day.</div>';
   } else {
     dayViewList.innerHTML = '';
     for (const e of sorted) {
@@ -6531,8 +6589,44 @@ function openDayView(dateStr, dayEvents) {
       dayViewList.appendChild(row);
     }
   }
+  renderDayViewNoWork();
   dayViewOverlay.classList.add('show');
 }
+
+// Mark/unmark the open day as a holiday / no-work day.
+function renderDayViewNoWork() {
+  const box = document.getElementById('dayViewNoWork');
+  const label = calNoWorkDays[dayViewDateStr];
+  if (label) {
+    box.innerHTML = `<span>🏖 <b>Day off:</b> ${escapeHtml(label)} — no call goal, and this week's scorecard targets are cut 20%.</span>
+      <button type="button" class="ghost small" id="dayViewNoWorkRemove">Remove day off</button>`;
+  } else {
+    box.innerHTML = `<span>🏖 Holiday or not working?</span>
+      <input type="text" id="dayViewNoWorkLabel" placeholder="e.g. Thanksgiving" maxlength="80">
+      <button type="button" class="small" id="dayViewNoWorkSave">Mark as day off</button>`;
+  }
+}
+
+document.getElementById('dayViewNoWork').addEventListener('click', async (e) => {
+  const save = e.target.closest('#dayViewNoWorkSave');
+  const remove = e.target.closest('#dayViewNoWorkRemove');
+  if (!save && !remove) return;
+  const day = dayViewDateStr;
+  try {
+    const res = await fetch(`/api/crm/no_work_days/${day}`, {
+      method: save ? 'PUT' : 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: save ? JSON.stringify({ label: (document.getElementById('dayViewNoWorkLabel').value || '').trim() }) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(data.error || "Couldn't save that."); return; }
+    if (save) calNoWorkDays[day] = data.label; else delete calNoWorkDays[day];
+    renderDayViewNoWork();
+    renderCalendar();
+    refreshCallGoal();
+  } catch (err) {
+    alert("Couldn't reach URTO's server — try again.");
+  }
+});
 
 dayViewAddBtn.addEventListener('click', () => {
   dayViewOverlay.classList.remove('show');
@@ -10061,16 +10155,26 @@ function renderCallGoal(st) {
   if (!st) return;
   callGoalStatus = st;
   const req = st.required_today;
-  const doneAll = st.remaining_today === 0;
-  const pct = req > 0 ? Math.min(100, Math.round(100 * (req - st.remaining_today) / req)) : 100;
-  const leftText = doneAll ? '✅ Goal hit' : `${st.remaining_today} to go`;
-  const stackText = st.backlog > 0
-    ? `${st.goal} for today + <b>${st.backlog} stacked</b> from earlier days`
-    : `Goal: ${st.goal} calls a day. Short days stack onto the next.`;
+  const doneAll = st.started !== false && !(st.today_off && req === 0) && st.remaining_today === 0;
+  const pct = st.started === false ? 0 : req > 0 ? Math.min(100, Math.round(100 * (req - st.remaining_today) / req)) : 100;
+  const notStarted = st.started === false;
+  const dayOff = !notStarted && st.today_off;
+  let leftText = doneAll ? '✅ Goal hit' : `${st.remaining_today} to go`;
+  let stackText = st.backlog > 0
+    ? `${dayOff ? 'Day off today' : st.goal + ' for today'} + <b>${st.backlog} stacked</b> from earlier days`
+    : `Goal: ${st.daily_goal || st.goal} calls a day. Short days stack onto the next.`;
+  if (notStarted) {
+    leftText = '';
+    stackText = `Tracking starts <b>${formatGoalDay(st.start_date)}</b> — ${st.daily_goal} calls a day from then on.`;
+  } else if (dayOff && !st.backlog) {
+    leftText = '🏖 Day off';
+    stackText = `Today is marked as a day off (${escapeHtml(st.today_off)}) — nothing owed, and it won't break your streak.`;
+  }
 
   // EOS card
   document.getElementById('callGoalMade').textContent = st.made_today;
-  document.getElementById('callGoalOf').textContent = `of ${req} call${req === 1 ? '' : 's'} today`;
+  document.getElementById('callGoalOf').textContent = notStarted ? `calls counted — tracking starts ${formatGoalDay(st.start_date)}`
+    : `of ${req} call${req === 1 ? '' : 's'} today`;
   const leftEl = document.getElementById('callGoalLeft');
   leftEl.textContent = leftText;
   leftEl.classList.toggle('done', doneAll);
@@ -10078,7 +10182,9 @@ function renderCallGoal(st) {
   fill.style.width = pct + '%';
   fill.classList.toggle('done', doneAll);
   document.getElementById('callGoalSub').innerHTML = stackText;
-  callGoalChecklist.innerHTML = st.rows.map(r => {
+  callGoalChecklist.innerHTML = notStarted
+    ? `<div class="goal-notice">📅 The tracker starts on <b>${formatGoalDay(st.start_date)}</b>. Calls before then don't count toward the goal, the streak or the scorecard.</div>`
+    : st.rows.filter(r => !(r.is_today && r.owed === 0)).map(r => {
     const got = r.short_at_start - r.remaining;
     const rowPct = r.short_at_start > 0 ? Math.round(100 * got / r.short_at_start) : 100;
     const label = r.is_today
@@ -10099,12 +10205,13 @@ function renderCallGoal(st) {
   const s = st.stats;
   document.getElementById('callGoalStats').innerHTML = [
     ['This week', s.week], ['This month', s.month], ['This year', s.year], ['All time', s.all_time],
-  ].map(([label, n]) => `<div class="goal-stat"><div class="goal-stat-num">${n.toLocaleString()}</div><div class="goal-stat-label">${label}</div></div>`).join('');
+  ].map(([label, n]) => `<div class="goal-stat"><div class="goal-stat-num">${n.toLocaleString()}</div><div class="goal-stat-label">${label}</div></div>`).join('') +
+    `<div class="goal-stat-label" style="width:100%">Counted from ${formatGoalDay(st.start_date)}, when the tracker started.</div>`;
   const goalInput = document.getElementById('callGoalInput');
-  if (document.activeElement !== goalInput) goalInput.value = st.goal;
+  if (document.activeElement !== goalInput) goalInput.value = st.daily_goal || st.goal;
 
   // Dialer strip
-  document.getElementById('dialerGoalCount').textContent = `${st.made_today} / ${req}`;
+  document.getElementById('dialerGoalCount').textContent = notStarted ? `Starts ${formatGoalDay(st.start_date)}` : `${st.made_today} / ${req}`;
   const dLeft = document.getElementById('dialerGoalLeft');
   dLeft.textContent = leftText;
   dLeft.classList.toggle('done', doneAll);
@@ -10142,21 +10249,100 @@ function renderCallGoal(st) {
   document.getElementById('streakSub').textContent =
     (sk.today_hit ? "Today's goal hit ✓" : (sk.current > 0 ? "Hit today's goal to keep it going" : 'Hit your goal today to start one')) +
     ` · Best: ${sk.longest} day${sk.longest === 1 ? '' : 's'}`;
-  document.getElementById('callHeatmap').innerHTML = (st.heatmap || []).map(d => {
-    let cls = 'heat-cell';
-    if (d.future) cls += ' future';
-    else if (d.hit) cls += ' hit';
-    else if (d.count > 0) {
-      const ratio = d.goal > 0 ? d.count / d.goal : 1;
-      cls += ratio >= 0.66 ? ' l3' : ratio >= 0.33 ? ' l2' : ' l1';
-    }
-    if (d.date === st.today) cls += ' today';
-    return `<div class="${cls}" title="${formatGoalDay(d.date)}: ${d.count} call${d.count === 1 ? '' : 's'} (goal ${d.goal})"></div>`;
-  }).join('');
+  renderHeatYearOptions(st);
+  if (heatView === 'recent') renderHeatmap(st.heatmap || [], st.today, false);
   document.getElementById('callBadges').innerHTML = (st.badges || []).map(b =>
     `<span class="call-badge ${b.earned ? 'earned' : ''}" title="${escapeHtml(b.how)}">${b.emoji} ${escapeHtml(b.label)}</span>`
   ).join('');
 }
+
+let heatView = 'recent';   // 'recent' or a year like '2026'
+
+function heatCellHtml(d, today) {
+  let cls = 'heat-cell';
+  let tip;
+  if (d.outside) cls += ' outside';
+  if (d.before) { cls += ' before'; tip = `${formatGoalDay(d.date)}: before the tracker started`; }
+  else if (d.future) { cls += ' future'; tip = formatGoalDay(d.date) + (d.off ? ` — day off (${d.off})` : ''); }
+  else if (d.off && !d.hit) { cls += ' off'; tip = `${formatGoalDay(d.date)}: day off (${d.off}) — ${d.count} call${d.count === 1 ? '' : 's'}`; }
+  else {
+    if (d.hit) cls += ' hit';
+    else if (d.count > 0) {
+      const ratio = d.goal > 0 ? d.count / d.goal : 1;
+      cls += ratio >= 0.66 ? ' l3' : ratio >= 0.33 ? ' l2' : ' l1';
+    }
+    tip = `${formatGoalDay(d.date)}: ${d.count} call${d.count === 1 ? '' : 's'} (goal ${d.goal})`;
+  }
+  if (d.date === today) cls += ' today';
+  return `<div class="${cls}" title="${escapeHtml(tip)}"></div>`;
+}
+
+function renderHeatmap(days, today, isYear) {
+  const el = document.getElementById('callHeatmap');
+  el.classList.toggle('year', !!isYear);
+  el.innerHTML = days.map(d => heatCellHtml(d, today)).join('');
+  const months = document.getElementById('callHeatMonths');
+  if (!isYear) { months.style.display = 'none'; return; }
+  // One label per week column, shown on the week a month starts in.
+  const labels = [];
+  for (let i = 0; i < days.length; i += 7) {
+    const week = days.slice(i, i + 7).filter(d => !d.outside);
+    const first = week.find(d => d.date.endsWith('-01'));
+    labels.push(first ? MONTH_NAMES[Number(first.date.slice(5, 7)) - 1].slice(0, 3) : '');
+  }
+  months.innerHTML = labels.map(l => `<span>${l}</span>`).join('');
+  months.style.display = 'grid';
+}
+
+function renderHeatYearOptions(st) {
+  const sel = document.getElementById('heatViewSelect');
+  const years = (st.years || []).map(String);
+  const want = ['recent', ...years];
+  const have = [...sel.options].map(o => o.value);
+  if (want.join() === have.join()) return;
+  sel.innerHTML = '<option value="recent">Last 12 weeks</option>' +
+    years.map(y => `<option value="${y}">${y} (calendar year)</option>`).join('');
+  sel.value = want.includes(heatView) ? heatView : 'recent';
+}
+
+async function loadCallYear(year) {
+  const box = document.getElementById('callYearSummary');
+  box.style.display = '';
+  box.innerHTML = '<div class="goal-stat-label">Loading…</div>';
+  try {
+    const res = await fetch(`/api/crm/call_goal/year?year=${year}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'failed');
+    if (heatView !== String(year)) return;
+    renderHeatmap(data.heatmap, callGoalStatus ? callGoalStatus.today : todayIsoDate(), true);
+    const t = data.totals;
+    const rate = t.goal_days ? Math.round(100 * t.days_hit / t.goal_days) + '%' : '—';
+    box.innerHTML = `<div class="call-year-totals">
+        <div><b>${t.calls.toLocaleString()}</b><span>Calls in ${data.year}</span></div>
+        <div><b>${t.conversations.toLocaleString()}</b><span>Conversations</span></div>
+        <div><b>${t.appointments.toLocaleString()}</b><span>Appointments</span></div>
+        <div><b>${t.days_hit} / ${t.goal_days}</b><span>Goal days hit (${rate})</span></div>
+        <div><b>${t.best_day.toLocaleString()}</b><span>Best day</span></div>
+      </div>
+      <table class="call-year-table"><tr><th>Month</th><th>Calls</th><th>Convos</th><th>Appts</th><th>Goal days hit</th></tr>` +
+      data.months.map(m => `<tr class="${m.calls || m.goal_days ? '' : 'empty'}"><td>${MONTH_NAMES[m.month - 1]}</td><td>${m.calls.toLocaleString()}</td>` +
+        `<td>${m.conversations}</td><td>${m.appointments}</td><td>${m.goal_days ? m.days_hit + ' / ' + m.goal_days : '—'}</td></tr>`).join('') +
+      '</table>' +
+      `<div class="goal-stat-label" style="margin-top:6px">Counted from ${formatGoalDay(data.start_date)}, when the tracker started.</div>`;
+  } catch (e) {
+    box.innerHTML = '<div class="goal-stat-label">Couldn\'t load that year — try again.</div>';
+  }
+}
+
+document.getElementById('heatViewSelect').addEventListener('change', (e) => {
+  heatView = e.target.value;
+  if (heatView === 'recent') {
+    document.getElementById('callYearSummary').style.display = 'none';
+    if (callGoalStatus) renderHeatmap(callGoalStatus.heatmap || [], callGoalStatus.today, false);
+  } else {
+    loadCallYear(heatView);
+  }
+});
 
 const CALL_OUTCOME_LABELS = {
   no_answer: '📵 No answer', voicemail: '📩 Voicemail', talked: '🗣 Talked',
@@ -10284,28 +10470,40 @@ function renderScorecard(data) {
   const label = `${formatGoalDay(sc.week_start)} – ${formatGoalDay(sc.week_end)}` + (sc.is_current ? ' (this week)' : '');
   document.getElementById('scWeekLabel').textContent = label;
   document.getElementById('scNextBtn').disabled = !sc.next_week;
+  document.getElementById('scPrevBtn').disabled = !sc.prev_week;
   document.getElementById('scSummary').innerHTML = sc.colored
     ? `<b>${sc.green}</b> of ${sc.colored} green` + (sc.is_current ? ' so far' : '')
     : '';
-  document.getElementById('scTable').innerHTML =
+  const missed = sc.missed_days || [];
+  document.getElementById('scMissed').innerHTML = sc.before_tracking ? '' : [
+    sc.counted_from && sc.counted_from > sc.week_start ? `Counting from <b>${formatGoalDay(sc.counted_from)}</b>, when the tracker started.` : '',
+    missed.length ? `Targets cut <b>${Math.round((1 - sc.target_factor) * 100)}%</b> for ${missed.length} missed day${missed.length === 1 ? '' : 's'}: ` +
+      missed.map(m => `${formatGoalDay(m.date)} (${escapeHtml(m.label)})`).join(', ') + '.' : '',
+  ].filter(Boolean).join(' ');
+  if (sc.before_tracking) {
+    document.getElementById('scTable').innerHTML =
+      `<tr><td style="padding:18px 8px; color:var(--text-secondary)">The tracker started ${formatGoalDay(sc.tracking_start)} — nothing to score before then.</td></tr>`;
+  } else document.getElementById('scTable').innerHTML =
     '<tr><th>Measure</th><th class="num">Actual</th><th class="num target">Target</th><th></th></tr>' +
     sc.metrics.map(m => {
       const cls = m.good === true ? 'good' : m.good === false ? 'bad' : '';
       const tgt = m.target === null || m.target === undefined || (m.target === 0 && !m.lower_is_better)
         ? '—' : (m.lower_is_better ? '≤ ' : '') + scFormat(m.key, m.target);
+      const tgtTip = m.base_target !== null && m.base_target !== undefined && m.base_target !== m.target
+        ? ` title="Normally ${scFormat(m.key, m.base_target)} — cut for missed days"` : '';
       return `<tr class="sc-row ${cls}"><td>${escapeHtml(m.label)}</td><td class="num">${scFormat(m.key, m.value)}</td>` +
-        `<td class="num target">${tgt}</td><td class="num"><span class="sc-dot ${cls}"></span></td></tr>`;
+        `<td class="num target"${tgtTip}>${tgt}</td><td class="num"><span class="sc-dot ${cls}"></span></td></tr>`;
     }).join('');
   // Targets form
   const keys = sc.metrics.map(m => m.key);
-  document.getElementById('scTargetsGrid').innerHTML = sc.metrics.map(m => {
+  if (sc.metrics.length) document.getElementById('scTargetsGrid').innerHTML = sc.metrics.map(m => {
     const v = data.targets[m.key];
     return `<div><label for="scT_${m.key}">${escapeHtml(m.label)}${m.lower_is_better ? ' (at most)' : ''}</label>` +
       `<input type="number" min="0" step="any" id="scT_${m.key}" data-key="${m.key}" value="${v === null || v === undefined ? '' : v}" placeholder="${m.key === 'calls' ? 'auto' : 'none'}"></div>`;
   }).join('');
   // History
   const hist = data.history || [];
-  document.getElementById('scHistory').innerHTML = hist.length
+  document.getElementById('scHistory').innerHTML = hist.length && sc.metrics.length
     ? `<table><tr><th>Week of</th><th>Green</th>${sc.metrics.map(m => `<th>${escapeHtml(m.label.split(' ')[0])}</th>`).join('')}</tr>` +
       hist.map(h => `<tr><td>${formatGoalDay(h.week_start)}</td><td>${h.green}/${h.colored}</td>` +
         keys.map(k => `<td class="${h.good[k] === true ? 'good' : h.good[k] === false ? 'bad' : ''}">${scFormat(k, h.values[k])}</td>`).join('') +
@@ -10607,8 +10805,24 @@ async function initCommissionTab() {
   commissionNewDate.value = todayIsoDate();
   applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow, commissionNewSalePriceLabel);
   commissionOffset = 0;
+  commissionYear = String(new Date().getFullYear());   // always opens on this year
   await refreshCommissionList(true);
 }
+
+// 'YYYY' or 'all'. Limits the list, the big totals and the breakdown wheel.
+let commissionYear = String(new Date().getFullYear());
+const commissionYearSelect = document.getElementById('commissionYearSelect');
+function renderCommissionYearOptions(years) {
+  const opts = [...(years || []).map(String)];
+  if (commissionYear !== 'all' && !opts.includes(commissionYear)) opts.unshift(commissionYear);
+  commissionYearSelect.innerHTML = opts.map(y => `<option value="${y}">${y}</option>`).join('') +
+    '<option value="all">All time</option>';
+  commissionYearSelect.value = commissionYear;
+}
+commissionYearSelect.addEventListener('change', () => {
+  commissionYear = commissionYearSelect.value;
+  refreshCommissionList(true);
+});
 
 function updateCommissionNewRepFields() {
   applyCommissionRepFields(commissionNewDealType, commissionNewRepresented, commissionNewSellersLabel, commissionNewBuyersAgentLabel, commissionNewCoListingRow, commissionNewSalePriceLabel);
@@ -10712,10 +10926,11 @@ function renderCommissionTotals() {
   const bigValue = showingSale ? commissionTotals.sale : commissionTotals.commission;
   const subValue = showingSale ? commissionTotals.commission : commissionTotals.sale;
   commissionLifetimeTotal.textContent = formatMoney(bigValue);
+  const period = commissionYear === 'all' ? 'Lifetime' : commissionYear;
   commissionLifetimeSub.textContent = showingSale
-    ? `Lifetime commission: ${formatMoney(subValue)}`
+    ? `${period} commission: ${formatMoney(subValue)}`
     : `Gross sales: ${formatMoney(subValue)}`;
-  commissionTotalLabel.textContent = showingSale ? 'Gross Sales' : 'Lifetime Commission';
+  commissionTotalLabel.textContent = showingSale ? `${period} Gross Sales` : `${period} Commission`;
 }
 
 commissionSwapBtn.addEventListener('click', () => {
@@ -10729,14 +10944,17 @@ async function refreshCommissionList(reset) {
     commissionOffset = 0;
     commissionList.innerHTML = '';
   }
-  const res = await fetch(`/api/crm/commission_entries?sort=${commissionSort}&limit=${COMMISSION_PAGE_SIZE}&offset=${commissionOffset}`);
+  const res = await fetch(`/api/crm/commission_entries?sort=${commissionSort}&limit=${COMMISSION_PAGE_SIZE}&offset=${commissionOffset}&year=${commissionYear}`);
   if (!res.ok) return;
   const data = await res.json();
+  renderCommissionYearOptions(data.years);
   commissionTotals = { commission: data.lifetime_total, sale: data.lifetime_sale_total };
   renderCommissionTotals();
   renderRepTallyAndDonut(data.by_representation);
   if (reset && !data.entries.length) {
-    commissionList.innerHTML = '<div class="sub">No commissions logged yet.</div>';
+    commissionList.innerHTML = commissionYear === 'all'
+      ? '<div class="sub">No commissions logged yet.</div>'
+      : `<div class="sub">No commissions closed in ${commissionYear} yet.</div>`;
   }
   for (const entry of data.entries) {
     commissionList.appendChild(buildCommissionRow(entry));

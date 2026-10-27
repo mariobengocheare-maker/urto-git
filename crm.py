@@ -772,6 +772,7 @@ def _write_full_data_export(backup_dir: Path):
         "call_log": [dict(r) for r in conn.execute("SELECT * FROM call_log ORDER BY id").fetchall()],
         "dialer_calls": [dict(r) for r in conn.execute("SELECT * FROM dialer_calls ORDER BY id").fetchall()],
         "weekly_scorecards": [dict(r) for r in conn.execute("SELECT * FROM weekly_scorecards ORDER BY week_start").fetchall()],
+        "no_work_days": [dict(r) for r in conn.execute("SELECT * FROM no_work_days ORDER BY day").fetchall()],
         "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
         "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
         "cre_units": [dict(r) for r in conn.execute("SELECT * FROM cre_units ORDER BY id").fetchall()],
@@ -843,7 +844,7 @@ def import_full_data_export(data: dict) -> dict:
         "clients", "notes", "call_log", "dialer_calls", "contact_lists", "contact_list_members", "cre_units",
         "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
         "lookup_stats", "text_presets", "commission_entries", "eos_rocks", "waterfall_items",
-        "showing_days", "showing_stops", "skiptrace_results", "weekly_scorecards", "activity_log",
+        "showing_days", "showing_stops", "skiptrace_results", "weekly_scorecards", "no_work_days", "activity_log",
     ]
     counts = {}
     try:
@@ -2101,6 +2102,13 @@ def init_db():
             week_start TEXT PRIMARY KEY,
             data TEXT NOT NULL,
             saved_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS no_work_days (
+            day TEXT PRIMARY KEY,
+            label TEXT NOT NULL DEFAULT 'No work',
+            created_at TEXT NOT NULL
         )
     """)
     # One-time: copy the calls already logged for CRM clients into it, so the
@@ -3434,8 +3442,11 @@ def get_morning_briefing_text() -> str:
     goal_part = ""
     try:
         goal = get_call_goal_status()
-        goal_part = f" Your call goal today is {goal['required_today']} calls"
-        goal_part += f", including {goal['backlog']} stacked from earlier days." if goal["backlog"] else "."
+        if goal["today_off"]:
+            goal_part = " Today is marked as a day off, so there's no call goal."
+        elif goal["started"]:
+            goal_part = f" Your call goal today is {goal['required_today']} calls"
+            goal_part += f", including {goal['backlog']} stacked from earlier days." if goal["backlog"] else "."
         if goal["streak"]["current"] > 0:
             goal_part += f" You're on a {goal['streak']['current']}-day streak."
     except Exception:
@@ -4780,25 +4791,88 @@ def set_waterfall_item_completed(item_id: int, completed: bool) -> dict:
 
 DAILY_CALL_GOAL_DEFAULT = 75
 DIALER_CALL_DEDUP_SECONDS = 20   # a double-click on Call shouldn't count twice
+# The tracker went live Wednesday, Oct 28, 2026 (Mario's call: Monday and
+# Tuesday of that week weren't tracked, so nothing before it counts or owes).
+CALL_TRACKER_INCEPTION = "2026-10-28"
 
 
 def _call_goal_history() -> list:
     """[{"from": "YYYY-MM-DD", "goal": n}, ...] oldest first. The first
     entry's date is the day tracking started -- days before it never owe
-    anything. Created on first use, so the backlog starts the day Mario
-    first sees the tracker, not on some earlier date."""
+    anything. Always CALL_TRACKER_INCEPTION (Wed, Oct 28, 2026)."""
     try:
         hist = json.loads(_get_setting("daily_call_goal_history") or "[]")
     except ValueError:
         hist = []
-    hist = [h for h in hist if isinstance(h, dict) and h.get("from") and int(h.get("goal") or 0) >= 0]
+    hist = sorted([h for h in hist if isinstance(h, dict) and h.get("from") and int(h.get("goal") or 0) >= 0],
+                  key=lambda h: h["from"])
+    floor = CALL_TRACKER_INCEPTION
     if not hist:
-        hist = [{"from": _today().isoformat(), "goal": DAILY_CALL_GOAL_DEFAULT}]
+        hist = [{"from": floor, "goal": DAILY_CALL_GOAL_DEFAULT}]
         _set_setting("daily_call_goal_history", json.dumps(hist))
-    return sorted(hist, key=lambda h: h["from"])
+    elif hist[0]["from"] < floor:
+        # Entries before the start collapse into one starting on it, keeping
+        # whatever goal was in effect by then.
+        before = [h for h in hist if h["from"] <= floor]
+        after = [h for h in hist if h["from"] > floor]
+        hist = [{"from": floor, "goal": int(before[-1]["goal"])}] + after
+        _set_setting("daily_call_goal_history", json.dumps(hist))
+    return hist
 
 
-def _goal_for_day(hist: list, day: str) -> int:
+def list_no_work_days(start=None, end=None) -> list:
+    conn = get_conn()
+    sql, args = "SELECT day, label FROM no_work_days", []
+    if start and end:
+        sql += " WHERE day BETWEEN ? AND ?"
+        args = [str(start), str(end)]
+    rows = [dict(r) for r in conn.execute(sql + " ORDER BY day", args).fetchall()]
+    conn.close()
+    return rows
+
+
+def set_no_work_day(day: str, label: str = "") -> dict:
+    """Marks a holiday / day off. Its call goal becomes 0 (nothing stacks),
+    it never breaks a streak, and it cuts that week's scorecard targets 20%."""
+    try:
+        d = datetime.strptime((day or "").strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise RuntimeError("Pick a valid date.")
+    label = (label or "").strip()[:80] or "No work"
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO no_work_days (day, label, created_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(day) DO UPDATE SET label = excluded.label",
+        (d.isoformat(), label, _now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("no-work day marked", f"{d.isoformat()} ({label})")
+    return {"day": d.isoformat(), "label": label}
+
+
+def remove_no_work_day(day: str) -> bool:
+    conn = get_conn()
+    cur = conn.execute("DELETE FROM no_work_days WHERE day = ?", ((day or "").strip(),))
+    conn.commit()
+    conn.close()
+    if cur.rowcount:
+        on_data_changed("no-work day removed", day)
+    return bool(cur.rowcount)
+
+
+def _goal_plan() -> dict:
+    """Everything the goal math needs: goal history, tracking start, days off."""
+    hist = _call_goal_history()
+    return {"hist": hist, "start": hist[0]["from"],
+            "off": {r["day"]: r["label"] for r in list_no_work_days()}}
+
+
+def _goal_for_day(plan: dict, day: str) -> int:
+    """What a day owes: 0 before tracking started or on a no-work day."""
+    if day < plan["start"] or day in plan["off"]:
+        return 0
+    hist = plan["hist"]
     goal = int(hist[0]["goal"])
     for h in hist:
         if h["from"] <= day:
@@ -4807,34 +4881,44 @@ def _goal_for_day(hist: list, day: str) -> int:
 
 
 def set_daily_call_goal(goal: int) -> dict:
-    """Changes the goal from today on; days already gone keep what they owed."""
+    """Changes the goal from today on (or from the start, if tracking hasn't
+    started yet); days already gone keep what they owed."""
     goal = int(goal)
     if goal < 0 or goal > 1000:
         raise RuntimeError("Pick a daily goal between 0 and 1000 calls.")
-    today = _today().isoformat()
-    hist = [h for h in _call_goal_history() if h["from"] != today]
-    hist.append({"from": today, "goal": goal})
-    if hist[0]["from"] > today:
-        hist[0]["from"] = today
+    hist = _call_goal_history()
+    eff = max(_today().isoformat(), hist[0]["from"])
+    hist = [h for h in hist if h["from"] != eff]
+    hist.append({"from": eff, "goal": goal})
     _set_setting("daily_call_goal_history", json.dumps(sorted(hist, key=lambda h: h["from"])))
     on_data_changed("daily call goal changed", f"{goal} calls a day")
     return get_call_goal_status()
 
 
+def _tracked_counts(conn, start_s, end_s=None, outcome=None) -> dict:
+    sql = "SELECT call_date, COUNT(*) AS n FROM dialer_calls WHERE call_date >= ?"
+    args = [start_s]
+    if end_s:
+        sql += " AND call_date <= ?"
+        args.append(end_s)
+    if outcome:
+        sql += " AND outcome = ?"
+        args.append(outcome)
+    return {r["call_date"]: r["n"] for r in conn.execute(sql + " GROUP BY call_date", args).fetchall()}
+
+
 def get_call_goal_status() -> dict:
-    hist = _call_goal_history()
+    plan = _goal_plan()
     today = _today()
     today_s = today.isoformat()
-    start = min(datetime.strptime(hist[0]["from"], "%Y-%m-%d").date(), today)
+    start_s = plan["start"]
+    started = today_s >= start_s
     conn = get_conn()
-    counts = {r["call_date"]: r["n"] for r in conn.execute(
-        "SELECT call_date, COUNT(*) AS n FROM dialer_calls WHERE call_date >= ? GROUP BY call_date",
-        (start.isoformat(),),
-    ).fetchall()}
+    counts = _tracked_counts(conn, start_s)
 
     def count_since(day):
-        return conn.execute("SELECT COUNT(*) FROM dialer_calls WHERE call_date >= ? AND call_date <= ?",
-                            (day.isoformat(), today_s)).fetchone()[0]
+        lo = max(day.isoformat(), start_s)
+        return sum(n for d, n in counts.items() if lo <= d <= today_s)
 
     week_start = today - timedelta(days=today.weekday())
     stats = {
@@ -4842,7 +4926,7 @@ def get_call_goal_status() -> dict:
         "week": count_since(week_start),
         "month": count_since(today.replace(day=1)),
         "year": count_since(today.replace(month=1, day=1)),
-        "all_time": conn.execute("SELECT COUNT(*) FROM dialer_calls").fetchone()[0],
+        "all_time": sum(counts.values()),
         "week_start": week_start.isoformat(),
     }
     feed = [dict(r) for r in conn.execute(
@@ -4850,52 +4934,55 @@ def get_call_goal_status() -> dict:
         "ORDER BY called_at DESC, id DESC LIMIT 500",
         (today_s,),
     ).fetchall()]
-    all_counts = {r["call_date"]: r["n"] for r in conn.execute(
-        "SELECT call_date, COUNT(*) AS n FROM dialer_calls GROUP BY call_date"
-    ).fetchall()}
     appointments_total = conn.execute(
-        "SELECT COUNT(*) FROM dialer_calls WHERE outcome = 'appointment'"
+        "SELECT COUNT(*) FROM dialer_calls WHERE outcome = 'appointment' AND call_date >= ?", (start_s,)
     ).fetchone()[0]
     conn.close()
 
-    # Walk every day before today: each adds what it owes, then that day's
-    # calls pay off the oldest open days first. What's left open is the backlog.
+    # Walk every tracked day before today: each adds what it owes, then that
+    # day's calls pay off the oldest open days first. What's left is the backlog.
     open_days = []   # [date, owed, remaining]
-    day = start
-    while day < today:
-        d = day.isoformat()
-        owed = _goal_for_day(hist, d)
-        if owed:
-            open_days.append([d, owed, owed])
-        left = counts.get(d, 0)
-        for od in open_days:
-            if left <= 0:
-                break
-            pay = min(od[2], left)
-            od[2] -= pay
-            left -= pay
-        open_days = [od for od in open_days if od[2] > 0]
-        day += timedelta(days=1)
-
-    goal_today = _goal_for_day(hist, today_s)
-    open_days.append([today_s, goal_today, goal_today])
-    left = counts.get(today_s, 0)
     rows = []
-    for d, owed, remaining in open_days:
-        pay = min(remaining, max(left, 0))
-        left -= pay
-        rows.append({
-            "date": d, "owed": owed, "is_today": d == today_s,
-            "short_at_start": remaining,     # what this row needed when today began
-            "made_today": pay,
-            "remaining": remaining - pay,
-            "done": remaining - pay == 0,
-        })
+    if started:
+        day = datetime.strptime(start_s, "%Y-%m-%d").date()
+        while day < today:
+            d = day.isoformat()
+            owed = _goal_for_day(plan, d)
+            if owed:
+                open_days.append([d, owed, owed])
+            left = counts.get(d, 0)
+            for od in open_days:
+                if left <= 0:
+                    break
+                pay = min(od[2], left)
+                od[2] -= pay
+                left -= pay
+            open_days = [od for od in open_days if od[2] > 0]
+            day += timedelta(days=1)
+        goal_today = _goal_for_day(plan, today_s)
+        open_days.append([today_s, goal_today, goal_today])
+        left = counts.get(today_s, 0)
+        for d, owed, remaining in open_days:
+            pay = min(remaining, max(left, 0))
+            left -= pay
+            rows.append({
+                "date": d, "owed": owed, "is_today": d == today_s,
+                "short_at_start": remaining,     # what this row needed when today began
+                "made_today": pay,
+                "remaining": remaining - pay,
+                "done": remaining - pay == 0,
+            })
+    else:
+        goal_today = 0
     backlog = sum(r["short_at_start"] for r in rows if not r["is_today"])
     required = sum(r["short_at_start"] for r in rows)
+    first_year = int(start_s[:4])
     return {
         "goal": goal_today,
-        "start_date": start.isoformat(),
+        "daily_goal": int(plan["hist"][-1]["goal"]),
+        "start_date": start_s,
+        "started": started,
+        "today_off": plan["off"].get(today_s),
         "today": today_s,
         "made_today": stats["today"],
         "backlog": backlog,
@@ -4905,10 +4992,56 @@ def get_call_goal_status() -> dict:
         "stats": stats,
         "feed": feed,
         "funnel": _funnel(feed),
-        "streak": _call_streak(hist, all_counts, today),
-        "heatmap": _call_heatmap(hist, all_counts, today),
-        "badges": _call_badges(hist, all_counts, today, stats["all_time"], appointments_total),
+        "streak": _call_streak(plan, counts, today),
+        "heatmap": _call_heatmap(plan, counts, today),
+        "badges": _call_badges(plan, counts, today, stats["all_time"], appointments_total),
+        "years": list(range(max(first_year, 2000), today.year + 1))[::-1] or [today.year],
         "alerts_enabled": call_goal_alerts_enabled(),
+    }
+
+
+def get_call_year(year: int) -> dict:
+    """One calendar year of the call tracker: totals, a month-by-month table
+    and a full-year calendar. Only days since tracking started count."""
+    year = int(year)
+    plan = _goal_plan()
+    today = _today()
+    y0, y1 = date(year, 1, 1), date(year, 12, 31)
+    lo = max(y0.isoformat(), plan["start"])
+    conn = get_conn()
+    calls = [dict(r) for r in conn.execute(
+        "SELECT call_date, outcome FROM dialer_calls WHERE call_date BETWEEN ? AND ?", (lo, y1.isoformat())
+    ).fetchall()] if lo <= y1.isoformat() else []
+    conn.close()
+    counts = {}
+    for c in calls:
+        counts[c["call_date"]] = counts.get(c["call_date"], 0) + 1
+    months = []
+    for m in range(1, 13):
+        prefix = f"{year}-{m:02d}"
+        mc = [c for c in calls if c["call_date"].startswith(prefix)]
+        f = _funnel(mc)
+        days_hit = days_goal = 0
+        d = date(year, m, 1)
+        while d.month == m and d <= today:
+            ds = d.isoformat()
+            g = _goal_for_day(plan, ds)
+            if g:
+                days_goal += 1
+                if counts.get(ds, 0) >= g:
+                    days_hit += 1
+            d += timedelta(days=1)
+        months.append({"month": m, "calls": f["dials"], "conversations": f["conversations"],
+                       "appointments": f["appointments"], "goal_days": days_goal, "days_hit": days_hit})
+    f = _funnel(calls)
+    return {
+        "year": year,
+        "start_date": plan["start"],
+        "totals": {"calls": f["dials"], "conversations": f["conversations"], "appointments": f["appointments"],
+                   "goal_days": sum(m["goal_days"] for m in months), "days_hit": sum(m["days_hit"] for m in months),
+                   "best_day": max(counts.values()) if counts else 0},
+        "months": months,
+        "heatmap": _call_heatmap(plan, counts, today, year=year),
     }
 
 
@@ -5012,30 +5145,40 @@ def set_dialer_call_outcome(call_id: int, outcome) -> dict:
 
 # ---- streaks + badges ----
 
-def _day_hit(hist, counts, day_s) -> bool:
-    goal = _goal_for_day(hist, day_s)
-    return counts.get(day_s, 0) >= goal
+def _day_hit(plan, counts, day_s) -> bool:
+    goal = _goal_for_day(plan, day_s)
+    return goal > 0 and counts.get(day_s, 0) >= goal
 
 
-def _call_streak(hist, counts, today) -> dict:
+def _call_streak(plan, counts, today) -> dict:
     """A day counts when its own calls reach that day's goal (stacked
     calls don't make a day harder to count). Today only adds to the streak
-    once it's hit -- not having hit it yet doesn't break anything."""
+    once it's hit -- not having hit it yet doesn't break anything. No-work
+    days are skipped: they never add to a streak or break one."""
     today_s = today.isoformat()
-    today_hit = _day_hit(hist, counts, today_s) and counts.get(today_s, 0) > 0
+    start = plan["start"]
+    today_hit = _day_hit(plan, counts, today_s)
     cur = 0
     day = today - timedelta(days=1)
-    while _day_hit(hist, counts, day.isoformat()) and counts.get(day.isoformat(), 0) > 0:
+    while day.isoformat() >= start:
+        d = day.isoformat()
+        if d in plan["off"]:
+            day -= timedelta(days=1)
+            continue
+        if not _day_hit(plan, counts, d):
+            break
         cur += 1
         day -= timedelta(days=1)
     if today_hit:
         cur += 1
     longest = run = 0
-    if counts:
-        day = datetime.strptime(min(counts), "%Y-%m-%d").date()
+    if today_s >= start:
+        day = datetime.strptime(start, "%Y-%m-%d").date()
         while day <= today:
             d = day.isoformat()
-            if counts.get(d, 0) > 0 and _day_hit(hist, counts, d):
+            if d in plan["off"]:
+                pass
+            elif _day_hit(plan, counts, d):
                 run += 1
                 longest = max(longest, run)
             elif d != today_s:
@@ -5044,17 +5187,28 @@ def _call_streak(hist, counts, today) -> dict:
     return {"current": cur, "longest": max(longest, cur), "today_hit": today_hit}
 
 
-def _call_heatmap(hist, counts, today, weeks=12) -> list:
-    """The last `weeks` full Mon-Sun weeks ending with this one, oldest first."""
-    start = today - timedelta(days=today.weekday()) - timedelta(weeks=weeks - 1)
+def _call_heatmap(plan, counts, today, weeks=12, year=None) -> list:
+    """Mon-Sun weeks, oldest first: the last `weeks` weeks ending with this
+    one, or -- with `year` -- every week of that calendar year. Days before
+    tracking started are marked `before` (drawn blank)."""
+    if year:
+        first, last = date(year, 1, 1), date(year, 12, 31)
+        start = first - timedelta(days=first.weekday())
+        end = last + timedelta(days=6 - last.weekday())
+    else:
+        start = today - timedelta(days=today.weekday()) - timedelta(weeks=weeks - 1)
+        end = start + timedelta(days=weeks * 7 - 1)
     out = []
-    for i in range(weeks * 7):
-        day = start + timedelta(days=i)
+    day = start
+    while day <= end:
         d = day.isoformat()
-        goal = _goal_for_day(hist, d)
-        n = counts.get(d, 0)
+        goal = _goal_for_day(plan, d)
+        n = counts.get(d, 0) if d >= plan["start"] else 0
         out.append({"date": d, "count": n, "goal": goal, "future": day > today,
-                    "hit": n > 0 and n >= goal})
+                    "before": d < plan["start"], "off": plan["off"].get(d),
+                    "outside": bool(year) and day.year != year,
+                    "hit": goal > 0 and n >= goal})
+        day += timedelta(days=1)
     return out
 
 
@@ -5072,10 +5226,10 @@ CALL_BADGES = [
 ]
 
 
-def _call_badges(hist, counts, today, all_time, appointments_total) -> list:
-    streak = _call_streak(hist, counts, today)
+def _call_badges(plan, counts, today, all_time, appointments_total) -> list:
+    streak = _call_streak(plan, counts, today)
     best_day = max(counts.values()) if counts else 0
-    any_hit = any(n > 0 and n >= _goal_for_day(hist, d) for d, n in counts.items())
+    any_hit = any(_day_hit(plan, counts, d) for d in counts)
     earned = {
         "first_day": any_hit,
         "hundred_day": best_day >= 100,
@@ -5149,7 +5303,7 @@ def due_call_goal_alerts(now=None) -> list:
     today_s = st["today"]
     out = []
     remaining, made, req = st["remaining_today"], st["made_today"], st["required_today"]
-    if req <= 0:
+    if req <= 0 or not st["started"] or st["today_off"]:
         return out
     if remaining == 0:
         if (now.hour, now.minute) < (21, 0) and _claim_once(f"{today_s}:goal_hit"):
@@ -5170,10 +5324,9 @@ def due_call_goal_alerts(now=None) -> list:
         elif key == "evening":
             body = f"{remaining} call{'s' if remaining != 1 else ''} left before tonight ({made}/{req} so far)."
         else:
-            hist = _call_goal_history()
             tomorrow = (_today() + timedelta(days=1)).isoformat()
             body = (f"You're {remaining} short today — they stack onto tomorrow "
-                    f"({remaining + _goal_for_day(hist, tomorrow)} total).")
+                    f"({remaining + _goal_for_day(_goal_plan(), tomorrow)} total).")
         out.append(("URTO — Daily Calls", body))
     return out
 
@@ -5239,7 +5392,7 @@ def _week_bounds(week_start):
     return start, start + timedelta(days=6)
 
 
-def _scorecard_values(conn, start, end, hist) -> dict:
+def _scorecard_values(conn, start, end) -> dict:
     s, e = start.isoformat(), end.isoformat()
     calls = conn.execute("SELECT outcome FROM dialer_calls WHERE call_date BETWEEN ? AND ?", (s, e)).fetchall()
     f = _funnel([dict(r) for r in calls])
@@ -5272,13 +5425,30 @@ def _scorecard_values(conn, start, end, hist) -> dict:
         "AND substr(closing_date, 1, 10) BETWEEN ? AND ? AND substr(closing_date, 1, 10) <= ?", (s, e, today_s)
     ).fetchall():
         closing_days[("t", r["id"])] = 1
-    calls_target = sum(_goal_for_day(hist, (start + timedelta(days=i)).isoformat()) for i in range(7))
     return {
         "calls": f["dials"], "conversations": f["conversations"], "appointments": f["appointments"],
         "followups_done": followups_done, "new_clients": new_clients, "notes": notes,
         "deals_advanced": deals_advanced, "closings": len(closing_days), "commission": round(commission, 2),
-        "_calls_target": calls_target, "_funnel": f,
+        "_funnel": f,
     }
+
+
+NO_WORK_TARGET_CUT = 0.20   # each missed workday takes 20% off that week's targets
+
+
+def _week_missed_days(plan, start, end) -> list:
+    """Days that cut the week's targets: every marked no-work day, plus the
+    weekdays before tracking started (the inception week's Mon/Tue)."""
+    out = []
+    day = start
+    while day <= end:
+        d = day.isoformat()
+        if d in plan["off"]:
+            out.append({"date": d, "label": plan["off"][d]})
+        elif d < plan["start"] and day.weekday() < 5:
+            out.append({"date": d, "label": "Before tracking started"})
+        day += timedelta(days=1)
+    return out
 
 
 def _overdue_now() -> int:
@@ -5290,12 +5460,25 @@ def get_weekly_scorecard(week_start=None) -> dict:
     today = _today()
     if start > today:
         raise RuntimeError("That week hasn't started yet.")
-    hist = _call_goal_history()
+    plan = _goal_plan()
+    tracking_start = datetime.strptime(plan["start"], "%Y-%m-%d").date()
+    first_week = tracking_start - timedelta(days=tracking_start.weekday())
+    is_current = start <= today <= end
+    prev = start - timedelta(days=7)
+    nav = {
+        "week_start": start.isoformat(), "week_end": end.isoformat(), "is_current": is_current,
+        "tracking_start": plan["start"],
+        "prev_week": prev.isoformat() if prev >= first_week else None,
+        "next_week": (start + timedelta(days=7)).isoformat() if start + timedelta(days=7) <= today else None,
+    }
+    if end < tracking_start:
+        return {**nav, "before_tracking": True, "metrics": [], "green": 0, "colored": 0,
+                "funnel": _funnel([]), "missed_days": [], "target_factor": 1.0}
+    counted_from = max(start, tracking_start)
     conn = get_conn()
-    vals = _scorecard_values(conn, start, end, hist)
+    vals = _scorecard_values(conn, counted_from, end)
     snap = conn.execute("SELECT data FROM weekly_scorecards WHERE week_start = ?", (start.isoformat(),)).fetchone()
     conn.close()
-    is_current = start <= today <= end
     if is_current:
         vals["followups_overdue"] = _overdue_now()
     elif snap:
@@ -5305,14 +5488,27 @@ def get_weekly_scorecard(week_start=None) -> dict:
             vals["followups_overdue"] = None
     else:
         vals["followups_overdue"] = None
+    missed = _week_missed_days(plan, start, end)
+    factor = max(0.0, 1.0 - NO_WORK_TARGET_CUT * min(len(missed), 5))
+    full_week_calls = 0
+    for i in range(7):
+        d = (start + timedelta(days=i)).isoformat()
+        g = int(plan["hist"][0]["goal"])
+        for h in plan["hist"]:
+            if h["from"] <= d:
+                g = int(h["goal"])
+        full_week_calls += g
     targets = get_scorecard_targets()
     metrics = []
     green = colored = 0
     for key, label, _default, lower in SCORECARD_METRICS:
         value = vals.get(key)
-        target = targets.get(key)
-        if key == "calls" and target is None:
-            target = vals["_calls_target"]
+        base = targets.get(key)
+        if key == "calls" and base is None:
+            base = full_week_calls
+        target = base
+        if base is not None and not lower and factor < 1:
+            target = round(base * factor, 2) if key == "commission" else round(base * factor)
         good = None
         if value is not None and target is not None:
             if lower:
@@ -5322,15 +5518,11 @@ def get_weekly_scorecard(week_start=None) -> dict:
         if good is not None:
             colored += 1
             green += 1 if good else 0
-        metrics.append({"key": key, "label": label, "value": value, "target": target,
+        metrics.append({"key": key, "label": label, "value": value, "target": target, "base_target": base,
                         "lower_is_better": lower, "good": good})
-    return {
-        "week_start": start.isoformat(), "week_end": end.isoformat(),
-        "is_current": is_current, "metrics": metrics, "green": green, "colored": colored,
-        "funnel": vals["_funnel"],
-        "prev_week": (start - timedelta(days=7)).isoformat(),
-        "next_week": (start + timedelta(days=7)).isoformat() if start + timedelta(days=7) <= today else None,
-    }
+    return {**nav, "before_tracking": False, "counted_from": counted_from.isoformat(),
+            "metrics": metrics, "green": green, "colored": colored, "funnel": vals["_funnel"],
+            "missed_days": missed, "target_factor": factor}
 
 
 def get_scorecard_history(weeks=8) -> list:
@@ -5338,6 +5530,8 @@ def get_scorecard_history(weeks=8) -> list:
     out = []
     for i in range(weeks):
         sc = get_weekly_scorecard((start - timedelta(days=7 * i)).isoformat())
+        if sc["before_tracking"]:
+            break
         out.append({"week_start": sc["week_start"], "green": sc["green"], "colored": sc["colored"],
                     "values": {m["key"]: m["value"] for m in sc["metrics"]},
                     "good": {m["key"]: m["good"] for m in sc["metrics"]}})
@@ -5346,6 +5540,8 @@ def get_scorecard_history(weeks=8) -> list:
 
 def save_weekly_scorecard_snapshot(week_start=None) -> dict:
     sc = get_weekly_scorecard(week_start)
+    if sc["before_tracking"]:
+        return sc
     data = {m["key"]: m["value"] for m in sc["metrics"]}
     conn = get_conn()
     conn.execute(
@@ -5371,6 +5567,8 @@ def due_weekly_scorecard_push(now=None):
     if not _claim_once(f"scorecard:{start.isoformat()}"):
         return None
     sc = save_weekly_scorecard_snapshot(start.isoformat())
+    if sc["before_tracking"]:
+        return None
     vals = {m["key"]: m for m in sc["metrics"]}
     calls = vals["calls"]
     body = (f"{calls['value']}/{int(calls['target'] or 0)} calls, {vals['conversations']['value']} conversations, "
@@ -5474,33 +5672,45 @@ def get_commission_entry(entry_id: int):
     return dict(row) if row else None
 
 
-def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: int = 0) -> dict:
+def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: int = 0, year=None) -> dict:
+    """`year` (e.g. 2026) limits everything -- the list, the totals and the
+    breakdown -- to entries that closed in that calendar year. None/"all"
+    is all time."""
     order_sql = _COMMISSION_SORTS.get(sort, _COMMISSION_SORTS["date_desc"])
+    where, args = "", []
+    if year not in (None, "", "all"):
+        try:
+            where, args = " WHERE substr(closed_date, 1, 4) = ?", [f"{int(year):04d}"]
+        except (TypeError, ValueError):
+            pass
     conn = get_conn()
-    total = conn.execute("SELECT COUNT(*) AS c FROM commission_entries").fetchone()["c"]
-    lifetime_total = conn.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM commission_entries").fetchone()["s"]
+    total = conn.execute("SELECT COUNT(*) AS c FROM commission_entries" + where, args).fetchone()["c"]
+    lifetime_total = conn.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM commission_entries" + where, args).fetchone()["s"]
     # Gross sales/rent total across every entry that actually has a
     # sale_price on record -- NULL entries (created before build order #104
     # added this field) are simply excluded from the sum via SUM()'s own
     # NULL-skipping behavior, not counted as $0.
-    lifetime_sale_total = conn.execute("SELECT COALESCE(SUM(sale_price), 0) AS s FROM commission_entries").fetchone()["s"]
-    # Income + deal-count breakdown by who Mario represented -- a lifetime
-    # stat independent of the current page/sort, so it's always computed
-    # in full here rather than derived from just the current page's rows
-    # (which would give a wrong, page-dependent percentage breakdown).
+    lifetime_sale_total = conn.execute(
+        "SELECT COALESCE(SUM(sale_price), 0) AS s FROM commission_entries" + where, args).fetchone()["s"]
+    # Income + deal-count breakdown by who Mario represented, for the whole
+    # selected period -- independent of the current page/sort, so the
+    # percentages never depend on which page happens to be loaded.
     by_representation = {k: {"count": 0, "amount": 0.0, "sale_amount": 0.0} for k in _REPRESENTED_AS_VALUES}
     for row in conn.execute(
         "SELECT represented_as, COUNT(*) AS c, COALESCE(SUM(amount), 0) AS s, "
-        "COALESCE(SUM(sale_price), 0) AS sale_s FROM commission_entries GROUP BY represented_as"
+        "COALESCE(SUM(sale_price), 0) AS sale_s FROM commission_entries" + where + " GROUP BY represented_as", args
     ).fetchall():
         key = row["represented_as"] if row["represented_as"] in by_representation else "seller"
         by_representation[key]["count"] += row["c"]
         by_representation[key]["amount"] += row["s"]
         by_representation[key]["sale_amount"] += row["sale_s"]
     rows = conn.execute(
-        f"SELECT * FROM commission_entries ORDER BY {order_sql} LIMIT ? OFFSET ?",
-        (limit, offset),
+        f"SELECT * FROM commission_entries{where} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+        args + [limit, offset],
     ).fetchall()
+    years = sorted({int(r["y"]) for r in conn.execute(
+        "SELECT DISTINCT substr(closed_date, 1, 4) AS y FROM commission_entries WHERE closed_date IS NOT NULL"
+    ).fetchall() if (r["y"] or "").isdigit()} | {_today().year}, reverse=True)
     conn.close()
     return {
         "entries": [dict(r) for r in rows],
@@ -5509,6 +5719,8 @@ def list_commission_entries(sort: str = "date_desc", limit: int = 20, offset: in
         "lifetime_sale_total": lifetime_sale_total,
         "by_representation": by_representation,
         "has_more": offset + len(rows) < total,
+        "year": None if not where else int(args[0]),
+        "years": years,
     }
 
 
