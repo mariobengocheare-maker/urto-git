@@ -37,7 +37,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.36.0-hosted"
+APP_VERSION = "1.37.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -347,6 +347,14 @@ def send_morning_digest():
         body = f"{followup_count} follow-ups today."
     if manual_items:
         body += f" {len(manual_items)} other item{'s' if len(manual_items) != 1 else ''} scheduled."
+    try:
+        goal = crm.get_call_goal_status()
+        body += f" Call goal: {goal['required_today']}"
+        body += f" ({goal['backlog']} stacked)." if goal["backlog"] else "."
+        if goal["streak"]["current"] > 0:
+            body += f" Day {goal['streak']['current'] + 1} 🔥 — don't break the streak."
+    except Exception:
+        pass
     # ?briefing=1 is the signal templates/index.html looks for on load to
     # speak the full voice briefing (see build order #75) -- only the
     # morning digest push should trigger that, not every other push (e.g.
@@ -531,6 +539,30 @@ def _closing_watcher():
 
 
 threading.Thread(target=_closing_watcher, daemon=True).start()
+
+
+# ===================== Accountability pushes (build order #187) =====================
+# Daily-call progress checks (noon / 5 PM / 9 PM, a 🔥 when the goal is hit),
+# the Sunday-night weekly scorecard, and newly earned badges. crm.py decides
+# what's due (and remembers what was already sent, so a redeploy can't
+# repeat a push); this only sends it.
+def _accountability_watcher():
+    while True:
+        time.sleep(60)
+        try:
+            for title, body in crm.due_call_goal_alerts():
+                _send_push_to_all(title, body, url="/?open=dialer")
+            weekly = crm.due_weekly_scorecard_push()
+            if weekly:
+                _send_push_to_all(weekly[0], weekly[1], url="/?open=scorecard")
+            for badge in crm.new_badges_to_announce():
+                _send_push_to_all("URTO — 🏅 Badge unlocked",
+                                  f"{badge['emoji']} {badge['label']}: {badge['how']}.", url="/?open=eos")
+        except Exception as e:
+            print(f"[accountability] {e}")
+
+
+threading.Thread(target=_accountability_watcher, daemon=True).start()
 
 
 # ===================== Google Drive backup health =====================

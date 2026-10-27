@@ -771,6 +771,7 @@ def _write_full_data_export(backup_dir: Path):
         "notes": [dict(r) for r in conn.execute("SELECT * FROM notes ORDER BY id").fetchall()],
         "call_log": [dict(r) for r in conn.execute("SELECT * FROM call_log ORDER BY id").fetchall()],
         "dialer_calls": [dict(r) for r in conn.execute("SELECT * FROM dialer_calls ORDER BY id").fetchall()],
+        "weekly_scorecards": [dict(r) for r in conn.execute("SELECT * FROM weekly_scorecards ORDER BY week_start").fetchall()],
         "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
         "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
         "cre_units": [dict(r) for r in conn.execute("SELECT * FROM cre_units ORDER BY id").fetchall()],
@@ -842,7 +843,7 @@ def import_full_data_export(data: dict) -> dict:
         "clients", "notes", "call_log", "dialer_calls", "contact_lists", "contact_list_members", "cre_units",
         "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
         "lookup_stats", "text_presets", "commission_entries", "eos_rocks", "waterfall_items",
-        "showing_days", "showing_stops", "skiptrace_results", "activity_log",
+        "showing_days", "showing_stops", "skiptrace_results", "weekly_scorecards", "activity_log",
     ]
     counts = {}
     try:
@@ -2087,6 +2088,21 @@ def init_db():
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dialer_calls_date ON dialer_calls(call_date)")
+    # One tap after each call: no_answer / voicemail / talked / appointment /
+    # bad_number (see DIALER_OUTCOMES). NULL = not marked yet.
+    dialer_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dialer_calls)").fetchall()}
+    if "outcome" not in dialer_cols:
+        conn.execute("ALTER TABLE dialer_calls ADD COLUMN outcome TEXT")
+    # Weekly scorecard snapshots, saved Sunday night. Almost every number is
+    # recomputed live from the data; the snapshot keeps the one that can't
+    # be (how many follow-ups were overdue when the week ended).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_scorecards (
+            week_start TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            saved_at TEXT NOT NULL
+        )
+    """)
     # One-time: copy the calls already logged for CRM clients into it, so the
     # week/month/year counters start with real history instead of zero.
     if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'dialer_calls_backfilled'").fetchone():
@@ -3415,7 +3431,16 @@ def get_morning_briefing_text() -> str:
         else:
             meeting_part = ", and meetings " + "; and ".join(phrases)
 
-    return f"Good morning, Mario. It's {time_part}, {date_part}. Today, {followup_part}{meeting_part}."
+    goal_part = ""
+    try:
+        goal = get_call_goal_status()
+        goal_part = f" Your call goal today is {goal['required_today']} calls"
+        goal_part += f", including {goal['backlog']} stacked from earlier days." if goal["backlog"] else "."
+        if goal["streak"]["current"] > 0:
+            goal_part += f" You're on a {goal['streak']['current']}-day streak."
+    except Exception:
+        pass
+    return f"Good morning, Mario. It's {time_part}, {date_part}. Today, {followup_part}{meeting_part}.{goal_part}"
 
 
 def get_calendar_events(year: int, month: int) -> list:
@@ -4821,10 +4846,16 @@ def get_call_goal_status() -> dict:
         "week_start": week_start.isoformat(),
     }
     feed = [dict(r) for r in conn.execute(
-        "SELECT id, called_at, name, phone, client_id FROM dialer_calls WHERE call_date = ? "
+        "SELECT id, called_at, name, phone, client_id, outcome FROM dialer_calls WHERE call_date = ? "
         "ORDER BY called_at DESC, id DESC LIMIT 500",
         (today_s,),
     ).fetchall()]
+    all_counts = {r["call_date"]: r["n"] for r in conn.execute(
+        "SELECT call_date, COUNT(*) AS n FROM dialer_calls GROUP BY call_date"
+    ).fetchall()}
+    appointments_total = conn.execute(
+        "SELECT COUNT(*) FROM dialer_calls WHERE outcome = 'appointment'"
+    ).fetchone()[0]
     conn.close()
 
     # Walk every day before today: each adds what it owes, then that day's
@@ -4873,6 +4904,11 @@ def get_call_goal_status() -> dict:
         "rows": rows,
         "stats": stats,
         "feed": feed,
+        "funnel": _funnel(feed),
+        "streak": _call_streak(hist, all_counts, today),
+        "heatmap": _call_heatmap(hist, all_counts, today),
+        "badges": _call_badges(hist, all_counts, today, stats["all_time"], appointments_total),
+        "alerts_enabled": call_goal_alerts_enabled(),
     }
 
 
@@ -4914,6 +4950,432 @@ def log_dialer_call(name: str = "", phone: str = "", client_id=None) -> dict:
     if not cid:
         on_data_changed("dialer call logged", name or phone)
     return {"id": call_id, "duplicate": False, "client": client, "goal": get_call_goal_status()}
+
+
+DIALER_OUTCOMES = {
+    "no_answer": "No answer",
+    "voicemail": "Voicemail",
+    "talked": "Talked",
+    "appointment": "Appointment set",
+    "bad_number": "Bad number",
+}
+CONVERSATION_OUTCOMES = ("talked", "appointment")
+
+
+def _funnel(calls) -> dict:
+    out = {"dials": len(calls), "conversations": 0, "appointments": 0, "unmarked": 0}
+    for key in DIALER_OUTCOMES:
+        out[key] = 0
+    for c in calls:
+        o = c.get("outcome")
+        if o in DIALER_OUTCOMES:
+            out[o] += 1
+            if o in CONVERSATION_OUTCOMES:
+                out["conversations"] += 1
+            if o == "appointment":
+                out["appointments"] += 1
+        else:
+            out["unmarked"] += 1
+    return out
+
+
+def set_dialer_call_outcome(call_id: int, outcome) -> dict:
+    """How a Dialer call went. 'bad_number' on a CRM client's call also takes
+    that number off the client (it's kept in a note, so nothing is lost)."""
+    outcome = (outcome or "").strip() or None
+    if outcome is not None and outcome not in DIALER_OUTCOMES:
+        raise RuntimeError("Unknown call outcome.")
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM dialer_calls WHERE id = ?", (call_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute("UPDATE dialer_calls SET outcome = ? WHERE id = ?", (outcome, call_id))
+    phone_removed = False
+    client = None
+    if outcome == "bad_number" and row["client_id"]:
+        c = conn.execute("SELECT * FROM clients WHERE id = ?", (row["client_id"],)).fetchone()
+        if c and c["phone"] and _normalize_phone_key(c["phone"]) == _normalize_phone_key(row["phone"]):
+            conn.execute("UPDATE clients SET phone = NULL WHERE id = ?", (c["id"],))
+            phone_removed = True
+    conn.commit()
+    conn.close()
+    if phone_removed:
+        add_note(row["client_id"], f"❌ Bad number removed: {row['phone']} (marked from the Dialer)")
+    else:
+        on_data_changed("call outcome", f"{row['name'] or row['phone']}: {DIALER_OUTCOMES.get(outcome, 'cleared')}")
+    if row["client_id"]:
+        client = get_client(row["client_id"])
+    return {"id": call_id, "outcome": outcome, "phone_removed": phone_removed,
+            "client": client, "goal": get_call_goal_status()}
+
+
+# ---- streaks + badges ----
+
+def _day_hit(hist, counts, day_s) -> bool:
+    goal = _goal_for_day(hist, day_s)
+    return counts.get(day_s, 0) >= goal
+
+
+def _call_streak(hist, counts, today) -> dict:
+    """A day counts when its own calls reach that day's goal (stacked
+    calls don't make a day harder to count). Today only adds to the streak
+    once it's hit -- not having hit it yet doesn't break anything."""
+    today_s = today.isoformat()
+    today_hit = _day_hit(hist, counts, today_s) and counts.get(today_s, 0) > 0
+    cur = 0
+    day = today - timedelta(days=1)
+    while _day_hit(hist, counts, day.isoformat()) and counts.get(day.isoformat(), 0) > 0:
+        cur += 1
+        day -= timedelta(days=1)
+    if today_hit:
+        cur += 1
+    longest = run = 0
+    if counts:
+        day = datetime.strptime(min(counts), "%Y-%m-%d").date()
+        while day <= today:
+            d = day.isoformat()
+            if counts.get(d, 0) > 0 and _day_hit(hist, counts, d):
+                run += 1
+                longest = max(longest, run)
+            elif d != today_s:
+                run = 0
+            day += timedelta(days=1)
+    return {"current": cur, "longest": max(longest, cur), "today_hit": today_hit}
+
+
+def _call_heatmap(hist, counts, today, weeks=12) -> list:
+    """The last `weeks` full Mon-Sun weeks ending with this one, oldest first."""
+    start = today - timedelta(days=today.weekday()) - timedelta(weeks=weeks - 1)
+    out = []
+    for i in range(weeks * 7):
+        day = start + timedelta(days=i)
+        d = day.isoformat()
+        goal = _goal_for_day(hist, d)
+        n = counts.get(d, 0)
+        out.append({"date": d, "count": n, "goal": goal, "future": day > today,
+                    "hit": n > 0 and n >= goal})
+    return out
+
+
+CALL_BADGES = [
+    ("first_day", "🎯", "First goal day", "Hit your daily call goal once"),
+    ("hundred_day", "💯", "100-call day", "Make 100 calls in a single day"),
+    ("streak_7", "🔥", "7-day streak", "Hit your goal 7 days in a row"),
+    ("streak_30", "🏆", "30-day streak", "Hit your goal 30 days in a row"),
+    ("streak_100", "👑", "100-day streak", "Hit your goal 100 days in a row"),
+    ("calls_1000", "📞", "1,000 calls", "Make 1,000 calls from the Dialer"),
+    ("calls_5000", "🚀", "5,000 calls", "Make 5,000 calls from the Dialer"),
+    ("calls_10000", "🌟", "10,000 calls", "Make 10,000 calls from the Dialer"),
+    ("first_appt", "📅", "First appointment", "Set an appointment from a Dialer call"),
+    ("appts_25", "🗓", "25 appointments", "Set 25 appointments from Dialer calls"),
+]
+
+
+def _call_badges(hist, counts, today, all_time, appointments_total) -> list:
+    streak = _call_streak(hist, counts, today)
+    best_day = max(counts.values()) if counts else 0
+    any_hit = any(n > 0 and n >= _goal_for_day(hist, d) for d, n in counts.items())
+    earned = {
+        "first_day": any_hit,
+        "hundred_day": best_day >= 100,
+        "streak_7": streak["longest"] >= 7,
+        "streak_30": streak["longest"] >= 30,
+        "streak_100": streak["longest"] >= 100,
+        "calls_1000": all_time >= 1000,
+        "calls_5000": all_time >= 5000,
+        "calls_10000": all_time >= 10000,
+        "first_appt": appointments_total >= 1,
+        "appts_25": appointments_total >= 25,
+    }
+    return [{"key": k, "emoji": e, "label": label, "how": how, "earned": bool(earned[k])}
+            for k, e, label, how in CALL_BADGES]
+
+
+def new_badges_to_announce() -> list:
+    """Badges earned since the last check (for a push). The first check ever
+    just records what's already earned, so updating doesn't send a pile."""
+    earned = [b for b in get_call_goal_status()["badges"] if b["earned"]]
+    raw = _get_setting("announced_badges")
+    if raw is None:
+        _set_setting("announced_badges", json.dumps([b["key"] for b in earned]))
+        return []
+    try:
+        known = set(json.loads(raw))
+    except ValueError:
+        known = set()
+    fresh = [b for b in earned if b["key"] not in known]
+    if fresh:
+        _set_setting("announced_badges", json.dumps(sorted(known | {b["key"] for b in fresh})))
+    return fresh
+
+
+# ---- phone alerts for the call goal ----
+
+def call_goal_alerts_enabled() -> bool:
+    return (_get_setting("call_goal_alerts_enabled") or "1") == "1"
+
+
+def set_call_goal_alerts_enabled(enabled: bool):
+    _set_setting("call_goal_alerts_enabled", "1" if enabled else "0")
+
+
+def _claim_once(token: str) -> bool:
+    """True the first time a token is seen (saved, so a redeploy can't send
+    the same alert twice). Keeps the last 200 tokens."""
+    try:
+        seen = json.loads(_get_setting("sent_alert_tokens") or "[]")
+    except ValueError:
+        seen = []
+    if token in seen:
+        return False
+    seen.append(token)
+    _set_setting("sent_alert_tokens", json.dumps(seen[-200:]))
+    return True
+
+
+CALL_GOAL_ALERT_TIMES = (("noon", 12, 0), ("evening", 17, 0), ("night", 21, 0))
+ALERT_GRACE_MINUTES = 60
+
+
+def due_call_goal_alerts(now=None) -> list:
+    """(title, body) pushes due right now: noon / 5 PM / 9 PM progress
+    checks while the goal isn't met, and one 🔥 the moment it is (before
+    9 PM). Each fires at most once per day."""
+    if not call_goal_alerts_enabled():
+        return []
+    now = now or _now()
+    st = get_call_goal_status()
+    today_s = st["today"]
+    out = []
+    remaining, made, req = st["remaining_today"], st["made_today"], st["required_today"]
+    if req <= 0:
+        return out
+    if remaining == 0:
+        if (now.hour, now.minute) < (21, 0) and _claim_once(f"{today_s}:goal_hit"):
+            streak = st["streak"]["current"]
+            body = f"Goal hit — {made} calls by {_format_time_spoken(now.strftime('%H:%M'))}."
+            if streak > 1:
+                body += f" {streak}-day streak, keep it going."
+            out.append(("URTO — 🔥 Goal hit", body))
+        return out
+    for key, h, m in CALL_GOAL_ALERT_TIMES:
+        slot = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if not (slot <= now < slot + timedelta(minutes=ALERT_GRACE_MINUTES)):
+            continue
+        if not _claim_once(f"{today_s}:{key}"):
+            continue
+        if key == "noon":
+            body = f"You're at {made}/{req}. {remaining} to go."
+        elif key == "evening":
+            body = f"{remaining} call{'s' if remaining != 1 else ''} left before tonight ({made}/{req} so far)."
+        else:
+            hist = _call_goal_history()
+            tomorrow = (_today() + timedelta(days=1)).isoformat()
+            body = (f"You're {remaining} short today — they stack onto tomorrow "
+                    f"({remaining + _goal_for_day(hist, tomorrow)} total).")
+        out.append(("URTO — Daily Calls", body))
+    return out
+
+
+# ---- weekly scorecard ----
+
+SCORECARD_METRICS = [
+    # key, label, default target, lower_is_better
+    ("calls", "Calls made", None, False),
+    ("conversations", "Conversations", 50, False),
+    ("appointments", "Appointments set", 3, False),
+    ("followups_done", "CRM follow-ups called", 25, False),
+    ("followups_overdue", "Follow-ups overdue", 0, True),
+    ("new_clients", "New clients added", 10, False),
+    ("notes", "Notes logged", 20, False),
+    ("deals_advanced", "Deals moved on the Chessboard", 2, False),
+    ("closings", "Closings", 0, False),
+    ("commission", "Commission earned", 0, False),
+]
+
+
+def get_scorecard_targets() -> dict:
+    try:
+        saved = json.loads(_get_setting("scorecard_targets") or "{}")
+    except ValueError:
+        saved = {}
+    out = {}
+    for key, _label, default, _lower in SCORECARD_METRICS:
+        v = saved.get(key, default)
+        out[key] = None if v in (None, "") else float(v)
+    return out
+
+
+def set_scorecard_targets(targets: dict) -> dict:
+    clean = {}
+    keys = {m[0] for m in SCORECARD_METRICS}
+    for key, value in (targets or {}).items():
+        if key not in keys:
+            continue
+        if value in (None, ""):
+            clean[key] = None
+            continue
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            raise RuntimeError("Targets have to be numbers.")
+        if v < 0:
+            raise RuntimeError("Targets can't be negative.")
+        clean[key] = v
+    current = get_scorecard_targets()
+    current.update(clean)
+    _set_setting("scorecard_targets", json.dumps(current))
+    on_data_changed("scorecard targets changed")
+    return current
+
+
+def _week_bounds(week_start):
+    if isinstance(week_start, str) and week_start:
+        d = datetime.strptime(week_start, "%Y-%m-%d").date()
+    else:
+        d = _today()
+    start = d - timedelta(days=d.weekday())
+    return start, start + timedelta(days=6)
+
+
+def _scorecard_values(conn, start, end, hist) -> dict:
+    s, e = start.isoformat(), end.isoformat()
+    calls = conn.execute("SELECT outcome FROM dialer_calls WHERE call_date BETWEEN ? AND ?", (s, e)).fetchall()
+    f = _funnel([dict(r) for r in calls])
+    followups_done = conn.execute(
+        "SELECT COUNT(*) FROM call_log WHERE kind = 'call' AND substr(called_at, 1, 10) BETWEEN ? AND ?", (s, e)
+    ).fetchone()[0]
+    new_clients = conn.execute(
+        "SELECT COUNT(*) FROM clients WHERE substr(created_at, 1, 10) BETWEEN ? AND ?", (s, e)
+    ).fetchone()[0]
+    notes = conn.execute(
+        "SELECT COUNT(*) FROM notes WHERE substr(created_at, 1, 10) BETWEEN ? AND ? "
+        "AND text NOT LIKE '%Chessboard:%' AND text NOT LIKE '❌ Bad number removed%'", (s, e)
+    ).fetchone()[0]
+    deals_advanced = conn.execute(
+        "SELECT COUNT(*) FROM notes WHERE substr(created_at, 1, 10) BETWEEN ? AND ? AND text LIKE '%Chessboard:%' "
+        "AND (text LIKE '%advanced to%' OR text LIKE '%Promoted from pawn%' OR text LIKE '%promoted to Queen%' "
+        "OR text LIKE '%Placed on the board%' OR text LIKE '%captured off the board%')", (s, e)
+    ).fetchone()[0]
+    closing_days = {}
+    commission = 0.0
+    for r in conn.execute(
+        "SELECT id, closed_date, transaction_id, amount FROM commission_entries "
+        "WHERE closed_date IS NOT NULL AND substr(closed_date, 1, 10) BETWEEN ? AND ?", (s, e)
+    ).fetchall():
+        closing_days[("t", r["transaction_id"]) if r["transaction_id"] else ("c", r["id"])] = 1
+        commission += float(r["amount"] or 0)
+    today_s = _today().isoformat()
+    for r in conn.execute(
+        "SELECT id FROM transactions WHERE closing_date IS NOT NULL "
+        "AND substr(closing_date, 1, 10) BETWEEN ? AND ? AND substr(closing_date, 1, 10) <= ?", (s, e, today_s)
+    ).fetchall():
+        closing_days[("t", r["id"])] = 1
+    calls_target = sum(_goal_for_day(hist, (start + timedelta(days=i)).isoformat()) for i in range(7))
+    return {
+        "calls": f["dials"], "conversations": f["conversations"], "appointments": f["appointments"],
+        "followups_done": followups_done, "new_clients": new_clients, "notes": notes,
+        "deals_advanced": deals_advanced, "closings": len(closing_days), "commission": round(commission, 2),
+        "_calls_target": calls_target, "_funnel": f,
+    }
+
+
+def _overdue_now() -> int:
+    return len([c for c in list_clients() if c["followup_status"] == "overdue"])
+
+
+def get_weekly_scorecard(week_start=None) -> dict:
+    start, end = _week_bounds(week_start)
+    today = _today()
+    if start > today:
+        raise RuntimeError("That week hasn't started yet.")
+    hist = _call_goal_history()
+    conn = get_conn()
+    vals = _scorecard_values(conn, start, end, hist)
+    snap = conn.execute("SELECT data FROM weekly_scorecards WHERE week_start = ?", (start.isoformat(),)).fetchone()
+    conn.close()
+    is_current = start <= today <= end
+    if is_current:
+        vals["followups_overdue"] = _overdue_now()
+    elif snap:
+        try:
+            vals["followups_overdue"] = json.loads(snap["data"]).get("followups_overdue")
+        except ValueError:
+            vals["followups_overdue"] = None
+    else:
+        vals["followups_overdue"] = None
+    targets = get_scorecard_targets()
+    metrics = []
+    green = colored = 0
+    for key, label, _default, lower in SCORECARD_METRICS:
+        value = vals.get(key)
+        target = targets.get(key)
+        if key == "calls" and target is None:
+            target = vals["_calls_target"]
+        good = None
+        if value is not None and target is not None:
+            if lower:
+                good = value <= target
+            elif target > 0:
+                good = value >= target
+        if good is not None:
+            colored += 1
+            green += 1 if good else 0
+        metrics.append({"key": key, "label": label, "value": value, "target": target,
+                        "lower_is_better": lower, "good": good})
+    return {
+        "week_start": start.isoformat(), "week_end": end.isoformat(),
+        "is_current": is_current, "metrics": metrics, "green": green, "colored": colored,
+        "funnel": vals["_funnel"],
+        "prev_week": (start - timedelta(days=7)).isoformat(),
+        "next_week": (start + timedelta(days=7)).isoformat() if start + timedelta(days=7) <= today else None,
+    }
+
+
+def get_scorecard_history(weeks=8) -> list:
+    start, _ = _week_bounds(None)
+    out = []
+    for i in range(weeks):
+        sc = get_weekly_scorecard((start - timedelta(days=7 * i)).isoformat())
+        out.append({"week_start": sc["week_start"], "green": sc["green"], "colored": sc["colored"],
+                    "values": {m["key"]: m["value"] for m in sc["metrics"]},
+                    "good": {m["key"]: m["good"] for m in sc["metrics"]}})
+    return out
+
+
+def save_weekly_scorecard_snapshot(week_start=None) -> dict:
+    sc = get_weekly_scorecard(week_start)
+    data = {m["key"]: m["value"] for m in sc["metrics"]}
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO weekly_scorecards (week_start, data, saved_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(week_start) DO UPDATE SET data = excluded.data, saved_at = excluded.saved_at",
+        (sc["week_start"], json.dumps(data), _now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    conn.close()
+    return sc
+
+
+SCORECARD_PUSH_DOW, SCORECARD_PUSH_HOUR = 6, 19   # Sunday, 7 PM Miami
+
+
+def due_weekly_scorecard_push(now=None):
+    """(title, body) once on Sunday 7-8 PM: saves the week's snapshot and
+    sums it up. None any other time."""
+    now = now or _now()
+    if now.weekday() != SCORECARD_PUSH_DOW or now.hour != SCORECARD_PUSH_HOUR:
+        return None
+    start, _ = _week_bounds(None)
+    if not _claim_once(f"scorecard:{start.isoformat()}"):
+        return None
+    sc = save_weekly_scorecard_snapshot(start.isoformat())
+    vals = {m["key"]: m for m in sc["metrics"]}
+    calls = vals["calls"]
+    body = (f"{calls['value']}/{int(calls['target'] or 0)} calls, {vals['conversations']['value']} conversations, "
+            f"{vals['appointments']['value']} appointments. {sc['green']} of {sc['colored']} green. Tap for your scorecard.")
+    return ("URTO — 📋 Your week", body)
 
 
 def delete_dialer_call(call_id: int) -> bool:

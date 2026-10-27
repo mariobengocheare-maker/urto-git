@@ -974,10 +974,45 @@ def call_goal_status():
 @crm_bp.route("/api/crm/call_goal", methods=["PUT"])
 def call_goal_update():
     data = request.get_json(force=True) or {}
+    if "alerts_enabled" in data:
+        crm.set_call_goal_alerts_enabled(bool(data.get("alerts_enabled")))
+    if "goal" not in data:
+        return jsonify(crm.get_call_goal_status())
     try:
         return jsonify(crm.set_daily_call_goal(data.get("goal")))
     except (RuntimeError, TypeError, ValueError) as e:
         return jsonify({"error": str(e) if isinstance(e, RuntimeError) else "Enter a number of calls."}), 400
+
+
+@crm_bp.route("/api/crm/dialer_calls/<int:call_id>/outcome", methods=["PUT"])
+def dialer_call_outcome(call_id):
+    data = request.get_json(force=True) or {}
+    try:
+        result = crm.set_dialer_call_outcome(call_id, data.get("outcome"))
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    if result is None:
+        abort(404)
+    return jsonify(result)
+
+
+@crm_bp.route("/api/crm/scorecard", methods=["GET"])
+def scorecard_get():
+    try:
+        sc = crm.get_weekly_scorecard(request.args.get("week"))
+    except (RuntimeError, ValueError) as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"scorecard": sc, "history": crm.get_scorecard_history(8),
+                    "targets": crm.get_scorecard_targets()})
+
+
+@crm_bp.route("/api/crm/scorecard/targets", methods=["PUT"])
+def scorecard_targets_update():
+    data = request.get_json(force=True) or {}
+    try:
+        return jsonify({"targets": crm.set_scorecard_targets(data)})
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @crm_bp.route("/api/crm/dialer_calls", methods=["POST"])

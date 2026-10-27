@@ -34,6 +34,11 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
+        // A push that points somewhere specific (?open=scorecard, ?briefing=1)
+        // takes the already-open app there instead of just focusing it.
+        if (targetUrl !== "/" && "navigate" in client) {
+          return client.navigate(targetUrl).then((c) => (c || client).focus()).catch(() => client.focus());
+        }
         if ("focus" in client) return client.focus();
       }
       if (self.clients.openWindow) return self.clients.openWindow(targetUrl);

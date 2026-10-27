@@ -974,6 +974,77 @@
   .dg-feed-del:hover { color: var(--danger-fg); }
   .dg-feed-empty { padding: 12px 2px; color: var(--text-secondary); font-size: .88rem; }
 
+  /* ---- Call outcomes ---- */
+  .outcome-row { margin: 12px auto 4px; max-width: 520px; }
+  .outcome-row-label { font-size: .82rem; color: var(--text-secondary); margin-bottom: 6px; }
+  .outcome-btns { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .outcome-btn {
+    background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: 6px 12px; font-size: .82rem; cursor: pointer;
+  }
+  .outcome-btn:hover { border-color: var(--gold); }
+  .outcome-btn.active { background: var(--gold-bright); color: #2a2200; border-color: var(--gold-bright); font-weight: 600; }
+  .outcome-btn.active[data-outcome="bad_number"] { background: var(--danger-fg); border-color: var(--danger-fg); color: #2a0000; }
+  .outcome-msg { font-size: .8rem; color: var(--gold); margin-top: 6px; min-height: 1em; }
+  .funnel-line { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: .88rem; color: var(--text-secondary); }
+  .funnel-line b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .funnel-line .arrow { opacity: .5; }
+  .dg-feed-outcome { background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: .78rem; padding: 2px 4px; max-width: 132px; }
+
+  /* ---- Streak + heatmap + badges ---- */
+  .streak-wrap { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .streak-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .streak-num { font-size: 1.6rem; font-weight: 700; color: var(--gold-bright); line-height: 1; }
+  .streak-num.cold { color: var(--text-secondary); }
+  .streak-sub { font-size: .82rem; color: var(--text-secondary); }
+  .heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 14px); grid-auto-columns: 14px; gap: 3px; margin-top: 12px; overflow-x: auto; padding-bottom: 4px; }
+  .heat-cell { width: 14px; height: 14px; border-radius: 3px; background: rgba(255,255,255,.06); }
+  .heat-cell.l1 { background: rgba(212,175,55,.22); }
+  .heat-cell.l2 { background: rgba(212,175,55,.45); }
+  .heat-cell.l3 { background: rgba(212,175,55,.7); }
+  .heat-cell.hit { background: var(--gold-bright); box-shadow: 0 0 6px rgba(212,175,55,.55); }
+  .heat-cell.future { background: transparent; border: 1px dashed rgba(255,255,255,.08); }
+  .heat-cell.today { outline: 1px solid var(--text); outline-offset: 1px; }
+  .heat-legend { display: flex; align-items: center; gap: 4px; font-size: .72rem; color: var(--text-secondary); margin-top: 6px; }
+  .heat-legend .heat-cell { width: 10px; height: 10px; }
+  .badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .call-badge { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: .78rem; border: 1px solid var(--border); color: var(--text-secondary); opacity: .45; filter: grayscale(1); }
+  .call-badge.earned { opacity: 1; filter: none; color: var(--text); border-color: rgba(212,175,55,.55); background: rgba(212,175,55,.08); }
+
+  /* ---- Weekly scorecard ---- */
+  .sc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .sc-head h2 { margin: 0; flex: 1; min-width: 0; }
+  .sc-weeknav { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .sc-weeknav .sc-week-label { font-weight: 600; min-width: 0; }
+  .sc-summary { margin-left: auto; font-size: .88rem; color: var(--text-secondary); }
+  .sc-summary b { color: var(--success-fg); }
+  .sc-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: .9rem; }
+  .sc-table td, .sc-table th { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+  .sc-table th { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-secondary); font-weight: 600; }
+  .sc-table td.num, .sc-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .sc-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.15); }
+  .sc-dot.good { background: var(--success-fg); box-shadow: 0 0 6px rgba(107,214,148,.6); }
+  .sc-dot.bad { background: var(--danger-fg); box-shadow: 0 0 6px rgba(255,138,138,.5); }
+  .sc-row.bad td:first-child { color: var(--danger-fg); }
+  .sc-targets { display: none; margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 10px; }
+  .sc-targets.show { display: block; }
+  .sc-targets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 14px; }
+  .sc-targets-grid label { font-size: .8rem; color: var(--text-secondary); display: block; margin-bottom: 2px; }
+  .sc-targets-grid input { width: 100%; }
+  .sc-history { display: none; margin-top: 12px; overflow-x: auto; }
+  .sc-history.show { display: block; }
+  .sc-history table { border-collapse: collapse; font-size: .8rem; min-width: 560px; width: 100%; }
+  .sc-history td, .sc-history th { padding: 5px 6px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+  .sc-history td:first-child, .sc-history th:first-child { text-align: left; }
+  .sc-history td.good { color: var(--success-fg); }
+  .sc-history td.bad { color: var(--danger-fg); }
+  @media (max-width: 640px) {
+    .sc-table td.target, .sc-table th.target { display: none; }
+    .sc-head h2, .goal-head h2 { flex-basis: 100%; }
+    .sc-weeknav .sc-week-label { flex: 1 1 0; text-align: center; font-size: .88rem; }
+    .sc-summary { margin-left: 0; width: 100%; text-align: center; }
+  }
+
   /* ---- Waterfall to-do: a cascade of steps joined by a line ---- */
   .wf-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .wf-head h2 { margin: 0; flex: 1; }
@@ -1839,6 +1910,7 @@
       <span class="dialer-goal-live"></span>
       <span>Today's calls</span>
       <span class="dg-count" id="dialerGoalCount">0 / 75</span>
+      <span id="dialerGoalFunnel" style="color:var(--text-secondary); font-size:.82rem"></span>
       <span class="dg-left" id="dialerGoalLeft"></span>
       <span class="dg-caret">▾</span>
     </div>
@@ -1917,6 +1989,17 @@
       <div class="dialer-name" id="dialerName"></div>
       <a href="#" class="dialer-phone" id="dialerPhone"></a>
       <div class="dialer-meta" id="dialerMeta"></div>
+      <div class="outcome-row" id="dialerOutcomeRow" style="display:none">
+        <div class="outcome-row-label">How did that call go?</div>
+        <div class="outcome-btns">
+          <button type="button" class="outcome-btn" data-outcome="no_answer">📵 No answer</button>
+          <button type="button" class="outcome-btn" data-outcome="voicemail">📩 Voicemail</button>
+          <button type="button" class="outcome-btn" data-outcome="talked">🗣 Talked</button>
+          <button type="button" class="outcome-btn" data-outcome="appointment">📅 Appointment set</button>
+          <button type="button" class="outcome-btn" data-outcome="bad_number">❌ Bad number</button>
+        </div>
+        <div class="outcome-msg" id="dialerOutcomeMsg"></div>
+      </div>
       <button type="button" class="ghost small" id="dialerZillowBtn" style="display:none; margin-top:4px">🏠 View on Zillow</button>
       <button type="button" class="ghost small" id="dialerPropertyAppraiserBtn" style="display:none; margin-top:4px">🏛️ Miami-Dade Property Search</button>
       <div id="dialerPaMsg" style="display:none; font-size:.78rem; color:var(--text-secondary); margin-top:3px"></div>
@@ -2229,6 +2312,10 @@
       <input type="number" id="callGoalInput" min="0" max="1000" step="1">
       <button type="button" class="small" id="callGoalSaveBtn">Save</button>
       <span id="callGoalSettingsMsg"></span>
+      <label style="display:flex; align-items:center; gap:6px; width:100%; margin-top:4px; cursor:pointer">
+        <input type="checkbox" id="callGoalAlertsToggle" style="width:auto">
+        Phone alerts at noon, 5 PM and 9 PM (and a 🔥 when you hit it)
+      </label>
     </div>
     <div class="goal-big">
       <span class="goal-big-num" id="callGoalMade">0</span>
@@ -2237,7 +2324,43 @@
     </div>
     <div class="goal-bar"><div class="goal-bar-fill" id="callGoalFill"></div></div>
     <div class="goal-sub" id="callGoalSub"></div>
+    <div class="funnel-line" id="callGoalFunnel"></div>
     <div class="goal-checklist" id="callGoalChecklist"></div>
+    <div class="streak-wrap">
+      <div class="streak-head">
+        <span class="streak-num" id="streakNum">0</span>
+        <div>
+          <div style="font-weight:600" id="streakLabel">day streak</div>
+          <div class="streak-sub" id="streakSub"></div>
+        </div>
+      </div>
+      <div class="heatmap" id="callHeatmap"></div>
+      <div class="heat-legend">Less <span class="heat-cell"></span><span class="heat-cell l1"></span><span class="heat-cell l2"></span><span class="heat-cell l3"></span><span class="heat-cell hit"></span> Goal hit</div>
+      <div class="badge-row" id="callBadges"></div>
+    </div>
+  </div>
+
+  <div class="card" id="scorecardCard" style="margin-bottom:22px">
+    <div class="sc-head">
+      <h2>📋 Weekly Scorecard</h2>
+      <button type="button" class="goal-icon-btn" id="scHistoryBtn">📈 Last 8 weeks</button>
+      <button type="button" class="goal-icon-btn" id="scTargetsBtn" title="Set your weekly targets">⚙ Targets</button>
+    </div>
+    <div class="sc-weeknav">
+      <button type="button" class="ghost small" id="scPrevBtn">‹</button>
+      <span class="sc-week-label" id="scWeekLabel"></span>
+      <button type="button" class="ghost small" id="scNextBtn">›</button>
+      <span class="sc-summary" id="scSummary"></span>
+    </div>
+    <div class="sc-targets" id="scTargets">
+      <div class="sc-targets-grid" id="scTargetsGrid"></div>
+      <div class="row" style="margin-top:10px; gap:8px; align-items:center">
+        <button type="button" class="small" id="scTargetsSaveBtn">Save targets</button>
+        <span id="scTargetsMsg" style="font-size:.82rem; color:var(--text-secondary)">Leave blank for no target. Calls default to your daily goal × 7.</span>
+      </div>
+    </div>
+    <table class="sc-table" id="scTable"></table>
+    <div class="sc-history" id="scHistory"></div>
   </div>
 
   <div class="card">
@@ -7518,6 +7641,8 @@ function renderDialerCard() {
   if (dialerList.length === 0) return;
   const entry = dialerList[dialerIndex];
   dialerProgress.textContent = `${dialerIndex + 1} / ${dialerList.length}`;
+  renderDialerOutcomeRow(entry);
+  dialerOutcomeMsg.textContent = '';
   dialerNameEl.textContent = entry.name || 'Unknown';
   dialerPhoneEl.textContent = entry.phone || '—';
   dialerPhoneEl.href = 'tel:' + normalizePhone(entry.phone);
@@ -7929,10 +8054,50 @@ function logCallForEntry(entry) {
     .then(res => res.ok ? res.json() : null)
     .then(data => {
       if (data && data.goal) renderCallGoal(data.goal);
+      if (data && data.id) {
+        if (!dialerLastCall || dialerLastCall.id !== data.id) dialerLastCall = { id: data.id, entry, outcome: null };
+        if (dialerList[dialerIndex] === entry) renderDialerOutcomeRow(entry);
+      }
       if (entry.clientId && dialerList[dialerIndex] === entry) updateDialerClientInfo(entry);
     })
     .catch(() => {});
 }
+
+// The last call placed from the Dialer, so the "How did that call go?"
+// buttons can mark it. Shown only while that same entry is on screen.
+let dialerLastCall = null;
+const dialerOutcomeRow = document.getElementById('dialerOutcomeRow');
+const dialerOutcomeMsg = document.getElementById('dialerOutcomeMsg');
+
+function renderDialerOutcomeRow(entry) {
+  const show = !!(dialerLastCall && entry && dialerLastCall.entry === entry);
+  dialerOutcomeRow.style.display = show ? '' : 'none';
+  if (!show) return;
+  dialerOutcomeRow.querySelectorAll('.outcome-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.outcome === dialerLastCall.outcome));
+}
+
+dialerOutcomeRow.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.outcome-btn');
+  if (!btn || !dialerLastCall) return;
+  const call = dialerLastCall;
+  const outcome = call.outcome === btn.dataset.outcome ? '' : btn.dataset.outcome;
+  dialerOutcomeMsg.textContent = '';
+  const data = await saveCallOutcome(call.id, outcome);
+  if (!data) return;
+  call.outcome = data.outcome;
+  renderDialerOutcomeRow(dialerList[dialerIndex]);
+  const entry = call.entry;
+  if (data.phone_removed) {
+    dialerOutcomeMsg.textContent = `Number removed from ${entry.name || 'this client'}'s CRM card (kept in their notes).`;
+    if (dialerList[dialerIndex] === entry) updateDialerClientInfo(entry);
+  } else if (data.outcome === 'appointment') {
+    dialerOutcomeMsg.textContent = entry.clientId ? 'Nice! Put the appointment on the calendar:' : 'Nice! Add them to your CRM to put it on the calendar.';
+    if (entry.clientId) openEventForm(todayIsoDate(), null, entry.clientId);
+  } else if (data.outcome) {
+    dialerOutcomeMsg.textContent = 'Saved.';
+  }
+});
 
 function callCurrentDialerEntry() {
   if (dialerList.length === 0) return;
@@ -9868,6 +10033,7 @@ let eosLoaded = false;
 
 async function initEosTab() {
   refreshCallGoal();
+  loadScorecard(scWeek);
   if (!eosLoaded) {
     eosLoaded = true;
     await loadWaterfallItems();
@@ -9952,10 +10118,91 @@ function renderCallGoal(st) {
         <span class="dg-feed-time">${callTimeLabel(c.called_at)}</span>
         <span class="dg-feed-name">${escapeHtml(c.name || 'Unknown')}</span>
         <span class="dg-feed-phone">${escapeHtml(c.phone || '')}</span>
+        <select class="dg-feed-outcome" data-call-id="${c.id}">${outcomeOptions(c.outcome)}</select>
         <button type="button" class="dg-feed-del" data-del-call="${c.id}" title="Didn't actually call — take it off the count">✕</button>
       </div>`).join('')
     : '<div class="dg-feed-empty">No calls yet today — load a list and press Enter to call.</div>';
+
+  // Outcomes (dials -> conversations -> appointments)
+  const f = st.funnel || {};
+  const marked = f.dials - (f.unmarked || 0);
+  document.getElementById('callGoalFunnel').innerHTML = f.dials
+    ? `<span><b>${f.dials}</b> dials</span><span class="arrow">→</span><span><b>${f.conversations}</b> conversations</span><span class="arrow">→</span><span><b>${f.appointments}</b> appointments</span>` +
+      (f.unmarked ? `<span>(${f.unmarked} not marked yet)</span>` : '')
+    : '';
+  document.getElementById('dialerGoalFunnel').textContent = marked > 0 ? `🗣 ${f.conversations} · 📅 ${f.appointments}` : '';
+  document.getElementById('callGoalAlertsToggle').checked = !!st.alerts_enabled;
+
+  // Streak, heatmap, badges
+  const sk = st.streak || { current: 0, longest: 0, today_hit: false };
+  const streakNum = document.getElementById('streakNum');
+  streakNum.textContent = (sk.current > 0 ? '🔥 ' : '') + sk.current;
+  streakNum.classList.toggle('cold', sk.current === 0);
+  document.getElementById('streakLabel').textContent = sk.current === 1 ? 'day streak' : 'day streak';
+  document.getElementById('streakSub').textContent =
+    (sk.today_hit ? "Today's goal hit ✓" : (sk.current > 0 ? "Hit today's goal to keep it going" : 'Hit your goal today to start one')) +
+    ` · Best: ${sk.longest} day${sk.longest === 1 ? '' : 's'}`;
+  document.getElementById('callHeatmap').innerHTML = (st.heatmap || []).map(d => {
+    let cls = 'heat-cell';
+    if (d.future) cls += ' future';
+    else if (d.hit) cls += ' hit';
+    else if (d.count > 0) {
+      const ratio = d.goal > 0 ? d.count / d.goal : 1;
+      cls += ratio >= 0.66 ? ' l3' : ratio >= 0.33 ? ' l2' : ' l1';
+    }
+    if (d.date === st.today) cls += ' today';
+    return `<div class="${cls}" title="${formatGoalDay(d.date)}: ${d.count} call${d.count === 1 ? '' : 's'} (goal ${d.goal})"></div>`;
+  }).join('');
+  document.getElementById('callBadges').innerHTML = (st.badges || []).map(b =>
+    `<span class="call-badge ${b.earned ? 'earned' : ''}" title="${escapeHtml(b.how)}">${b.emoji} ${escapeHtml(b.label)}</span>`
+  ).join('');
 }
+
+const CALL_OUTCOME_LABELS = {
+  no_answer: '📵 No answer', voicemail: '📩 Voicemail', talked: '🗣 Talked',
+  appointment: '📅 Appointment set', bad_number: '❌ Bad number',
+};
+function outcomeOptions(selected) {
+  return `<option value="">— How'd it go?</option>` + Object.entries(CALL_OUTCOME_LABELS)
+    .map(([k, label]) => `<option value="${k}" ${k === selected ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+// Saves an outcome; returns the server's reply (or null on failure).
+async function saveCallOutcome(callId, outcome) {
+  try {
+    const res = await fetch(`/api/crm/dialer_calls/${callId}/outcome`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(data.error || "Couldn't save that."); return null; }
+    if (data.goal) renderCallGoal(data.goal);
+    return data;
+  } catch (e) {
+    alert("Couldn't reach URTO's server — try again.");
+    return null;
+  }
+}
+
+document.getElementById('dialerGoalFeed').addEventListener('change', async (e) => {
+  const sel = e.target.closest('.dg-feed-outcome');
+  if (!sel) return;
+  const data = await saveCallOutcome(sel.dataset.callId, sel.value);
+  if (data && dialerLastCall && String(dialerLastCall.id) === String(sel.dataset.callId)) {
+    dialerLastCall.outcome = data.outcome;
+    renderDialerOutcomeRow(dialerList[dialerIndex]);
+  }
+});
+
+document.getElementById('callGoalAlertsToggle').addEventListener('change', async (e) => {
+  try {
+    const res = await fetch('/api/crm/call_goal', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alerts_enabled: e.target.checked }),
+    });
+    if (res.ok) renderCallGoal(await res.json());
+  } catch (err) { /* keep the box as clicked */ }
+});
 
 async function refreshCallGoal() {
   try {
@@ -10010,6 +10257,107 @@ document.getElementById('dialerGoalFeed').addEventListener('click', async (e) =>
 setInterval(() => {
   if (dialerSection.style.display !== 'none' || eosSection.style.display !== 'none') refreshCallGoal();
 }, 20000);
+
+/* ===================== Weekly scorecard ===================== */
+let scWeek = null;          // null = this week
+let scData = null;
+
+function scFormat(key, v) {
+  if (v === null || v === undefined) return '—';
+  if (key === 'commission') return '$' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  return Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
+async function loadScorecard(week) {
+  try {
+    const res = await fetch('/api/crm/scorecard' + (week ? `?week=${week}` : ''));
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    scData = data;
+    renderScorecard(data);
+  } catch (e) { /* keep the last one */ }
+}
+
+function renderScorecard(data) {
+  const sc = data.scorecard;
+  scWeek = sc.is_current ? null : sc.week_start;
+  const label = `${formatGoalDay(sc.week_start)} – ${formatGoalDay(sc.week_end)}` + (sc.is_current ? ' (this week)' : '');
+  document.getElementById('scWeekLabel').textContent = label;
+  document.getElementById('scNextBtn').disabled = !sc.next_week;
+  document.getElementById('scSummary').innerHTML = sc.colored
+    ? `<b>${sc.green}</b> of ${sc.colored} green` + (sc.is_current ? ' so far' : '')
+    : '';
+  document.getElementById('scTable').innerHTML =
+    '<tr><th>Measure</th><th class="num">Actual</th><th class="num target">Target</th><th></th></tr>' +
+    sc.metrics.map(m => {
+      const cls = m.good === true ? 'good' : m.good === false ? 'bad' : '';
+      const tgt = m.target === null || m.target === undefined || (m.target === 0 && !m.lower_is_better)
+        ? '—' : (m.lower_is_better ? '≤ ' : '') + scFormat(m.key, m.target);
+      return `<tr class="sc-row ${cls}"><td>${escapeHtml(m.label)}</td><td class="num">${scFormat(m.key, m.value)}</td>` +
+        `<td class="num target">${tgt}</td><td class="num"><span class="sc-dot ${cls}"></span></td></tr>`;
+    }).join('');
+  // Targets form
+  const keys = sc.metrics.map(m => m.key);
+  document.getElementById('scTargetsGrid').innerHTML = sc.metrics.map(m => {
+    const v = data.targets[m.key];
+    return `<div><label for="scT_${m.key}">${escapeHtml(m.label)}${m.lower_is_better ? ' (at most)' : ''}</label>` +
+      `<input type="number" min="0" step="any" id="scT_${m.key}" data-key="${m.key}" value="${v === null || v === undefined ? '' : v}" placeholder="${m.key === 'calls' ? 'auto' : 'none'}"></div>`;
+  }).join('');
+  // History
+  const hist = data.history || [];
+  document.getElementById('scHistory').innerHTML = hist.length
+    ? `<table><tr><th>Week of</th><th>Green</th>${sc.metrics.map(m => `<th>${escapeHtml(m.label.split(' ')[0])}</th>`).join('')}</tr>` +
+      hist.map(h => `<tr><td>${formatGoalDay(h.week_start)}</td><td>${h.green}/${h.colored}</td>` +
+        keys.map(k => `<td class="${h.good[k] === true ? 'good' : h.good[k] === false ? 'bad' : ''}">${scFormat(k, h.values[k])}</td>`).join('') +
+        '</tr>').join('') + '</table>'
+    : '';
+}
+
+document.getElementById('scPrevBtn').addEventListener('click', () => { if (scData) loadScorecard(scData.scorecard.prev_week); });
+document.getElementById('scNextBtn').addEventListener('click', () => { if (scData && scData.scorecard.next_week) loadScorecard(scData.scorecard.next_week); });
+document.getElementById('scTargetsBtn').addEventListener('click', (e) => {
+  const open = document.getElementById('scTargets').classList.toggle('show');
+  e.currentTarget.classList.toggle('open', open);
+});
+document.getElementById('scHistoryBtn').addEventListener('click', (e) => {
+  const open = document.getElementById('scHistory').classList.toggle('show');
+  e.currentTarget.classList.toggle('open', open);
+});
+document.getElementById('scTargetsSaveBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('scTargetsMsg');
+  const body = {};
+  document.querySelectorAll('#scTargetsGrid input').forEach(inp => { body[inp.dataset.key] = inp.value.trim(); });
+  try {
+    const res = await fetch('/api/crm/scorecard/targets', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { msg.textContent = data.error || "Couldn't save."; return; }
+    msg.textContent = 'Saved.';
+    loadScorecard(scWeek);
+  } catch (e) {
+    msg.textContent = "Couldn't reach URTO's server — try again.";
+  }
+});
+
+// A push can open a specific place: ?open=dialer / eos / scorecard
+(function openFromLink() {
+  const params = new URLSearchParams(window.location.search);
+  const where = params.get('open');
+  if (!where) return;
+  params.delete('open');
+  const qs = params.toString();
+  history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+  setTimeout(() => {
+    if (where === 'dialer') {
+      tabDialerBtn.click();
+      dialerGoalEl.classList.add('open');
+    } else if (where === 'eos' || where === 'scorecard') {
+      tabEosBtn.click();
+      if (where === 'scorecard') setTimeout(() => document.getElementById('scorecardCard').scrollIntoView({ behavior: 'smooth' }), 300);
+    }
+  }, 50);
+})();
 
 /* ===================== Waterfall to-do ===================== */
 async function loadWaterfallItems() {
