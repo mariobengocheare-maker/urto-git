@@ -47,6 +47,19 @@ def crm_create_client():
     return jsonify(client)
 
 
+@crm_bp.route("/api/crm/deleted_clients/matches", methods=["GET"])
+def crm_deleted_client_matches():
+    """?q=<JSON list of {name, phone}>. A GET (not a POST) so it's a plain
+    read that also works from the PC's offline copy without being queued."""
+    try:
+        people = json.loads(request.args.get("q") or "[]")
+    except ValueError:
+        return jsonify({"error": "q must be a JSON list"}), 400
+    if not isinstance(people, list):
+        return jsonify({"error": "q must be a JSON list"}), 400
+    return jsonify({"matches": crm.find_deleted_client_matches(people)})
+
+
 @crm_bp.route("/api/crm/clients/<int:client_id>", methods=["GET"])
 def crm_get_client(client_id):
     client = crm.get_client(client_id)

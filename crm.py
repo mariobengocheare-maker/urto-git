@@ -773,6 +773,7 @@ def _write_full_data_export(backup_dir: Path):
         "dialer_calls": [dict(r) for r in conn.execute("SELECT * FROM dialer_calls ORDER BY id").fetchall()],
         "weekly_scorecards": [dict(r) for r in conn.execute("SELECT * FROM weekly_scorecards ORDER BY week_start").fetchall()],
         "no_work_days": [dict(r) for r in conn.execute("SELECT * FROM no_work_days ORDER BY day").fetchall()],
+        "deleted_clients": [dict(r) for r in conn.execute("SELECT * FROM deleted_clients ORDER BY id").fetchall()],
         "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
         "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
         "cre_units": [dict(r) for r in conn.execute("SELECT * FROM cre_units ORDER BY id").fetchall()],
@@ -844,7 +845,7 @@ def import_full_data_export(data: dict) -> dict:
         "clients", "notes", "call_log", "dialer_calls", "contact_lists", "contact_list_members", "cre_units",
         "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
         "lookup_stats", "text_presets", "commission_entries", "eos_rocks", "waterfall_items",
-        "showing_days", "showing_stops", "skiptrace_results", "weekly_scorecards", "no_work_days", "activity_log",
+        "showing_days", "showing_stops", "skiptrace_results", "weekly_scorecards", "no_work_days", "deleted_clients", "activity_log",
     ]
     counts = {}
     try:
@@ -2111,6 +2112,20 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    # One row per client Mario deletes, so re-adding the same person later
+    # can ask "you've deleted this contact before — are you sure?".
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS deleted_clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
+            name TEXT,
+            phone TEXT,
+            phone_key TEXT,
+            address TEXT,
+            email TEXT,
+            deleted_at TEXT NOT NULL
+        )
+    """)
     # One-time: copy the calls already logged for CRM clients into it, so the
     # week/month/year counters start with real history instead of zero.
     if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'dialer_calls_backfilled'").fetchone():
@@ -2509,13 +2524,59 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
 
 def delete_client(client_id):
     conn = get_conn()
-    gone = conn.execute("SELECT name FROM clients WHERE id = ?", (client_id,)).fetchone()
+    gone = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if gone:
+        conn.execute(
+            """INSERT INTO deleted_clients (client_id, name, phone, phone_key, address, email, deleted_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (client_id, gone["name"], gone["phone"], _normalize_phone_key(gone["phone"]),
+             gone["address"], gone["email"], _now().isoformat(timespec="seconds")),
+        )
     conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
     conn.commit()
     conn.close()
     # Refresh the OneDrive mirror right away so the deleted contact is gone
     # from the backup too, not just the local DB.
     on_data_changed("client deleted", gone["name"] if gone else f"client #{client_id}")
+
+
+def _name_key(name) -> str:
+    return " ".join((name or "").lower().split())
+
+
+def find_deleted_client_matches(people) -> list:
+    """For each {name, phone} in `people`, the most recent deleted client
+    with the same phone number (ignoring formatting) or the same full name
+    (2+ words, case-insensitive). Returns [{index, name, phone, address,
+    deleted_at, matched_on}] for the ones that match; a person who's back
+    in the CRM right now is skipped (the duplicate-phone check covers that).
+    merge_clients() never records here — merging isn't a delete."""
+    conn = get_conn()
+    gone = conn.execute("SELECT * FROM deleted_clients ORDER BY deleted_at DESC, id DESC").fetchall()
+    live_keys = {_normalize_phone_key(r["phone"]) for r in conn.execute("SELECT phone FROM clients").fetchall()}
+    conn.close()
+    by_phone, by_name = {}, {}
+    for g in gone:
+        if g["phone_key"] and g["phone_key"] not in live_keys:
+            by_phone.setdefault(g["phone_key"], g)
+        nk = _name_key(g["name"])
+        if len(nk.split()) >= 2:
+            by_name.setdefault(nk, g)
+    out = []
+    for i, p in enumerate(people or []):
+        p = p or {}
+        key = _normalize_phone_key(p.get("phone"))
+        hit, how = (by_phone.get(key), "phone") if key else (None, None)
+        if not hit:
+            nk = _name_key(p.get("name"))
+            if len(nk.split()) >= 2 and nk in by_name:
+                hit, how = by_name[nk], "name"
+        if hit:
+            out.append({
+                "index": i, "name": hit["name"], "phone": hit["phone"], "address": hit["address"],
+                "deleted_at": hit["deleted_at"], "matched_on": how,
+            })
+    return out
 
 
 def find_duplicate_clients() -> list:

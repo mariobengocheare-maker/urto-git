@@ -4174,9 +4174,14 @@ retainResultsSubmitBtn.addEventListener('click', async () => {
       if (key) byPhone.set(key, c.id);
     }
 
+    const toCreate = retainResultsFound.filter(r => !(normalizePhone(r.phone) && byPhone.has(normalizePhone(r.phone))));
+    const skipIdx = await askAboutPreviouslyDeleted(toCreate.map(r => ({ name: r.owner, phone: r.phone })));
+    const skipRows = new Set([...skipIdx].map(i => toCreate[i]));
+
     const clientIds = [];
     const savedRows = [];
     for (const r of retainResultsFound) {
+      if (skipRows.has(r)) continue;
       const key = normalizePhone(r.phone);
       if (key && byPhone.has(key)) {
         clientIds.push(byPhone.get(key));
@@ -4232,6 +4237,43 @@ retainResultsSubmitBtn.addEventListener('click', async () => {
   }
 });
 
+
+// Re-adding someone Mario deleted before: ask the server which of these
+// people (by phone, or full name) match a deleted client. Fails open --
+// if the check can't run, saving just goes ahead as before.
+async function findPreviouslyDeleted(people) {
+  const matches = [];
+  for (let start = 0; start < people.length; start += 80) {
+    const chunk = people.slice(start, start + 80).map(p => ({ name: p.name || '', phone: p.phone || '' }));
+    try {
+      const res = await fetch('/api/crm/deleted_clients/matches?q=' + encodeURIComponent(JSON.stringify(chunk)));
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const m of (data.matches || [])) matches.push({ ...m, index: m.index + start });
+    } catch (e) { /* fail open */ }
+  }
+  return matches;
+}
+
+function formatDeletedOn(iso) {
+  const d = new Date((iso || '').slice(0, 10) + 'T12:00:00');
+  return isNaN(d) ? 'earlier' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// For a batch save: one prompt covering everyone who was deleted before.
+// Returns the set of indexes to leave out (empty if Mario says add them back).
+async function askAboutPreviouslyDeleted(people) {
+  const matches = await findPreviouslyDeleted(people);
+  if (!matches.length) return new Set();
+  const names = matches.slice(0, 8).map(m => `• ${m.name} (deleted ${formatDeletedOn(m.deleted_at)})`).join('\n');
+  const more = matches.length > 8 ? `\n…and ${matches.length - 8} more` : '';
+  const n = matches.length;
+  const ok = confirm(
+    `Are you sure? You've deleted ${n === 1 ? 'this contact' : `${n} of these contacts`} from your CRM before:\n\n${names}${more}\n\n`
+    + `OK = add ${n === 1 ? 'them' : 'all of them'} back anyway.\nCancel = leave ${n === 1 ? 'them' : 'those ' + n} out and save the rest.`
+  );
+  return ok ? new Set() : new Set(matches.map(m => m.index));
+}
 
 function escapeHtml(s) {
   const div = document.createElement('div');
@@ -5525,6 +5567,13 @@ clientForm.addEventListener('submit', async (e) => {
     list_ids: listIds,
   };
   if (!id && cfStartDateOverride) payload.start_date = cfStartDateOverride;
+  if (!id) {
+    const [m] = await findPreviouslyDeleted([{ name: payload.name, phone: payload.phone }]);
+    if (m && !confirm(
+      `Are you sure? You've deleted this contact before — ${m.name}`
+      + (m.phone ? ` (${m.phone})` : '') + `, deleted on ${formatDeletedOn(m.deleted_at)}.\n\nAdd them back anyway?`
+    )) return;
+  }
   const url = id ? `/api/crm/clients/${id}` : '/api/crm/clients';
   const method = id ? 'PUT' : 'POST';
   let res, data;
@@ -7311,9 +7360,13 @@ dialerSaveListSubmitBtn.addEventListener('click', async () => {
     // Every entry still without a matched CRM client gets created fresh — no
     // individual follow-up schedule (frequency_key: 'none'), since the
     // Contact List's own shared schedule is what governs them from here on.
+    const toCreate = dialerList.filter(e => !e.clientId && (e.name || e.phone));
+    const skipIdx = await askAboutPreviouslyDeleted(toCreate.map(e => ({ name: e.name, phone: e.phone })));
+    const skipEntries = new Set([...skipIdx].map(i => toCreate[i]));
     for (const entry of dialerList) {
       if (entry.clientId) continue;
       if (!entry.name && !entry.phone) continue;
+      if (skipEntries.has(entry)) continue;
       const res = await fetch('/api/crm/clients', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -8193,6 +8246,11 @@ document.getElementById('dictateSaveBtn').addEventListener('click', async () => 
   if (!clientId) {
     const name = (entry.name && entry.name !== 'Unknown') ? entry.name
                : (entry.phone || 'New lead');
+    const [m] = await findPreviouslyDeleted([{ name, phone: entry.phone }]);
+    if (m && !confirm(
+      `Are you sure? You've deleted this contact before — ${m.name}, deleted on ${formatDeletedOn(m.deleted_at)}.`
+      + `\n\nSaving this note adds them back to your CRM. Continue?`
+    )) return;
     const res = await fetch('/api/crm/clients', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
