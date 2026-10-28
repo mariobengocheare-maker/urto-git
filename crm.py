@@ -3442,7 +3442,9 @@ def get_morning_briefing_text() -> str:
     goal_part = ""
     try:
         goal = get_call_goal_status()
-        if goal["today_off"]:
+        if goal["today_off"] == "Weekend":
+            goal_part = " It's the weekend, so there's no call goal."
+        elif goal["today_off"]:
             goal_part = " Today is marked as a day off, so there's no call goal."
         elif goal["started"]:
             goal_part = f" Your call goal today is {goal['required_today']} calls"
@@ -4868,9 +4870,20 @@ def _goal_plan() -> dict:
             "off": {r["day"]: r["label"] for r in list_no_work_days()}}
 
 
+def _off_label(plan: dict, day: str):
+    """Why a day owes nothing: a day marked off on the Calendar, or a weekend
+    (Saturday and Sunday are always no-work days). None for a workday."""
+    if day in plan["off"]:
+        return plan["off"][day]
+    if datetime.strptime(day, "%Y-%m-%d").weekday() >= 5:
+        return "Weekend"
+    return None
+
+
 def _goal_for_day(plan: dict, day: str) -> int:
-    """What a day owes: 0 before tracking started or on a no-work day."""
-    if day < plan["start"] or day in plan["off"]:
+    """What a day owes: 0 before tracking started, on a weekend, or on a
+    no-work day."""
+    if day < plan["start"] or _off_label(plan, day):
         return 0
     hist = plan["hist"]
     goal = int(hist[0]["goal"])
@@ -4982,7 +4995,7 @@ def get_call_goal_status() -> dict:
         "daily_goal": int(plan["hist"][-1]["goal"]),
         "start_date": start_s,
         "started": started,
-        "today_off": plan["off"].get(today_s),
+        "today_off": _off_label(plan, today_s),
         "today": today_s,
         "made_today": stats["today"],
         "backlog": backlog,
@@ -5162,7 +5175,7 @@ def _call_streak(plan, counts, today) -> dict:
     day = today - timedelta(days=1)
     while day.isoformat() >= start:
         d = day.isoformat()
-        if d in plan["off"]:
+        if _off_label(plan, d):
             day -= timedelta(days=1)
             continue
         if not _day_hit(plan, counts, d):
@@ -5176,7 +5189,7 @@ def _call_streak(plan, counts, today) -> dict:
         day = datetime.strptime(start, "%Y-%m-%d").date()
         while day <= today:
             d = day.isoformat()
-            if d in plan["off"]:
+            if _off_label(plan, d):
                 pass
             elif _day_hit(plan, counts, d):
                 run += 1
@@ -5205,7 +5218,7 @@ def _call_heatmap(plan, counts, today, weeks=12, year=None) -> list:
         goal = _goal_for_day(plan, d)
         n = counts.get(d, 0) if d >= plan["start"] else 0
         out.append({"date": d, "count": n, "goal": goal, "future": day > today,
-                    "before": d < plan["start"], "off": plan["off"].get(d),
+                    "before": d < plan["start"], "off": _off_label(plan, d),
                     "outside": bool(year) and day.year != year,
                     "hit": goal > 0 and n >= goal})
         day += timedelta(days=1)
@@ -5433,17 +5446,20 @@ def _scorecard_values(conn, start, end) -> dict:
     }
 
 
-NO_WORK_TARGET_CUT = 0.20   # each missed workday takes 20% off that week's targets
+NO_WORK_TARGET_CUT = 0.20   # each missed weekday takes 20% off that week's 5-day targets
 
 
 def _week_missed_days(plan, start, end) -> list:
-    """Days that cut the week's targets: every marked no-work day, plus the
-    weekdays before tracking started (the inception week's Mon/Tue)."""
+    """Weekdays that cut the week's targets: every weekday marked off, plus
+    the weekdays before tracking started (the inception week's Mon/Tue).
+    Weekends never count -- the week's targets are already a 5-day week."""
     out = []
     day = start
     while day <= end:
         d = day.isoformat()
-        if d in plan["off"]:
+        if day.weekday() >= 5:
+            pass
+        elif d in plan["off"]:
             out.append({"date": d, "label": plan["off"][d]})
         elif d < plan["start"] and day.weekday() < 5:
             out.append({"date": d, "label": "Before tracking started"})
@@ -5490,8 +5506,8 @@ def get_weekly_scorecard(week_start=None) -> dict:
         vals["followups_overdue"] = None
     missed = _week_missed_days(plan, start, end)
     factor = max(0.0, 1.0 - NO_WORK_TARGET_CUT * min(len(missed), 5))
-    full_week_calls = 0
-    for i in range(7):
+    full_week_calls = 0   # Mon-Fri goals; weekends are off
+    for i in range(5):
         d = (start + timedelta(days=i)).isoformat()
         g = int(plan["hist"][0]["goal"])
         for h in plan["hist"]:

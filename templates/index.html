@@ -2392,7 +2392,7 @@
       <div class="sc-targets-grid" id="scTargetsGrid"></div>
       <div class="row" style="margin-top:10px; gap:8px; align-items:center">
         <button type="button" class="small" id="scTargetsSaveBtn">Save targets</button>
-        <span id="scTargetsMsg" style="font-size:.82rem; color:var(--text-secondary)">Leave blank for no target. Calls default to your daily goal × 7. Each day off you mark on the Calendar cuts that week's targets 20%.</span>
+        <span id="scTargetsMsg" style="font-size:.82rem; color:var(--text-secondary)">Leave blank for no target. Calls default to your daily goal × 5 (weekends are off). Each weekday you mark off on the Calendar cuts that week's targets 20%.</span>
       </div>
     </div>
     <table class="sc-table" id="scTable"></table>
@@ -10161,14 +10161,16 @@ function renderCallGoal(st) {
   const dayOff = !notStarted && st.today_off;
   let leftText = doneAll ? '✅ Goal hit' : `${st.remaining_today} to go`;
   let stackText = st.backlog > 0
-    ? `${dayOff ? 'Day off today' : st.goal + ' for today'} + <b>${st.backlog} stacked</b> from earlier days`
+    ? `${dayOff ? (st.today_off === 'Weekend' ? 'Weekend' : 'Day off today') : st.goal + ' for today'} + <b>${st.backlog} stacked</b> from earlier days`
     : `Goal: ${st.daily_goal || st.goal} calls a day. Short days stack onto the next.`;
   if (notStarted) {
     leftText = '';
     stackText = `Tracking starts <b>${formatGoalDay(st.start_date)}</b> — ${st.daily_goal} calls a day from then on.`;
   } else if (dayOff && !st.backlog) {
-    leftText = '🏖 Day off';
-    stackText = `Today is marked as a day off (${escapeHtml(st.today_off)}) — nothing owed, and it won't break your streak.`;
+    leftText = st.today_off === 'Weekend' ? '🏖 Weekend' : '🏖 Day off';
+    stackText = st.today_off === 'Weekend'
+      ? `It's the weekend — nothing owed, and it won't break your streak. Calls you make still pay off stacked days.`
+      : `Today is marked as a day off (${escapeHtml(st.today_off)}) — nothing owed, and it won't break your streak.`;
   }
 
   // EOS card
