@@ -997,23 +997,31 @@
   .streak-num { font-size: 1.6rem; font-weight: 700; color: var(--gold-bright); line-height: 1; }
   .streak-num.cold { color: var(--text-secondary); }
   .streak-sub { font-size: .82rem; color: var(--text-secondary); }
-  .heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 14px); grid-auto-columns: 14px; gap: 3px; margin-top: 12px; overflow-x: auto; padding-bottom: 4px; }
+  .heatmap { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px; }
+  .streak-month { width: calc(7 * 30px + 6 * 3px); }
+  .streak-month-name { font-size: .82rem; font-weight: 600; margin-bottom: 6px; }
+  .streak-grid { display: grid; grid-template-columns: repeat(7, 30px); gap: 3px; }
+  .streak-dow { font-size: .62rem; text-align: center; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; padding-bottom: 2px; }
+  .streak-dow.we { opacity: .4; }
   .heat-cell { width: 14px; height: 14px; border-radius: 3px; background: rgba(255,255,255,.06); }
+  .streak-grid .heat-cell { width: 30px; height: 30px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: .72rem; color: var(--text); }
+  .streak-grid .heat-cell.blank { background: transparent; }
   .heat-cell.l1 { background: rgba(212,175,55,.22); }
   .heat-cell.l2 { background: rgba(212,175,55,.45); }
   .heat-cell.l3 { background: rgba(212,175,55,.7); }
-  .heat-cell.hit { background: var(--gold-bright); box-shadow: 0 0 6px rgba(212,175,55,.55); }
-  .heat-cell.future { background: transparent; border: 1px dashed rgba(255,255,255,.08); }
-  .heat-cell.today { outline: 1px solid var(--text); outline-offset: 1px; }
-  .heat-cell.before { background: transparent; border: 1px solid rgba(255,255,255,.04); }
-  .heat-cell.outside { visibility: hidden; }
+  .heat-cell.hit { background: var(--gold-bright); box-shadow: 0 0 6px rgba(212,175,55,.55); color: #1a1405; font-weight: 700; }
+  .heat-cell.future { background: transparent; border: 1px dashed rgba(255,255,255,.1); color: var(--text-secondary); }
+  .heat-cell.before { background: transparent; border: 1px solid rgba(255,255,255,.04); color: rgba(255,255,255,.22); }
   .heat-cell.off { background: rgba(94,200,190,.28); }
-  .heat-cell.off.hit { background: var(--gold-bright); }
+  .heat-cell.weekend { background: repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 3px, rgba(0,0,0,.18) 3px 6px); border: none; color: rgba(255,255,255,.25); box-shadow: none; font-weight: 400; }
+  .heat-cell.today { outline: 2px solid var(--text); outline-offset: 1px; }
+  .heatmap.year { gap: 14px; }
+  .heatmap.year .streak-month { width: calc(7 * 20px + 6 * 2px); }
+  .heatmap.year .streak-grid { grid-template-columns: repeat(7, 20px); gap: 2px; }
+  .heatmap.year .streak-grid .heat-cell { width: 20px; height: 20px; border-radius: 4px; font-size: .58rem; }
+  .heatmap.year .streak-month-name { font-size: .74rem; }
   .heat-view-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; font-size: .82rem; color: var(--text-secondary); }
   .heat-view-row select { width: auto; padding: 4px 8px; font-size: .82rem; }
-  .heatmap.year { grid-template-rows: repeat(7, 11px); grid-auto-columns: 11px; gap: 2px; }
-  .heatmap.year .heat-cell { width: 11px; height: 11px; border-radius: 2px; }
-  .heat-months { display: grid; grid-auto-flow: column; grid-auto-columns: 11px; gap: 2px; font-size: .62rem; color: var(--text-secondary); margin-top: 8px; overflow: hidden; white-space: nowrap; }
   .call-year-summary { margin-top: 12px; }
   .call-year-totals { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
   .call-year-totals > div { background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; min-width: 96px; }
@@ -2365,11 +2373,10 @@
       </div>
       <div class="heat-view-row">
         <label for="heatViewSelect">Show:</label>
-        <select id="heatViewSelect"><option value="recent">Last 12 weeks</option></select>
+        <select id="heatViewSelect"><option value="recent">Recent months</option></select>
       </div>
-      <div class="heat-months" id="callHeatMonths" style="display:none"></div>
       <div class="heatmap" id="callHeatmap"></div>
-      <div class="heat-legend">Less <span class="heat-cell"></span><span class="heat-cell l1"></span><span class="heat-cell l2"></span><span class="heat-cell l3"></span><span class="heat-cell hit"></span> Goal hit · <span class="heat-cell off"></span> Day off</div>
+      <div class="heat-legend">Less <span class="heat-cell"></span><span class="heat-cell l1"></span><span class="heat-cell l2"></span><span class="heat-cell l3"></span><span class="heat-cell hit"></span> Goal hit · <span class="heat-cell off"></span> Day off · <span class="heat-cell weekend"></span> Weekend</div>
       <div class="call-year-summary" id="callYearSummary" style="display:none"></div>
       <div class="badge-row" id="callBadges"></div>
     </div>
@@ -10263,37 +10270,42 @@ let heatView = 'recent';   // 'recent' or a year like '2026'
 function heatCellHtml(d, today) {
   let cls = 'heat-cell';
   let tip;
-  if (d.outside) cls += ' outside';
-  if (d.before) { cls += ' before'; tip = `${formatGoalDay(d.date)}: before the tracker started`; }
+  const calls = `${d.count} call${d.count === 1 ? '' : 's'}`;
+  if (d.weekend) { cls += ' weekend'; tip = `${formatGoalDay(d.date)}: weekend` + (d.future || d.before ? '' : ` — ${calls}`); }
+  else if (d.before) { cls += ' before'; tip = `${formatGoalDay(d.date)}: before the tracker started`; }
   else if (d.future) { cls += ' future'; tip = formatGoalDay(d.date) + (d.off ? ` — day off (${d.off})` : ''); }
-  else if (d.off && !d.hit) { cls += ' off'; tip = `${formatGoalDay(d.date)}: day off (${d.off}) — ${d.count} call${d.count === 1 ? '' : 's'}`; }
+  else if (d.off && !d.hit) { cls += ' off'; tip = `${formatGoalDay(d.date)}: day off (${d.off}) — ${calls}`; }
   else {
     if (d.hit) cls += ' hit';
     else if (d.count > 0) {
       const ratio = d.goal > 0 ? d.count / d.goal : 1;
       cls += ratio >= 0.66 ? ' l3' : ratio >= 0.33 ? ' l2' : ' l1';
     }
-    tip = `${formatGoalDay(d.date)}: ${d.count} call${d.count === 1 ? '' : 's'} (goal ${d.goal})`;
+    tip = `${formatGoalDay(d.date)}: ${calls} (goal ${d.goal})`;
   }
   if (d.date === today) cls += ' today';
-  return `<div class="${cls}" title="${escapeHtml(tip)}"></div>`;
+  return `<div class="${cls}" title="${escapeHtml(tip)}">${Number(d.date.slice(8, 10))}</div>`;
 }
 
+// One month calendar (Mon-Sun columns, weekends greyed) per month in `days`.
 function renderHeatmap(days, today, isYear) {
   const el = document.getElementById('callHeatmap');
   el.classList.toggle('year', !!isYear);
-  el.innerHTML = days.map(d => heatCellHtml(d, today)).join('');
-  const months = document.getElementById('callHeatMonths');
-  if (!isYear) { months.style.display = 'none'; return; }
-  // One label per week column, shown on the week a month starts in.
-  const labels = [];
-  for (let i = 0; i < days.length; i += 7) {
-    const week = days.slice(i, i + 7).filter(d => !d.outside);
-    const first = week.find(d => d.date.endsWith('-01'));
-    labels.push(first ? MONTH_NAMES[Number(first.date.slice(5, 7)) - 1].slice(0, 3) : '');
+  const byMonth = [];
+  for (const d of days) {
+    const key = d.date.slice(0, 7);
+    if (!byMonth.length || byMonth[byMonth.length - 1].key !== key) byMonth.push({ key, days: [] });
+    byMonth[byMonth.length - 1].days.push(d);
   }
-  months.innerHTML = labels.map(l => `<span>${l}</span>`).join('');
-  months.style.display = 'grid';
+  const dow = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
+    .map((l, i) => `<div class="streak-dow${i >= 5 ? ' we' : ''}">${l}</div>`).join('');
+  el.innerHTML = byMonth.map(m => {
+    const [y, mo] = m.key.split('-').map(Number);
+    const lead = (new Date(y, mo - 1, 1).getDay() + 6) % 7;   // Monday = 0
+    return `<div class="streak-month"><div class="streak-month-name">${MONTH_NAMES[mo - 1]}${isYear ? '' : ' ' + y}</div>` +
+      `<div class="streak-grid">${dow}${'<div class="heat-cell blank"></div>'.repeat(lead)}` +
+      m.days.map(d => heatCellHtml(d, today)).join('') + '</div></div>';
+  }).join('');
 }
 
 function renderHeatYearOptions(st) {
@@ -10302,7 +10314,7 @@ function renderHeatYearOptions(st) {
   const want = ['recent', ...years];
   const have = [...sel.options].map(o => o.value);
   if (want.join() === have.join()) return;
-  sel.innerHTML = '<option value="recent">Last 12 weeks</option>' +
+  sel.innerHTML = '<option value="recent">Recent months</option>' +
     years.map(y => `<option value="${y}">${y} (calendar year)</option>`).join('');
   sel.value = want.includes(heatView) ? heatView : 'recent';
 }

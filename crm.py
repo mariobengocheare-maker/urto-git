@@ -2094,7 +2094,7 @@ def init_db():
     dialer_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dialer_calls)").fetchall()}
     if "outcome" not in dialer_cols:
         conn.execute("ALTER TABLE dialer_calls ADD COLUMN outcome TEXT")
-    # Weekly scorecard snapshots, saved Sunday night. Almost every number is
+    # Weekly scorecard snapshots, saved Friday night. Almost every number is
     # recomputed live from the data; the snapshot keeps the one that can't
     # be (how many follow-ups were overdue when the week ended).
     conn.execute("""
@@ -5200,17 +5200,22 @@ def _call_streak(plan, counts, today) -> dict:
     return {"current": cur, "longest": max(longest, cur), "today_hit": today_hit}
 
 
-def _call_heatmap(plan, counts, today, weeks=12, year=None) -> list:
-    """Mon-Sun weeks, oldest first: the last `weeks` weeks ending with this
-    one, or -- with `year` -- every week of that calendar year. Days before
-    tracking started are marked `before` (drawn blank)."""
+def _call_heatmap(plan, counts, today, months=3, year=None) -> list:
+    """Every day of whole calendar months, oldest first (the page draws one
+    month calendar per month): this month and up to `months - 1` before it,
+    never earlier than the month tracking started -- or, with `year`, all of
+    that calendar year. Days before tracking started are marked `before`
+    (drawn blank); Saturdays/Sundays are marked `weekend` (greyed out)."""
     if year:
-        first, last = date(year, 1, 1), date(year, 12, 31)
-        start = first - timedelta(days=first.weekday())
-        end = last + timedelta(days=6 - last.weekday())
+        start, end = date(year, 1, 1), date(year, 12, 31)
     else:
-        start = today - timedelta(days=today.weekday()) - timedelta(weeks=weeks - 1)
-        end = start + timedelta(days=weeks * 7 - 1)
+        y, m = today.year, today.month - (months - 1)
+        while m < 1:
+            y, m = y - 1, m + 12
+        tracking = datetime.strptime(plan["start"], "%Y-%m-%d").date()
+        start = max(date(y, m, 1), tracking.replace(day=1))
+        nxt = date(today.year + (today.month == 12), today.month % 12 + 1, 1)
+        end = nxt - timedelta(days=1)
     out = []
     day = start
     while day <= end:
@@ -5219,7 +5224,7 @@ def _call_heatmap(plan, counts, today, weeks=12, year=None) -> list:
         n = counts.get(d, 0) if d >= plan["start"] else 0
         out.append({"date": d, "count": n, "goal": goal, "future": day > today,
                     "before": d < plan["start"], "off": _off_label(plan, d),
-                    "outside": bool(year) and day.year != year,
+                    "weekend": day.weekday() >= 5,
                     "hit": goal > 0 and n >= goal})
         day += timedelta(days=1)
     return out
@@ -5402,7 +5407,7 @@ def _week_bounds(week_start):
     else:
         d = _today()
     start = d - timedelta(days=d.weekday())
-    return start, start + timedelta(days=6)
+    return start, start + timedelta(days=4)   # the scorecard week is Mon-Fri
 
 
 def _scorecard_values(conn, start, end) -> dict:
@@ -5479,7 +5484,7 @@ def get_weekly_scorecard(week_start=None) -> dict:
     plan = _goal_plan()
     tracking_start = datetime.strptime(plan["start"], "%Y-%m-%d").date()
     first_week = tracking_start - timedelta(days=tracking_start.weekday())
-    is_current = start <= today <= end
+    is_current = start <= today <= start + timedelta(days=6)   # still "this week" over the weekend
     prev = start - timedelta(days=7)
     nav = {
         "week_start": start.isoformat(), "week_end": end.isoformat(), "is_current": is_current,
@@ -5570,14 +5575,15 @@ def save_weekly_scorecard_snapshot(week_start=None) -> dict:
     return sc
 
 
-SCORECARD_PUSH_DOW, SCORECARD_PUSH_HOUR = 6, 19   # Sunday, 7 PM Miami
+SCORECARD_PUSH_DOW, SCORECARD_PUSH_AT = 4, (21, 30)   # Friday, 9:30 PM Miami
 
 
 def due_weekly_scorecard_push(now=None):
-    """(title, body) once on Sunday 7-8 PM: saves the week's snapshot and
-    sums it up. None any other time."""
+    """(title, body) once on Friday between 9:30 and 11 PM, when the Mon-Fri
+    week is done: saves the week's snapshot and sums it up. None any other
+    time."""
     now = now or _now()
-    if now.weekday() != SCORECARD_PUSH_DOW or now.hour != SCORECARD_PUSH_HOUR:
+    if now.weekday() != SCORECARD_PUSH_DOW or not (SCORECARD_PUSH_AT <= (now.hour, now.minute) < (23, 0)):
         return None
     start, _ = _week_bounds(None)
     if not _claim_once(f"scorecard:{start.isoformat()}"):

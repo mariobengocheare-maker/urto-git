@@ -37,7 +37,7 @@ from crm_routes import crm_bp
 app = Flask(__name__)
 app.register_blueprint(crm_bp)
 
-APP_VERSION = "1.39.0-hosted"
+APP_VERSION = "1.40.0-hosted"
 
 # Render redeploys automatically on every git push -- there's no per-PC
 # "updater" moment to read back the way the desktop app's
@@ -547,7 +547,7 @@ threading.Thread(target=_closing_watcher, daemon=True).start()
 
 # ===================== Accountability pushes (build order #187) =====================
 # Daily-call progress checks (noon / 5 PM / 9 PM, a 🔥 when the goal is hit),
-# the Sunday-night weekly scorecard, and newly earned badges. crm.py decides
+# the Friday-night weekly scorecard, and newly earned badges. crm.py decides
 # what's due (and remembers what was already sent, so a redeploy can't
 # repeat a push); this only sends it.
 def _accountability_watcher():
