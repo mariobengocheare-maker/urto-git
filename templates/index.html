@@ -1339,7 +1339,12 @@
   .dialer-controls { display: flex; justify-content: center; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
   .dialer-controls button.call-btn { background: var(--success-fg); padding: 12px 28px; font-size: 1rem; }
 
-  .dialer-list { margin-top: 22px; max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+  .dialer-sort-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 18px; font-size: .85rem; color: var(--text-secondary); }
+  .dialer-sort-row select { width: auto; max-width: 100%; padding: 5px 8px; font-size: .85rem; }
+  .dialer-sort-msg { font-size: .78rem; }
+  .dialer-list-row .dl-last { font-size: .74rem; color: var(--text-secondary); white-space: nowrap; }
+  .dialer-list-row > span:last-child { white-space: nowrap; }
+  .dialer-list { margin-top: 10px; max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
   .dialer-list-row {
     display: flex;
     justify-content: space-between;
@@ -2123,6 +2128,15 @@
     </div>
     <div class="row" style="margin: 14px 0 0">
       <button class="ghost" id="dialerSaveToListBtn">💾 Save This List to a Contact List</button>
+    </div>
+    <div class="dialer-sort-row">
+      <label for="dialerSortSelect">Sort list:</label>
+      <select id="dialerSortSelect">
+        <option value="loaded">As loaded</option>
+        <option value="recent">Last called — most recent first</option>
+        <option value="oldest">Last called — oldest first</option>
+      </select>
+      <span class="dialer-sort-msg" id="dialerSortMsg"></span>
     </div>
     <div class="dialer-list" id="dialerListEl"></div>
   </div>
@@ -7574,7 +7588,9 @@ function dedupeDialerEntries(entries) {
 
 async function loadDialerList(entries) {
   dialerList = await matchEntriesToClients(dedupeDialerEntries(entries));
+  dialerList.forEach((e, i) => { e._loadOrder = i; });
   dialerIndex = 0;
+  if (dialerSortMode !== 'loaded') await applyDialerSort();
   dialerEmpty.style.display = dialerList.length ? 'none' : 'block';
   dialerCardWrap.style.display = dialerList.length ? 'block' : 'none';
   renderDialerCard();
@@ -7738,6 +7754,84 @@ dialerPropertyAppraiserBtn.addEventListener('click', async () => {
 const dialerClientInfoEl = document.getElementById('dialerClientInfo');
 let dialerInfoToken = 0;
 
+function renderDialerListRows() {
+  dialerListEl.innerHTML = '';
+  const showLast = dialerSortMode !== 'loaded';
+  dialerList.forEach((e, i) => {
+    const row = document.createElement('div');
+    row.className = 'dialer-list-row' + (i === dialerIndex ? ' current' : '');
+    const last = showLast ? `<span class="dl-last">${escapeHtml(e.lastCalledAt ? formatLastCalled(e.lastCalledAt) : 'Never called')}</span>` : '';
+    row.innerHTML = `<span>${escapeHtml(e.name || 'Unknown')}${e.clientId ? ' 📇' : ''}</span>${last}<span>${escapeHtml(e.phone || '')}</span>`;
+    row.addEventListener('click', () => { dialerIndex = i; renderDialerCard(); });
+    dialerListEl.appendChild(row);
+  });
+}
+
+// ---- Sort the loaded dial list by when each person was last called ----
+// "Last called" = the newest of the CRM client's own last-called time and
+// any Dialer call to that number (so non-CRM leads count too). People with
+// the same last-called time -- in practice everyone never called -- stay in
+// A-Z order by name. Most recent first puts never-called at the bottom;
+// oldest first puts them at the top (they've waited longest).
+const dialerSortSelect = document.getElementById('dialerSortSelect');
+const dialerSortMsg = document.getElementById('dialerSortMsg');
+let dialerSortMode = 'loaded';
+try {
+  const saved = localStorage.getItem('urtoDialerSort');
+  if (['loaded', 'recent', 'oldest'].includes(saved)) dialerSortMode = saved;
+} catch (e) { /* storage blocked: default order */ }
+dialerSortSelect.value = dialerSortMode;
+
+function dialerPhoneKey(raw) {   // same as crm._normalize_phone_key
+  let d = (raw || '').replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
+  return d;
+}
+
+function compareDialerEntries(a, b) {
+  if (dialerSortMode === 'loaded') return (a._loadOrder ?? 0) - (b._loadOrder ?? 0);
+  const ta = a.lastCalledAt || '', tb = b.lastCalledAt || '';
+  if (ta !== tb) {
+    if (!ta) return dialerSortMode === 'recent' ? 1 : -1;   // never called
+    if (!tb) return dialerSortMode === 'recent' ? -1 : 1;
+    return dialerSortMode === 'recent' ? (ta < tb ? 1 : -1) : (ta < tb ? -1 : 1);
+  }
+  const byName = (a.name || '').localeCompare(b.name || '', 'en', { sensitivity: 'base' });
+  return byName || (a._loadOrder ?? 0) - (b._loadOrder ?? 0);
+}
+
+async function applyDialerSort() {
+  if (dialerSortMode !== 'loaded') {
+    dialerSortMsg.textContent = 'Checking call history…';
+    try {
+      const res = await fetch('/api/crm/last_called_map');
+      if (!res.ok) throw new Error('failed');
+      const map = await res.json();
+      for (const e of dialerList) {
+        const byClient = e.clientId ? (map.by_client || {})[String(e.clientId)] : '';
+        const byPhone = (map.by_phone || {})[dialerPhoneKey(e.phone)] || '';
+        e.lastCalledAt = [byClient || '', byPhone].sort().pop() || '';
+      }
+      dialerSortMsg.textContent = '';
+    } catch (err) {
+      dialerSortMsg.textContent = "Couldn't load call history — try again.";
+      return;
+    }
+  } else {
+    dialerSortMsg.textContent = '';
+  }
+  dialerList.sort(compareDialerEntries);
+}
+
+dialerSortSelect.addEventListener('change', async () => {
+  dialerSortMode = dialerSortSelect.value;
+  try { localStorage.setItem('urtoDialerSort', dialerSortMode); } catch (e) { /* ignore */ }
+  if (!dialerList.length) return;
+  await applyDialerSort();
+  dialerIndex = 0;
+  renderDialerCard();
+});
+
 function renderDialerCard() {
   if (dialerList.length === 0) return;
   const entry = dialerList[dialerIndex];
@@ -7750,14 +7844,7 @@ function renderDialerCard() {
   dialerMetaEl.textContent = entry.meta || '';
   setDialerZillowAddress(entry.address);
 
-  dialerListEl.innerHTML = '';
-  dialerList.forEach((e, i) => {
-    const row = document.createElement('div');
-    row.className = 'dialer-list-row' + (i === dialerIndex ? ' current' : '');
-    row.innerHTML = `<span>${escapeHtml(e.name || 'Unknown')}${e.clientId ? ' 📇' : ''}</span><span>${escapeHtml(e.phone || '')}</span>`;
-    row.addEventListener('click', () => { dialerIndex = i; renderDialerCard(); });
-    dialerListEl.appendChild(row);
-  });
+  renderDialerListRows();
 
   // Offer "Add to CRM" only for entries not already tied to a client.
   dialerAddCrmBtn.style.display = entry.clientId ? 'none' : 'inline-block';
@@ -8156,6 +8243,8 @@ function logCallForEntry(entry) {
     .then(data => {
       if (data && data.goal) renderCallGoal(data.goal);
       if (data && data.id) {
+        entry.lastCalledAt = data.called_at || entry.lastCalledAt;
+        if (dialerSortMode !== 'loaded') renderDialerListRows();
         if (!dialerLastCall || dialerLastCall.id !== data.id) dialerLastCall = { id: data.id, entry, outcome: null };
         if (dialerList[dialerIndex] === entry) renderDialerOutcomeRow(entry);
       }

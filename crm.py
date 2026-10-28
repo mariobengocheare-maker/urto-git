@@ -5058,6 +5058,31 @@ def get_call_year(year: int) -> dict:
     }
 
 
+def get_last_called_map() -> dict:
+    """When each number / CRM client was last called, for sorting a Dialer
+    list by "last called". by_phone is keyed by _normalize_phone_key() and
+    covers every Dialer call (CRM client or not); by_client is each client's
+    own last_called_at. Values are ISO "YYYY-MM-DDTHH:MM:SS" Miami times."""
+    conn = get_conn()
+    by_phone, by_client = {}, {}
+
+    def keep(d, k, at):
+        if k and at and (k not in d or at > d[k]):
+            d[k] = at
+
+    for r in conn.execute("SELECT phone, client_id, MAX(called_at) AS at FROM dialer_calls "
+                          "GROUP BY phone, client_id").fetchall():
+        keep(by_phone, _normalize_phone_key(r["phone"]), r["at"])
+        if r["client_id"]:
+            keep(by_client, str(r["client_id"]), r["at"])
+    for r in conn.execute("SELECT id, phone, last_called_at FROM clients "
+                          "WHERE last_called_at IS NOT NULL AND last_called_at != ''").fetchall():
+        keep(by_client, str(r["id"]), r["last_called_at"])
+        keep(by_phone, _normalize_phone_key(r["phone"]), r["last_called_at"])
+    conn.close()
+    return {"by_phone": by_phone, "by_client": by_client}
+
+
 def log_dialer_call(name: str = "", phone: str = "", client_id=None) -> dict:
     """One call placed from the Dialer, for any entry. If it's a CRM client
     it's also logged on that client (log_call: last called, call history,
@@ -5095,7 +5120,8 @@ def log_dialer_call(name: str = "", phone: str = "", client_id=None) -> dict:
     client = log_call(cid) if cid else None
     if not cid:
         on_data_changed("dialer call logged", name or phone)
-    return {"id": call_id, "duplicate": False, "client": client, "goal": get_call_goal_status()}
+    return {"id": call_id, "duplicate": False, "client": client, "goal": get_call_goal_status(),
+            "called_at": now.isoformat(timespec="seconds")}
 
 
 DIALER_OUTCOMES = {

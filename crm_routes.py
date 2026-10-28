@@ -984,6 +984,11 @@ def call_goal_update():
         return jsonify({"error": str(e) if isinstance(e, RuntimeError) else "Enter a number of calls."}), 400
 
 
+@crm_bp.route("/api/crm/last_called_map", methods=["GET"])
+def crm_last_called_map():
+    return jsonify(crm.get_last_called_map())
+
+
 @crm_bp.route("/api/crm/call_goal/year", methods=["GET"])
 def call_goal_year():
     try:
