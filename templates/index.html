@@ -500,6 +500,25 @@
   }
   .text-preset-row .preset-text { flex: 1; cursor: pointer; }
   .text-preset-row .preset-delete { color: var(--danger-fg, #e05a5a); cursor: pointer; background: none; border: none; font-size: 1rem; }
+  .text-preset-row .seq-load { padding: 3px 9px; font-size: .75rem; }
+  .text-preset-row .seq-meta { display: block; font-size: .74rem; color: var(--text-secondary); margin-top: 2px; }
+  .dialer-seq-row { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: .85rem; color: var(--text-secondary); }
+  .dialer-seq-row select { width: auto; max-width: 100%; padding: 5px 8px; font-size: .85rem; }
+  .seq-lang-toggle { display: inline-flex; border: 1px solid rgba(201,162,39,.35); border-radius: 999px; overflow: hidden; }
+  .seq-lang-toggle button { background: none; border: none; color: var(--text-secondary); padding: 4px 11px; font-size: .78rem; cursor: pointer; border-radius: 0; box-shadow: none; }
+  .seq-lang-toggle button.active { background: rgba(201,162,39,.25); color: var(--gold-bright, #f2d27a); }
+  .seq-lang-toggle button:disabled { opacity: .4; cursor: not-allowed; }
+  .dialer-seq-status { text-align: center; font-size: .8rem; color: var(--text-secondary); margin-top: 6px; min-height: 1em; }
+  .dialer-seq-status .seq-preview { display: block; font-style: italic; margin-top: 3px; overflow-wrap: anywhere; }
+  .dialer-seq-status button { padding: 2px 8px; font-size: .74rem; margin-left: 6px; }
+  .seq-step { border: 1px solid rgba(201,162,39,.18); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: rgba(19,28,46,.35); }
+  .seq-step-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: .82rem; color: var(--text-secondary); }
+  .seq-step-head strong { flex: 1; color: var(--text-primary, #e8ecf4); }
+  .seq-step-head button { padding: 2px 8px; font-size: .75rem; }
+  .seq-step-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .seq-step-cols label { font-size: .74rem; color: var(--text-secondary); display: block; margin-bottom: 3px; }
+  .seq-step-cols textarea { width: 100%; min-height: 70px; font-size: .84rem; }
+  @media (max-width: 640px) { .seq-step-cols { grid-template-columns: 1fr; } }
   #dataHealthWarning {
     display: none; align-items: center; gap: 12px; margin-bottom: 14px;
     padding: 12px 16px; border: 1px solid rgba(224,74,74,.5); border-radius: 8px;
@@ -2128,6 +2147,16 @@
         <button class="ghost" id="dialerTextBtn">📱 Follow-up Text</button>
         <button class="ghost" id="dialerRepeatPresetBtn" title="Send the same preset you used last, filled in for this contact">🔁 Repeat Last Preset</button>
       </div>
+      <div class="dialer-seq-row">
+        <label for="dialerSeqSelect">Text sequence:</label>
+        <select id="dialerSeqSelect"><option value="">None — repeat last preset</option></select>
+        <span class="seq-lang-toggle" id="dialerSeqLangToggle" style="display:none">
+          <button type="button" data-lang="en" class="active">English</button>
+          <button type="button" data-lang="es">Español</button>
+        </span>
+        <button class="small ghost" id="dialerSeqManageBtn" type="button">✏️ Sequences</button>
+      </div>
+      <div class="dialer-seq-status" id="dialerSeqStatus"></div>
       <div class="dialer-hint">Enter = call current number &nbsp;·&nbsp; &larr;/&rarr; = move through the list</div>
     </div>
     <div class="row" style="margin: 14px 0 0">
@@ -2697,6 +2726,40 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="textSeqOverlay">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-head">
+      <h2 id="textSeqTitle">Message Sequences</h2>
+      <button class="modal-close" id="textSeqCloseBtn">&times;</button>
+    </div>
+    <div id="textSeqListView">
+      <p class="sub" style="margin-top:-8px">A sequence is a list of texts sent in order. URTO remembers which message each person already got, so "💬 Send Next Text" on the Dialer always sends the next one instead of repeating the first.</p>
+      <div id="textSeqManagerList" class="text-preset-list" style="max-height:none"></div>
+      <div class="modal-actions" style="justify-content:flex-start">
+        <button id="textSeqNewBtn" type="button">+ New Sequence</button>
+      </div>
+    </div>
+    <div id="textSeqEditView" style="display:none">
+      <div class="form-group">
+        <label for="textSeqName">Sequence name</label>
+        <input type="text" id="textSeqName" placeholder="e.g. Bay Harbor owners">
+      </div>
+      <p class="sub" style="margin-top:0">Write each message in English, and the same message in Spanish next to it. <code>{first_name}</code> and <code>{address}</code> are filled in for whoever you're texting. The Spanish side is optional.</p>
+      <div class="row" style="margin:0 0 10px">
+        <button class="small" id="textSeqInsertNameBtn" type="button" title="Insert {first_name} where the cursor is">+ {first_name}</button>
+        <button class="small" id="textSeqInsertAddressBtn" type="button" title="Insert {address} where the cursor is">+ {address}</button>
+      </div>
+      <div id="textSeqSteps"></div>
+      <button class="small ghost" id="textSeqAddStepBtn" type="button">+ Add Message</button>
+      <div class="error-box" id="textSeqError" style="display:none;margin-top:10px"></div>
+      <div class="modal-actions">
+        <button class="ghost" id="textSeqCancelBtn" type="button">Cancel</button>
+        <button id="textSeqSaveBtn" type="button">Save Sequence</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="textFollowupOverlay">
   <div class="modal" style="max-width:520px">
     <div class="modal-head">
@@ -2710,6 +2773,12 @@
     <div class="form-group">
       <label>Presets (click to load into the message box)</label>
       <div id="textPresetList" class="text-preset-list"></div>
+    </div>
+
+    <div class="form-group">
+      <label>Message sequences (loads the next message this person hasn't gotten yet)</label>
+      <div id="textSeqList" class="text-preset-list"></div>
+      <button class="small ghost" id="textSeqManageBtn" type="button" style="margin-top:6px">✏️ Create / edit sequences</button>
     </div>
 
     <div class="form-group">
@@ -4793,12 +4862,17 @@ function extractAddressForTemplate(address) {
 // mutate the modal's own `textFollowupName`/`textFollowupAddress` state --
 // omit both to keep the original "whatever the modal is currently showing"
 // behavior every existing caller already relies on.
-function applyPresetTemplate(text, nameOverride, addressOverride) {
+function applyPresetTemplate(text, nameOverride, addressOverride, lang) {
   const name = nameOverride !== undefined ? nameOverride : textFollowupName;
   const address = addressOverride !== undefined ? addressOverride : textFollowupAddress;
-  const firstName = extractFirstName(name) || 'there';
-  const fullAddress = extractAddressForTemplate(address) || 'your property';
-  return text.replace(/\{first_name\}/gi, firstName).replace(/\{address\}/gi, fullAddress);
+  const spanish = lang === 'es';
+  const firstName = extractFirstName(name) || (spanish ? '' : 'there');
+  const fullAddress = extractAddressForTemplate(address) || (spanish ? 'su propiedad' : 'your property');
+  let out = text.replace(/\{first_name\}/gi, firstName).replace(/\{address\}/gi, fullAddress);
+  // Spanish has no "Hi there": with no name, "Hola {first_name}, ..." becomes
+  // "Hola, ..." instead of "Hola , ...".
+  if (spanish && !firstName) out = out.replace(/ +([,.!?])/g, '$1').replace(/ {2,}/g, ' ');
+  return out;
 }
 
 // Mario: "a button outside of the preset text menu that lets me reuse the
@@ -4838,6 +4912,7 @@ async function loadTextPresetsIntoModal() {
       row.querySelector('.preset-text').addEventListener('click', () => {
         textFollowupBody.value = applyPresetTemplate(p.text);
         rememberLastPresetText(p.text);
+        textFollowupPendingSeq = null;
       });
       row.querySelector('.preset-delete').addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -4851,7 +4926,12 @@ async function loadTextPresetsIntoModal() {
   }
 }
 
-function openTextFollowup(name, phone, address) {
+let textFollowupClientId = null;
+// Set when a sequence message is loaded into the compose box; recorded as
+// sent when "Open Text" is pressed, so the person moves to the next message.
+let textFollowupPendingSeq = null;
+
+function openTextFollowup(name, phone, address, clientId) {
   // Close any other open modal first (e.g. the client detail view this was
   // launched from) — two stacked .modal-overlay elements share the same
   // z-index, so whichever is later in the DOM would otherwise sit on top
@@ -4860,10 +4940,13 @@ function openTextFollowup(name, phone, address) {
   textFollowupPhone = phone || '';
   textFollowupName = name || '';
   textFollowupAddress = address || '';
+  textFollowupClientId = clientId || null;
+  textFollowupPendingSeq = null;
   textFollowupRecipient.textContent = `${name || 'Unknown'} (${phone || 'no phone on file'})`;
   textFollowupBody.value = '';
   textPresetError.style.display = 'none';
   loadTextPresetsIntoModal();
+  loadTextSequencesIntoModal();
   textFollowupOverlay.classList.add('show');
 }
 
@@ -4874,10 +4957,21 @@ document.getElementById('textFollowupSendBtn').addEventListener('click', () => {
     alert('No phone number on file for this contact.');
     return;
   }
-  const body = applyPresetTemplate(textFollowupBody.value.trim());
+  const pending = textFollowupPendingSeq;
+  const body = applyPresetTemplate(textFollowupBody.value.trim(), undefined, undefined, pending ? pending.lang : undefined);
   const smsUrl = `sms:${normalizePhone(textFollowupPhone)}${body ? '?body=' + encodeURIComponent(body) : ''}`;
-  window.location.href = smsUrl;
+  if (pending) {
+    textFollowupPendingSeq = null;
+    recordSequenceSend(pending.sequenceId, textFollowupPhone, textFollowupClientId, textFollowupName, pending.stepIndex, pending.lang)
+      .then(() => refreshDialerSeqStatus());
+  }
+  openSmsUrl(smsUrl);
 });
+
+// Every sms: hand-off goes through here (one place to change how texts open).
+function openSmsUrl(url) {
+  window.location.href = url;
+}
 
 function insertTextPresetToken(token) {
   const input = textPresetNewInput;
@@ -4923,7 +5017,8 @@ document.getElementById('cdTextBtn').addEventListener('click', () => {
   openTextFollowup(
     document.getElementById('cdName').textContent,
     document.getElementById('cdPhone').textContent,
-    document.getElementById('cdAddress').textContent
+    document.getElementById('cdAddress').textContent,
+    currentClientId
   );
 });
 
@@ -4933,7 +5028,7 @@ document.getElementById('dialerTextBtn').addEventListener('click', () => {
   // dialerLookupAddress is the same best-known address the Zillow/Property
   // Search buttons use -- it already prefers a matched CRM client's own
   // address on file over the raw dial entry's address, see build order #134.
-  openTextFollowup(entry.name, entry.phone, dialerLookupAddress || entry.address);
+  openTextFollowup(entry.name, entry.phone, dialerLookupAddress || entry.address, entry.clientId);
 });
 
 // Mario: a one-click "send the same preset again" shortcut living directly
@@ -4941,13 +5036,21 @@ document.getElementById('dialerTextBtn').addEventListener('click', () => {
 // opens that modal at all, just fires the sms: link straight away using
 // whichever preset was last used, substituted for the CURRENT entry (own
 // name/address, not whoever it was last sent to). See build order #171.
-document.getElementById('dialerRepeatPresetBtn').addEventListener('click', () => {
+// With a message sequence picked (build order #194) the same button becomes
+// "Send Next Text": it sends the next message in the sequence this person
+// hasn't gotten yet, in English or Spanish.
+const dialerRepeatPresetBtn = document.getElementById('dialerRepeatPresetBtn');
+dialerRepeatPresetBtn.addEventListener('click', async () => {
   if (!dialerList.length) return;
+  const entry = dialerList[dialerIndex];
+  if (dialerSeqSelect.value) {
+    await sendNextSequenceText(entry);
+    return;
+  }
   if (!lastPresetTemplate) {
     alert('No preset has been used yet — open "📱 Follow-up Text" and pick one first, then this button will repeat it.');
     return;
   }
-  const entry = dialerList[dialerIndex];
   if (!entry.phone) {
     alert('No phone number on file for this contact.');
     return;
@@ -4955,8 +5058,391 @@ document.getElementById('dialerRepeatPresetBtn').addEventListener('click', () =>
   const address = dialerLookupAddress || entry.address;
   const body = applyPresetTemplate(lastPresetTemplate, entry.name, address);
   const smsUrl = `sms:${normalizePhone(entry.phone)}?body=${encodeURIComponent(body)}`;
-  window.location.href = smsUrl;
+  openSmsUrl(smsUrl);
 });
+
+// ---- Message sequences (build order #194) ----
+const dialerSeqSelect = document.getElementById('dialerSeqSelect');
+const dialerSeqLangToggle = document.getElementById('dialerSeqLangToggle');
+const dialerSeqStatus = document.getElementById('dialerSeqStatus');
+let textSequences = [];
+let dialerSeqProgress = null;    // progress for the person on screen
+let dialerSeqToken = 0;
+let dialerSeqLang = 'en';        // language for the person on screen
+let dialerSeqLangDefault = 'en'; // for people never texted from the sequence
+try {
+  dialerSeqLangDefault = localStorage.getItem('urtoSeqLang') === 'es' ? 'es' : 'en';
+} catch (e) { /* storage blocked */ }
+
+async function loadTextSequences() {
+  try {
+    const res = await fetch('/api/text_presets/sequences');
+    if (!res.ok) throw new Error();
+    textSequences = await res.json();
+  } catch (e) {
+    textSequences = textSequences || [];
+  }
+  let saved = '';
+  try { saved = localStorage.getItem('urtoDialerSeq') || ''; } catch (e) { /* ignore */ }
+  const keep = dialerSeqSelect.value || saved;
+  dialerSeqSelect.innerHTML = '<option value="">None — repeat last preset</option>' +
+    textSequences.map(q => `<option value="${q.id}">${escapeHtml(q.name)} (${q.steps.length} message${q.steps.length === 1 ? '' : 's'})</option>`).join('');
+  dialerSeqSelect.value = textSequences.some(q => String(q.id) === String(keep)) ? String(keep) : '';
+  refreshDialerSeqStatus();
+  return textSequences;
+}
+
+function currentDialerSequence() {
+  return textSequences.find(q => String(q.id) === dialerSeqSelect.value) || null;
+}
+
+async function fetchSequenceProgress(sequenceId, phone, clientId) {
+  const qs = new URLSearchParams({ phone: phone || '' });
+  if (clientId) qs.set('client_id', clientId);
+  const res = await fetch(`/api/text_presets/sequences/${sequenceId}/progress?${qs}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not check this sequence.');
+  return res.json();
+}
+
+async function recordSequenceSend(sequenceId, phone, clientId, name, stepIndex, lang) {
+  try {
+    const res = await fetch(`/api/text_presets/sequences/${sequenceId}/sends`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, client_id: clientId || null, name: name || '', step_index: stepIndex, language: lang }),
+    });
+    if (!res.ok) throw new Error();
+    return await res.json();
+  } catch (e) {
+    alert("The text opened, but URTO couldn't save that you sent it — the same message may come up again for this person.");
+    return null;
+  }
+}
+
+function setDialerSeqLang(lang) {
+  dialerSeqLang = lang === 'es' ? 'es' : 'en';
+  dialerSeqLangToggle.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.lang === dialerSeqLang));
+}
+
+function renderDialerSeqStatus(entry) {
+  const seq = currentDialerSequence();
+  dialerRepeatPresetBtn.textContent = seq ? '💬 Send Next Text' : '🔁 Repeat Last Preset';
+  dialerRepeatPresetBtn.title = seq
+    ? 'Send the next message in the sequence this person hasn’t gotten yet'
+    : 'Send the same preset you used last, filled in for this contact';
+  dialerSeqLangToggle.style.display = seq ? 'inline-flex' : 'none';
+  if (!seq) { dialerSeqStatus.innerHTML = ''; return; }
+  const esBtn = dialerSeqLangToggle.querySelector('[data-lang="es"]');
+  esBtn.disabled = !seq.has_spanish;
+  esBtn.title = seq.has_spanish ? '' : 'No Spanish version yet — add one under ✏️ Sequences';
+  if (!entry || !entry.phone) { dialerSeqStatus.textContent = 'No phone number on file for this person.'; return; }
+  const p = dialerSeqProgress;
+  if (!p) { dialerSeqStatus.textContent = 'Checking what this person has been sent…'; return; }
+  const raw = (dialerSeqLang === 'es' && p.next_text_es) ? p.next_text_es : p.next_text;
+  const preview = applyPresetTemplate(raw, entry.name, dialerLookupAddress || entry.address, dialerSeqLang === 'es' && p.next_text_es ? 'es' : 'en');
+  const when = p.last_sent_at ? ` (last one ${formatNoteTime(p.last_sent_at)})` : '';
+  let head;
+  if (p.done) head = `All ${p.total} messages already sent${when} — next tap repeats message ${p.total}.`;
+  else if (p.sent_count === 0) head = `Not texted from this sequence yet — next: message 1 of ${p.total}.`;
+  else head = `Sent ${p.sent_count} of ${p.total}${when} — next: message ${p.next_index + 1} of ${p.total}.`;
+  const missingEs = dialerSeqLang === 'es' && !p.next_text_es ? ' <em>(no Spanish version of this one — English will be used)</em>' : '';
+  dialerSeqStatus.innerHTML = `${escapeHtml(head)}${missingEs}` +
+    (p.sent_count ? '<button class="small ghost" id="dialerSeqUndoBtn" type="button" title="Use this if the last text never actually got sent">↩ Back one</button>' : '') +
+    `<span class="seq-preview">“${escapeHtml(preview)}”</span>`;
+  const undo = document.getElementById('dialerSeqUndoBtn');
+  if (undo) undo.addEventListener('click', () => undoDialerSequenceSend(entry));
+}
+
+async function refreshDialerSeqStatus() {
+  const token = ++dialerSeqToken;
+  const entry = dialerList[dialerIndex];
+  const seq = currentDialerSequence();
+  dialerSeqProgress = null;
+  if (!seq || !entry || !entry.phone) { renderDialerSeqStatus(entry); return; }
+  setDialerSeqLang(dialerSeqLangDefault === 'es' && seq.has_spanish ? 'es' : 'en');
+  renderDialerSeqStatus(entry);
+  try {
+    const p = await fetchSequenceProgress(seq.id, entry.phone, entry.clientId);
+    if (token !== dialerSeqToken) return;
+    dialerSeqProgress = p;
+    // Text each person in the language they were texted in last time.
+    if (p.last_language) setDialerSeqLang(p.last_language === 'es' && seq.has_spanish ? 'es' : 'en');
+    renderDialerSeqStatus(entry);
+  } catch (e) {
+    if (token !== dialerSeqToken) return;
+    dialerSeqStatus.textContent = "⚠ Couldn't check what this person has been sent.";
+  }
+}
+
+async function sendNextSequenceText(entry) {
+  const seq = currentDialerSequence();
+  if (!seq) return;
+  if (!entry.phone) { alert('No phone number on file for this contact.'); return; }
+  let p;
+  try {
+    p = await fetchSequenceProgress(seq.id, entry.phone, entry.clientId);
+  } catch (e) {
+    alert(e.message || "Couldn't check what this person has been sent — try again.");
+    return;
+  }
+  if (entry !== dialerList[dialerIndex]) return;
+  if (p.done && !confirm(`${entry.name || 'This person'} already got all ${p.total} messages in "${seq.name}". Send message ${p.total} again?`)) return;
+  let lang = dialerSeqLang;
+  let raw = p.next_text;
+  if (lang === 'es') {
+    if (p.next_text_es) raw = p.next_text_es;
+    else if (!confirm(`Message ${p.next_index + 1} has no Spanish version yet. Send the English one?`)) return;
+    else lang = 'en';
+  }
+  const body = applyPresetTemplate(raw, entry.name, dialerLookupAddress || entry.address, lang);
+  const smsUrl = `sms:${normalizePhone(entry.phone)}?body=${encodeURIComponent(body)}`;
+  const saved = await recordSequenceSend(seq.id, entry.phone, entry.clientId, entry.name, p.next_index, lang);
+  if (saved && entry === dialerList[dialerIndex]) {
+    dialerSeqProgress = saved;
+    renderDialerSeqStatus(entry);
+  }
+  openSmsUrl(smsUrl);
+}
+
+async function undoDialerSequenceSend(entry) {
+  const seq = currentDialerSequence();
+  if (!seq || !entry) return;
+  try {
+    const res = await fetch(`/api/text_presets/sequences/${seq.id}/sends/undo`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: entry.phone, client_id: entry.clientId || null }),
+    });
+    if (!res.ok) throw new Error();
+    if (entry !== dialerList[dialerIndex]) return;
+    dialerSeqProgress = await res.json();
+    renderDialerSeqStatus(entry);
+  } catch (e) {
+    alert("Couldn't undo that — try again.");
+  }
+}
+
+dialerSeqSelect.addEventListener('change', () => {
+  try { localStorage.setItem('urtoDialerSeq', dialerSeqSelect.value); } catch (e) { /* ignore */ }
+  refreshDialerSeqStatus();
+});
+dialerSeqLangToggle.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+  if (b.disabled) return;
+  setDialerSeqLang(b.dataset.lang);
+  dialerSeqLangDefault = dialerSeqLang;
+  try { localStorage.setItem('urtoSeqLang', dialerSeqLang); } catch (e) { /* ignore */ }
+  renderDialerSeqStatus(dialerList[dialerIndex]);
+}));
+
+// Sequences inside the Follow-up Text box: load the next message for this
+// person into the compose box; pressing Open Text records it as sent.
+const textSeqList = document.getElementById('textSeqList');
+async function loadTextSequencesIntoModal() {
+  textSeqList.innerHTML = 'Loading…';
+  await loadTextSequences();
+  if (!textSequences.length) {
+    textSeqList.innerHTML = '<div class="empty-state">No sequences yet — click "Create / edit sequences".</div>';
+    return;
+  }
+  textSeqList.innerHTML = '';
+  for (const seq of textSequences) {
+    const row = document.createElement('div');
+    row.className = 'text-preset-row';
+    row.innerHTML = `<span class="preset-text">${escapeHtml(seq.name)}<span class="seq-meta">Checking…</span></span>` +
+      `<button class="small seq-load" data-lang="en" type="button">English</button>` +
+      (seq.has_spanish ? `<button class="small seq-load" data-lang="es" type="button">Español</button>` : '');
+    textSeqList.appendChild(row);
+    const meta = row.querySelector('.seq-meta');
+    let progress = null;
+    if (!textFollowupPhone) {
+      meta.textContent = 'No phone number on file.';
+    } else {
+      fetchSequenceProgress(seq.id, textFollowupPhone, textFollowupClientId).then(p => {
+        progress = p;
+        meta.textContent = p.done
+          ? `All ${p.total} sent — would repeat message ${p.total}`
+          : `Next for this person: message ${p.next_index + 1} of ${p.total}`;
+      }).catch(() => { meta.textContent = "Couldn't check."; });
+    }
+    row.querySelectorAll('.seq-load').forEach(btn => btn.addEventListener('click', () => {
+      if (!progress) return;
+      let lang = btn.dataset.lang;
+      let raw = progress.next_text;
+      if (lang === 'es') {
+        if (progress.next_text_es) raw = progress.next_text_es;
+        else { alert(`Message ${progress.next_index + 1} has no Spanish version yet — loading the English one.`); lang = 'en'; }
+      }
+      textFollowupBody.value = applyPresetTemplate(raw, undefined, undefined, lang);
+      textFollowupPendingSeq = { sequenceId: seq.id, stepIndex: progress.next_index, lang };
+    }));
+  }
+}
+
+// ---- Sequence manager ----
+const textSeqOverlay = document.getElementById('textSeqOverlay');
+const textSeqListView = document.getElementById('textSeqListView');
+const textSeqEditView = document.getElementById('textSeqEditView');
+const textSeqManagerList = document.getElementById('textSeqManagerList');
+const textSeqStepsEl = document.getElementById('textSeqSteps');
+const textSeqNameInput = document.getElementById('textSeqName');
+const textSeqError = document.getElementById('textSeqError');
+let textSeqEditingId = null;
+let textSeqReturnToFollowup = false;
+let textSeqLastFocused = null;
+
+function openTextSequenceManager() {
+  textSeqReturnToFollowup = textFollowupOverlay.classList.contains('show');
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  showTextSeqList();
+  textSeqOverlay.classList.add('show');
+}
+
+async function showTextSeqList() {
+  textSeqEditView.style.display = 'none';
+  textSeqListView.style.display = 'block';
+  document.getElementById('textSeqTitle').textContent = 'Message Sequences';
+  textSeqManagerList.innerHTML = 'Loading…';
+  await loadTextSequences();
+  if (!textSequences.length) {
+    textSeqManagerList.innerHTML = '<div class="empty-state">No sequences yet.</div>';
+    return;
+  }
+  textSeqManagerList.innerHTML = '';
+  for (const seq of textSequences) {
+    const row = document.createElement('div');
+    row.className = 'text-preset-row';
+    const es = seq.has_spanish ? ' · English + Español' : '';
+    row.innerHTML = `<span class="preset-text">${escapeHtml(seq.name)}<span class="seq-meta">${seq.steps.length} message${seq.steps.length === 1 ? '' : 's'}${es} · ${seq.people_texted} ${seq.people_texted === 1 ? 'person' : 'people'} texted</span></span>` +
+      `<button class="small seq-load" type="button">Edit</button><button class="preset-delete" title="Delete sequence">&times;</button>`;
+    row.querySelector('.seq-load').addEventListener('click', () => showTextSeqEditor(seq));
+    row.querySelector('.preset-text').addEventListener('click', () => showTextSeqEditor(seq));
+    row.querySelector('.preset-delete').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete the sequence "${seq.name}"? URTO will also forget who has been sent which message from it.`)) return;
+      await fetch(`/api/text_presets/sequences/${seq.id}`, { method: 'DELETE' });
+      showTextSeqList();
+    });
+    textSeqManagerList.appendChild(row);
+  }
+}
+
+function textSeqStepValues() {
+  return [...textSeqStepsEl.querySelectorAll('.seq-step')].map(el => ({
+    en: el.querySelector('.seq-en').value, es: el.querySelector('.seq-es').value,
+  }));
+}
+
+function renderTextSeqSteps(steps) {
+  textSeqStepsEl.innerHTML = '';
+  steps.forEach((st, i) => {
+    const el = document.createElement('div');
+    el.className = 'seq-step';
+    el.innerHTML = `<div class="seq-step-head"><strong>Message ${i + 1}</strong>` +
+      `<button class="small ghost seq-up" type="button" title="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>` +
+      `<button class="small ghost seq-down" type="button" title="Move down" ${i === steps.length - 1 ? 'disabled' : ''}>↓</button>` +
+      `<button class="small ghost seq-remove" type="button" title="Remove this message">✕</button></div>` +
+      `<div class="seq-step-cols"><div><label>English</label><textarea class="seq-en" placeholder="${i === 0 ? 'Hi {first_name}, this is Mario calling about {address}…' : 'Hi {first_name}, Mario again…'}"></textarea></div>` +
+      `<div><label>Español</label><textarea class="seq-es" placeholder="${i === 0 ? 'Hola {first_name}, soy Mario, le llamo sobre {address}…' : 'Hola {first_name}, soy Mario otra vez…'}"></textarea></div></div>`;
+    el.querySelector('.seq-en').value = st.en || '';
+    el.querySelector('.seq-es').value = st.es || '';
+    el.querySelectorAll('textarea').forEach(t => t.addEventListener('focus', () => { textSeqLastFocused = t; }));
+    const move = (delta) => {
+      const vals = textSeqStepValues();
+      const [item] = vals.splice(i, 1);
+      vals.splice(i + delta, 0, item);
+      renderTextSeqSteps(vals);
+    };
+    el.querySelector('.seq-up').addEventListener('click', () => move(-1));
+    el.querySelector('.seq-down').addEventListener('click', () => move(1));
+    el.querySelector('.seq-remove').addEventListener('click', () => {
+      const vals = textSeqStepValues();
+      vals.splice(i, 1);
+      renderTextSeqSteps(vals.length ? vals : [{ en: '', es: '' }]);
+    });
+    textSeqStepsEl.appendChild(el);
+  });
+  textSeqLastFocused = null;
+}
+
+function showTextSeqEditor(seq) {
+  textSeqEditingId = seq ? seq.id : null;
+  document.getElementById('textSeqTitle').textContent = seq ? 'Edit Sequence' : 'New Sequence';
+  textSeqNameInput.value = seq ? seq.name : '';
+  textSeqError.style.display = 'none';
+  renderTextSeqSteps(seq
+    ? seq.steps.map((en, i) => ({ en, es: (seq.steps_es || [])[i] || '' }))
+    : [{ en: '', es: '' }, { en: '', es: '' }]);
+  textSeqListView.style.display = 'none';
+  textSeqEditView.style.display = 'block';
+}
+
+function insertTextSeqToken(token) {
+  const t = textSeqLastFocused && textSeqStepsEl.contains(textSeqLastFocused)
+    ? textSeqLastFocused : textSeqStepsEl.querySelector('.seq-en');
+  if (!t) return;
+  const start = t.selectionStart ?? t.value.length;
+  const end = t.selectionEnd ?? t.value.length;
+  t.value = t.value.slice(0, start) + token + t.value.slice(end);
+  t.focus();
+  t.setSelectionRange(start + token.length, start + token.length);
+}
+
+document.getElementById('textSeqInsertNameBtn').addEventListener('mousedown', e => e.preventDefault());
+document.getElementById('textSeqInsertAddressBtn').addEventListener('mousedown', e => e.preventDefault());
+document.getElementById('textSeqInsertNameBtn').addEventListener('click', () => insertTextSeqToken('{first_name}'));
+document.getElementById('textSeqInsertAddressBtn').addEventListener('click', () => insertTextSeqToken('{address}'));
+document.getElementById('textSeqAddStepBtn').addEventListener('click', () => {
+  renderTextSeqSteps([...textSeqStepValues(), { en: '', es: '' }]);
+  const all = textSeqStepsEl.querySelectorAll('.seq-en');
+  all[all.length - 1].focus();
+});
+document.getElementById('textSeqNewBtn').addEventListener('click', () => showTextSeqEditor(null));
+document.getElementById('textSeqCancelBtn').addEventListener('click', () => showTextSeqList());
+
+let textSeqSaving = false;
+document.getElementById('textSeqSaveBtn').addEventListener('click', async () => {
+  if (textSeqSaving) return;
+  textSeqError.style.display = 'none';
+  const vals = textSeqStepValues();
+  const body = { name: textSeqNameInput.value.trim(), steps: vals.map(v => v.en), steps_es: vals.map(v => v.es) };
+  const showErr = (msg) => { textSeqError.textContent = msg; textSeqError.style.display = 'block'; };
+  if (!body.name) { showErr('Give the sequence a name.'); return; }
+  if (!vals.some(v => v.en.trim())) { showErr('Write at least one message.'); return; }
+  textSeqSaving = true;
+  const btn = document.getElementById('textSeqSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const res = await fetch(textSeqEditingId ? `/api/text_presets/sequences/${textSeqEditingId}` : '/api/text_presets/sequences', {
+      method: textSeqEditingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { showErr(data.error || 'Could not save that sequence.'); return; }
+    // A brand-new sequence becomes the Dialer's sequence right away.
+    if (!textSeqEditingId && data.id) {
+      dialerSeqSelect.value = '';
+      try { localStorage.setItem('urtoDialerSeq', String(data.id)); } catch (e) { /* ignore */ }
+    }
+    await showTextSeqList();
+  } catch (e) {
+    showErr("Couldn't reach URTO's server — try again.");
+  } finally {
+    textSeqSaving = false;
+    btn.disabled = false; btn.textContent = 'Save Sequence';
+  }
+});
+
+document.getElementById('textSeqCloseBtn').addEventListener('click', () => {
+  textSeqOverlay.classList.remove('show');
+  loadTextSequences();
+  if (textSeqReturnToFollowup) {
+    textFollowupOverlay.classList.add('show');
+    loadTextSequencesIntoModal();
+  }
+});
+document.getElementById('dialerSeqManageBtn').addEventListener('click', openTextSequenceManager);
+document.getElementById('textSeqManageBtn').addEventListener('click', openTextSequenceManager);
+// After the rest of this script has run (the Dialer's own variables are
+// declared further down).
+setTimeout(loadTextSequences, 0);
 
 const crmTabClientsBtn = document.getElementById('crmTabClientsBtn');
 const crmTabCalendarBtn = document.getElementById('crmTabCalendarBtn');
@@ -7920,6 +8406,7 @@ function renderDialerCard() {
   // over to the next person.
   resetDictation();
   updateDialerClientInfo(entry);
+  refreshDialerSeqStatus();
 }
 
 dialerAddCrmBtn.addEventListener('click', () => {

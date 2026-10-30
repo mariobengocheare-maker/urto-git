@@ -786,6 +786,8 @@ def _write_full_data_export(backup_dir: Path):
         ],
         "lookup_stats": [dict(r) for r in conn.execute("SELECT * FROM lookup_stats ORDER BY week_start").fetchall()],
         "text_presets": [dict(r) for r in conn.execute("SELECT * FROM text_presets ORDER BY sort_order, id").fetchall()],
+        "text_sequences": [dict(r) for r in conn.execute("SELECT * FROM text_sequences ORDER BY id").fetchall()],
+        "text_sequence_sends": [dict(r) for r in conn.execute("SELECT * FROM text_sequence_sends ORDER BY id").fetchall()],
         "commission_entries": [dict(r) for r in conn.execute("SELECT * FROM commission_entries ORDER BY id").fetchall()],
         "eos_rocks": [dict(r) for r in conn.execute("SELECT * FROM eos_rocks ORDER BY days").fetchall()],
         "waterfall_items": [dict(r) for r in conn.execute("SELECT * FROM waterfall_items ORDER BY sort_order, id").fetchall()],
@@ -844,7 +846,7 @@ def import_full_data_export(data: dict) -> dict:
     table_order = [
         "clients", "notes", "call_log", "dialer_calls", "contact_lists", "contact_list_members", "cre_units",
         "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
-        "lookup_stats", "text_presets", "commission_entries", "eos_rocks", "waterfall_items",
+        "lookup_stats", "text_presets", "text_sequences", "text_sequence_sends", "commission_entries", "eos_rocks", "waterfall_items",
         "showing_days", "showing_stops", "skiptrace_results", "weekly_scorecards", "no_work_days", "deleted_clients", "activity_log",
     ]
     counts = {}
@@ -2001,6 +2003,35 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    # Message sequences (build order #194): an ordered list of follow-up
+    # texts, plus a memory of which step each phone number has already been
+    # sent, so "Send Next Text" on the Dialer never repeats message 1 to
+    # someone who already got it. `steps` is a JSON list of template strings
+    # ({first_name}/{address} tokens intact), edited as a whole; `steps_es`
+    # is the Spanish version of the same messages, same length ("" = not
+    # written yet). A person's place is shared by both languages.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS text_sequences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            steps TEXT NOT NULL DEFAULT '[]',
+            steps_es TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS text_sequence_sends (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sequence_id INTEGER NOT NULL REFERENCES text_sequences(id) ON DELETE CASCADE,
+            phone_key TEXT NOT NULL,
+            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+            name TEXT,
+            step_index INTEGER NOT NULL,
+            language TEXT NOT NULL DEFAULT 'en',
+            sent_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_seq_sends_phone ON text_sequence_sends (sequence_id, phone_key)")
     # ShowingDay: a real GPS-optimized route/schedule for a day of showings
     # (see build order re: Mario's request), via OpenRouteService — see
     # ors_routing.py. One showing_days row per built route; its stops are
@@ -2653,6 +2684,7 @@ def merge_clients(keep_id, remove_ids) -> dict:
             conn.execute("UPDATE notes SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute("UPDATE call_log SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute("UPDATE dialer_calls SET client_id = ? WHERE client_id = ?", (keep_id, rid))
+            conn.execute("UPDATE text_sequence_sends SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute("UPDATE events SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute(
                 """INSERT OR IGNORE INTO contact_list_members (list_id, client_id)
@@ -4363,6 +4395,201 @@ def delete_text_preset(preset_id: int):
     conn.commit()
     conn.close()
     on_data_changed("text preset removed")
+
+
+# ---- Message sequences (build order #194) ----
+# Mario: re-sending message 1 to someone who already got it "looks robotic."
+# A sequence is an ordered list of texts; the send log remembers, per phone
+# number (or CRM client), how far down the sequence each person is, so the
+# Dialer's "Send Next Text" picks the next message automatically.
+
+def _clean_steps_es(steps_es, count: int) -> list:
+    """Spanish versions, one per English message (blank = not written)."""
+    vals = steps_es if isinstance(steps_es, list) else []
+    vals = [str(t or "").strip() for t in vals][:count]
+    return vals + [""] * (count - len(vals))
+
+
+def _sequence_dict(row) -> dict:
+    d = dict(row)
+    for key in ("steps", "steps_es"):
+        try:
+            d[key] = json.loads(d.get(key) or "[]")
+        except ValueError:
+            d[key] = []
+    d["steps_es"] = _clean_steps_es(d["steps_es"], len(d["steps"]))
+    d["has_spanish"] = any(d["steps_es"])
+    return d
+
+
+def list_text_sequences() -> list:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM text_sequences ORDER BY id").fetchall()
+    counts = {r["sequence_id"]: r["n"] for r in conn.execute(
+        "SELECT sequence_id, COUNT(DISTINCT phone_key) AS n FROM text_sequence_sends GROUP BY sequence_id")}
+    conn.close()
+    out = []
+    for r in rows:
+        d = _sequence_dict(r)
+        d["people_texted"] = counts.get(d["id"], 0)
+        out.append(d)
+    return out
+
+
+def get_text_sequence(sequence_id: int):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM text_sequences WHERE id = ?", (sequence_id,)).fetchone()
+    conn.close()
+    return _sequence_dict(row) if row else None
+
+
+def _clean_sequence_pairs(steps, steps_es):
+    """Drop messages blank in BOTH languages, keeping each English message
+    paired with its own Spanish version."""
+    if not isinstance(steps, list):
+        raise ValueError("Steps must be a list of messages.")
+    es = steps_es if isinstance(steps_es, list) else []
+    pairs = []
+    for i, t in enumerate(steps):
+        en = str(t or "").strip()
+        sp = str(es[i] if i < len(es) else "").strip()
+        if en or sp:
+            if not en:
+                raise ValueError(f"Message {len(pairs) + 1} has a Spanish version but no English one.")
+            pairs.append((en, sp))
+    if not pairs:
+        raise ValueError("Add at least one message to the sequence.")
+    return [p[0] for p in pairs], [p[1] for p in pairs]
+
+
+def create_text_sequence(name: str, steps, steps_es=None) -> dict:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Give the sequence a name.")
+    steps, steps_es = _clean_sequence_pairs(steps, steps_es)
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO text_sequences (name, steps, steps_es, created_at) VALUES (?, ?, ?, ?)",
+        (name, json.dumps(steps), json.dumps(steps_es), _now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    new_id = cur.lastrowid
+    conn.close()
+    on_data_changed("text sequence added", name)
+    return get_text_sequence(new_id)
+
+
+def update_text_sequence(sequence_id: int, name: str, steps, steps_es=None) -> dict:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Give the sequence a name.")
+    steps, steps_es = _clean_sequence_pairs(steps, steps_es)
+    conn = get_conn()
+    cur = conn.execute("UPDATE text_sequences SET name = ?, steps = ?, steps_es = ? WHERE id = ?",
+                       (name, json.dumps(steps), json.dumps(steps_es), sequence_id))
+    conn.commit()
+    conn.close()
+    if not cur.rowcount:
+        raise LookupError("That sequence no longer exists.")
+    on_data_changed("text sequence updated", name)
+    return get_text_sequence(sequence_id)
+
+
+def delete_text_sequence(sequence_id: int):
+    seq = get_text_sequence(sequence_id)
+    conn = get_conn()
+    conn.execute("DELETE FROM text_sequence_sends WHERE sequence_id = ?", (sequence_id,))
+    conn.execute("DELETE FROM text_sequences WHERE id = ?", (sequence_id,))
+    conn.commit()
+    conn.close()
+    on_data_changed("text sequence removed", seq["name"] if seq else "")
+
+
+def _sequence_send_filter(phone, client_id):
+    """SQL fragment + params matching this person's sends: the same phone
+    number (any formatting) or, when known, the same CRM client."""
+    key = _normalize_phone_key(phone)
+    clauses, params = [], []
+    if key:
+        clauses.append("phone_key = ?")
+        params.append(key)
+    if client_id:
+        clauses.append("client_id = ?")
+        params.append(int(client_id))
+    if not clauses:
+        return None, []
+    return "(" + " OR ".join(clauses) + ")", params
+
+
+def get_sequence_progress(sequence_id: int, phone: str, client_id=None) -> dict:
+    """Where this person is in the sequence: how many messages they've been
+    sent, the next message's index and raw text, and whether every message
+    has already gone out (`done` -- the next send would repeat the last one)."""
+    seq = get_text_sequence(sequence_id)
+    if not seq:
+        raise LookupError("That sequence no longer exists.")
+    steps = seq["steps"]
+    where, params = _sequence_send_filter(phone, client_id)
+    sends = []
+    if where:
+        conn = get_conn()
+        sends = [dict(r) for r in conn.execute(
+            f"SELECT step_index, language, sent_at FROM text_sequence_sends WHERE sequence_id = ? AND {where} ORDER BY id",
+            [sequence_id] + params).fetchall()]
+        conn.close()
+    sent = (max(s["step_index"] for s in sends) + 1) if sends else 0
+    done = sent >= len(steps)
+    next_index = min(sent, len(steps) - 1) if steps else 0
+    return {
+        "sequence_id": sequence_id, "sequence_name": seq["name"], "total": len(steps),
+        "sent_count": sent, "next_index": next_index, "done": done,
+        "next_text": steps[next_index] if steps else "",
+        "next_text_es": seq["steps_es"][next_index] if steps else "",
+        "has_spanish": seq["has_spanish"],
+        "last_sent_at": sends[-1]["sent_at"] if sends else None,
+        "last_language": sends[-1]["language"] if sends else None,
+    }
+
+
+def record_sequence_send(sequence_id: int, phone: str, client_id=None, name: str = "", step_index=None,
+                         language: str = "en") -> dict:
+    key = _normalize_phone_key(phone)
+    if not key:
+        raise ValueError("No phone number on file for this contact.")
+    progress = get_sequence_progress(sequence_id, phone, client_id)
+    if step_index is None:
+        step_index = progress["next_index"]
+    step_index = max(0, min(int(step_index), max(progress["total"] - 1, 0)))
+    conn = get_conn()
+    if client_id and not conn.execute("SELECT 1 FROM clients WHERE id = ?", (int(client_id),)).fetchone():
+        client_id = None
+    conn.execute(
+        "INSERT INTO text_sequence_sends (sequence_id, phone_key, client_id, name, step_index, language, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (sequence_id, key, int(client_id) if client_id else None, (name or "").strip(), step_index,
+         "es" if language == "es" else "en", _now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    conn.close()
+    on_data_changed("sequence text sent", f"{(name or '').strip() or key}: {progress['sequence_name']} message {step_index + 1}")
+    return get_sequence_progress(sequence_id, phone, client_id)
+
+
+def undo_sequence_send(sequence_id: int, phone: str, client_id=None) -> dict:
+    """Forget this person's most recent send in the sequence (the text was
+    never actually sent), moving them back one message."""
+    where, params = _sequence_send_filter(phone, client_id)
+    if where:
+        conn = get_conn()
+        row = conn.execute(
+            f"SELECT id FROM text_sequence_sends WHERE sequence_id = ? AND {where} ORDER BY id DESC LIMIT 1",
+            [sequence_id] + params).fetchone()
+        if row:
+            conn.execute("DELETE FROM text_sequence_sends WHERE id = ?", (row["id"],))
+            conn.commit()
+        conn.close()
+        if row:
+            on_data_changed("sequence text undone")
+    return get_sequence_progress(sequence_id, phone, client_id)
 
 
 # ---------------------------------------------------------------------------

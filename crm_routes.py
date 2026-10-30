@@ -573,6 +573,68 @@ def remove_text_preset(preset_id):
     return jsonify({"ok": True})
 
 
+@crm_bp.route("/api/text_presets/sequences", methods=["GET"])
+def get_text_sequences():
+    return jsonify(crm.list_text_sequences())
+
+
+@crm_bp.route("/api/text_presets/sequences", methods=["POST"])
+def create_text_sequence():
+    data = request.get_json(force=True) or {}
+    try:
+        return jsonify(crm.create_text_sequence(data.get("name"), data.get("steps"), data.get("steps_es"))), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@crm_bp.route("/api/text_presets/sequences/<int:sequence_id>", methods=["PUT"])
+def update_text_sequence(sequence_id):
+    data = request.get_json(force=True) or {}
+    try:
+        return jsonify(crm.update_text_sequence(sequence_id, data.get("name"), data.get("steps"), data.get("steps_es")))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except LookupError as e:
+        return jsonify({"error": str(e)}), 404
+
+
+@crm_bp.route("/api/text_presets/sequences/<int:sequence_id>", methods=["DELETE"])
+def delete_text_sequence(sequence_id):
+    crm.delete_text_sequence(sequence_id)
+    return jsonify({"ok": True})
+
+
+@crm_bp.route("/api/text_presets/sequences/<int:sequence_id>/progress", methods=["GET"])
+def text_sequence_progress(sequence_id):
+    try:
+        return jsonify(crm.get_sequence_progress(
+            sequence_id, request.args.get("phone", ""), request.args.get("client_id", type=int)))
+    except LookupError as e:
+        return jsonify({"error": str(e)}), 404
+
+
+@crm_bp.route("/api/text_presets/sequences/<int:sequence_id>/sends", methods=["POST"])
+def text_sequence_record_send(sequence_id):
+    data = request.get_json(force=True) or {}
+    try:
+        return jsonify(crm.record_sequence_send(
+            sequence_id, data.get("phone", ""), data.get("client_id"), data.get("name", ""),
+            data.get("step_index"), data.get("language", "en"))), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except LookupError as e:
+        return jsonify({"error": str(e)}), 404
+
+
+@crm_bp.route("/api/text_presets/sequences/<int:sequence_id>/sends/undo", methods=["POST"])
+def text_sequence_undo_send(sequence_id):
+    data = request.get_json(force=True) or {}
+    try:
+        return jsonify(crm.undo_sequence_send(sequence_id, data.get("phone", ""), data.get("client_id")))
+    except LookupError as e:
+        return jsonify({"error": str(e)}), 404
+
+
 @crm_bp.route("/api/crm/skiptrace_results", methods=["GET"])
 def crm_skiptrace_list():
     return jsonify(crm.list_skiptrace_results(include_all=request.args.get("all") == "1"))

@@ -59,7 +59,7 @@ SEG_TABLE = {
     "pieces": "chess_pieces", "transactions": "transactions",
     "document_types": "document_types", "notes": "notes", "text_presets": "text_presets",
     "transaction_documents": "transaction_documents", "skiptrace_results": "skiptrace_results",
-    "dialer_calls": "dialer_calls",
+    "dialer_calls": "dialer_calls", "sequences": "text_sequences", "sends": "text_sequence_sends",
 }
 # Body keys that carry ids.
 BODY_KEY_TABLE = {
@@ -280,7 +280,8 @@ def _create_table(method: str, path: str):
     last = path.rstrip("/").split("/")[-1]
     if last in ("clients", "contact_lists", "events", "cre_units", "showing_days", "stops",
                 "commission_entries", "waterfall_items", "pieces", "transactions",
-                "document_types", "notes", "text_presets", "dialer_calls"):
+                "document_types", "notes", "text_presets", "dialer_calls",
+                "sequences", "sends"):
         return SEG_TABLE[last]
     return None
 
@@ -366,7 +367,9 @@ def serve(flask_request, path: str):
 
         _ensure_ready()
         client = _offline_app.test_client()
-        kwargs = {"method": method, "query_string": flask_request.query_string}
+        # As text: given raw bytes, the test client reads them as a list of
+        # pairs and every offline GET with a ?query crashed.
+        kwargs = {"method": method, "query_string": flask_request.query_string.decode("utf-8", "replace")}
         if kind == "form":
             kwargs["data"] = dict(body)
         elif kind in ("json", "raw"):
