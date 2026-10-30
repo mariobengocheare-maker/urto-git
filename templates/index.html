@@ -2046,6 +2046,10 @@
       <button type="button" class="ghost small" id="dialerPropertyAppraiserBtn" style="display:none; margin-top:4px">🏛️ Miami-Dade Property Search</button>
       <div id="dialerPaMsg" style="display:none; font-size:.78rem; color:var(--text-secondary); margin-top:3px"></div>
       <button class="dialer-add-crm" id="dialerAddCrmBtn" style="display:none">+ Add to CRM</button>
+      <div id="dialerClientInfoMsg" style="display:none; font-size:.85rem; color:var(--warn, #f5c35b); margin:8px 0">
+        ⚠ Couldn't load this person's CRM info (slow or lost connection).
+        <button type="button" class="ghost small" id="dialerClientInfoRetryBtn">Try again</button>
+      </div>
       <div id="dialerClientInfo" class="dialer-client-info" style="display:none">
         <div class="dialer-client-info-head">📇 In your CRM</div>
         <div class="row" style="gap:8px; margin:2px 0 8px">
@@ -6822,7 +6826,16 @@ efProviderTeamsBtn.addEventListener('click', () => setMeetingProvider('teams'));
 // caller reach into efClient/efClientSearch itself -- only ever applied on
 // the NEW-event path (never alongside `existing`, which already carries its
 // own real client_id/list_id to restore).
+// Each open gets a number; a slower, older open that finishes late must
+// not refill the form (it used to put the date back to the default after
+// Mario had already changed it -- e.g. a double-click on "Add Follow-up
+// Day" while the first click was still loading over a slow connection).
+let eventFormOpenToken = 0;
+
 async function openEventForm(dateStr, existing, prefillClientId) {
+  // Already open and being filled in: don't wipe it for a repeat click.
+  if (eventFormOverlay.classList.contains('show') && !existing && !efId.value) return;
+  const openToken = ++eventFormOpenToken;
   eventFormError.style.display = 'none';
   eventForm.reset();
   // A previous save that got stuck (e.g. a slow connection) leaves the
@@ -6843,6 +6856,7 @@ async function openEventForm(dateStr, existing, prefillClientId) {
   ]);
   const clients = clientsRes.ok ? await clientsRes.json() : [];
   const lists = listsRes.ok ? await listsRes.json() : [];
+  if (openToken !== eventFormOpenToken) return;   // a newer open took over
   efClient.innerHTML = '<option value="">— No client or list —</option>' +
     (clients.length ? `<optgroup label="Clients">${clients.map(c => `<option value="client-${c.id}" data-name="${escapeHtml(c.name)}" data-email="${escapeHtml(c.email || '')}">${escapeHtml(c.name)}</option>`).join('')}</optgroup>` : '') +
     (lists.length ? `<optgroup label="Contact Lists">${lists.map(l => `<option value="list-${l.id}" data-name="${escapeHtml(l.name)}">${escapeHtml(l.name)} (${l.member_count} member${l.member_count === 1 ? '' : 's'})</option>`).join('')}</optgroup>` : '');
@@ -7922,18 +7936,47 @@ dialerAddCrmBtn.addEventListener('click', () => {
 });
 
 let dialerCurrentClientData = null;
+const dialerClientInfoMsg = document.getElementById('dialerClientInfoMsg');
+document.getElementById('dialerClientInfoRetryBtn').addEventListener('click', () => {
+  const entry = dialerList[dialerIndex];
+  if (entry) updateDialerClientInfo(entry);
+});
+
+// The panel's client, but only if it's really the person on screen right
+// now -- never act on (edit, re-schedule, link an event to) a leftover.
+function currentDialerClient() {
+  const entry = dialerList[dialerIndex];
+  const c = dialerCurrentClientData;
+  return (entry && c && entry.clientId && Number(c.id) === Number(entry.clientId)) ? c : null;
+}
 
 async function updateDialerClientInfo(entry) {
   const token = ++dialerInfoToken;
-  if (!entry.clientId) {
+  dialerClientInfoMsg.style.display = 'none';
+  // Moving to a different person: hide the old person's panel right away,
+  // so a slow or failed load can never leave someone else's phone, address
+  // and notes showing under this name.
+  if (!dialerCurrentClientData || Number(dialerCurrentClientData.id) !== Number(entry.clientId)) {
     dialerClientInfoEl.style.display = 'none';
     dialerCurrentClientData = null;
+  }
+  if (!entry.clientId) return;
+  let c;
+  try {
+    const res = await fetch(`/api/crm/clients/${entry.clientId}`);
+    if (token !== dialerInfoToken) return; // a newer entry was selected while this was loading
+    if (res.status === 404) { dialerClientInfoEl.style.display = 'none'; dialerCurrentClientData = null; return; }
+    if (!res.ok) throw new Error('load failed');
+    c = await res.json();
+    if (!c || Number(c.id) !== Number(entry.clientId)) throw new Error('wrong client');
+  } catch (err) {
+    if (token !== dialerInfoToken) return;
+    dialerClientInfoEl.style.display = 'none';
+    dialerCurrentClientData = null;
+    dialerClientInfoMsg.style.display = 'block';
     return;
   }
-  const res = await fetch(`/api/crm/clients/${entry.clientId}`);
-  if (token !== dialerInfoToken) return; // a newer entry was selected while this was loading
-  if (!res.ok) { dialerClientInfoEl.style.display = 'none'; return; }
-  const c = await res.json();
+  if (token !== dialerInfoToken) return;
   dialerCurrentClientData = c;
   // The CRM's own address on file is more authoritative than whatever the
   // dialer source line happened to carry (e.g. the "CRM Clients" source
@@ -7974,8 +8017,8 @@ async function updateDialerClientInfo(entry) {
 }
 
 document.getElementById('dciEditBtn').addEventListener('click', () => {
-  if (!dialerCurrentClientData) return;
-  const c = dialerCurrentClientData;
+  const c = currentDialerClient();
+  if (!c) return;
   resetClientForm();
   clientFormTitle.textContent = 'Edit Client';
   clientFormOrigin = 'dialerEdit';
@@ -8001,8 +8044,9 @@ document.getElementById('dciEditBtn').addEventListener('click', () => {
 // same as every other calendar event in this app (see the "manual calendar
 // events are a separate table" gotcha).
 document.getElementById('dciAddFollowupDayBtn').addEventListener('click', () => {
-  if (!dialerCurrentClientData) return;
-  openEventForm(todayIsoDate(), null, dialerCurrentClientData.id);
+  const c = currentDialerClient();
+  if (!c) return;
+  openEventForm(todayIsoDate(), null, c.id);
 });
 
 document.getElementById('dciDeleteBtn').addEventListener('click', async () => {
@@ -8033,10 +8077,11 @@ const dciCustomUnit = document.getElementById('dciCustomUnit');
 const dciFreqMsg = document.getElementById('dciFreqMsg');
 
 dciFreqToggleBtn.addEventListener('click', () => {
-  if (!dialerCurrentClientData) return;
+  const cur = currentDialerClient();
+  if (!cur) return;
   const opening = dciFreqPanel.style.display === 'none';
   if (opening) {
-    applyFrequencyToElements(dialerCurrentClientData.interval_days, dciFrequency, dciCustomRow, dciCustomAmount, dciCustomUnit);
+    applyFrequencyToElements(cur.interval_days, dciFrequency, dciCustomRow, dciCustomAmount, dciCustomUnit);
     dciFreqMsg.style.display = 'none';
   }
   dciFreqPanel.style.display = opening ? 'block' : 'none';
@@ -8052,7 +8097,7 @@ document.getElementById('dciFreqCancelBtn').addEventListener('click', () => {
 
 document.getElementById('dciFreqSaveBtn').addEventListener('click', async () => {
   const entry = dialerList[dialerIndex];
-  const c = dialerCurrentClientData;
+  const c = currentDialerClient();
   if (!entry || !entry.clientId || !c) return;
   // This route is a full replace (see hosted_sync/crm_routes gotchas on
   // update_client) -- every other field has to be sent back unchanged along
