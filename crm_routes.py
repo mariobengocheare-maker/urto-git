@@ -1353,3 +1353,48 @@ def crm_chess_remove(piece_id):
     if not crm.remove_chess_piece(piece_id, data.get("note", "")):
         abort(404)
     return jsonify({"ok": True})
+
+
+# ---- Zillow property lookup (build order #197) ----
+# Zillow's own search box turns a typed address into the house's Zillow id
+# (zpid) through this public suggestion feed, then opens /homedetails/<zpid>_zpid/.
+# The Dialer's Zillow button asks the browser to do the same first; this is the
+# backup when the browser isn't allowed to. The host is fixed (never a URL the
+# caller supplies) and only the id + display text come back.
+ZILLOW_SUGGEST_URL = "https://www.zillowstatic.com/autocomplete/v3/suggestions"
+
+
+def zillow_zpid_from_suggestions(data, address: str):
+    """First address suggestion whose house number matches ours, else None."""
+    import re as _re
+    m = _re.match(r"\s*(\d+)", address or "")
+    house = m.group(1) if m else None
+    for r in (data or {}).get("results") or []:
+        meta = r.get("metaData") or {}
+        zpid = meta.get("zpid")
+        display = r.get("display") or ""
+        if not zpid:
+            continue
+        if house and not _re.match(rf"\s*{house}\b", display):
+            continue
+        return {"zpid": str(zpid), "display": display}
+    return None
+
+
+@crm_bp.route("/api/crm/zillow_zpid", methods=["GET"])
+def zillow_zpid():
+    q = (request.args.get("q") or "").strip()[:200]
+    if not q:
+        return jsonify({"zpid": None})
+    try:
+        import requests
+        res = requests.get(ZILLOW_SUGGEST_URL, params={"q": q, "resultCount": 5}, timeout=5, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+            "Accept": "application/json", "Origin": "https://www.zillow.com", "Referer": "https://www.zillow.com/",
+        })
+        if res.status_code != 200:
+            return jsonify({"zpid": None, "error": f"Zillow answered {res.status_code}"})
+        hit = zillow_zpid_from_suggestions(res.json(), q)
+    except Exception as e:
+        return jsonify({"zpid": None, "error": str(e)[:200]})
+    return jsonify(hit or {"zpid": None})

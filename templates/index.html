@@ -8242,14 +8242,70 @@ function cleanAddressForSearch(address) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-function buildZillowUrl(address) {
+// Zillow has no address link that reliably opens one house: its
+// /homes/<address>_rb/ search turned a full "25207 SW 107TH CT HOMESTEAD FL
+// 33032" into a county-wide map (build order #197), and a property page needs
+// Zillow's own id (zpid), which only Zillow's search can supply. So the button
+// goes through DuckDuckGo's free "I'm feeling ducky" redirect limited to
+// zillow.com: it jumps straight to the top result, which for an exact address
+// is usually that house's own Zillow page. The button first looks up the
+// house's real zpid (findZillowHouse, below) and only uses this link when
+// that lookup can't get an answer. Needs no account.
+function zillowSearchText(address) {
   const clean = cleanAddressForSearch(address);
-  if (!clean) return null;
-  // Only a plain "FL" when no state is named (stops Zillow guessing Texas,
-  // build order #168). Never "Miami-Dade County": Zillow reads a county name
-  // as a search for the whole county instead of one house (build order #196).
-  const anchored = /\bfl(orida)?\b/i.test(clean) ? clean : `${clean} FL`;
-  return `https://www.zillow.com/homes/${encodeURIComponent(anchored.replace(/ /g, '-'))}_rb/`;
+  if (!clean) return '';
+  return /\bfl(orida)?\b/i.test(clean) ? clean : `${clean} FL`;
+}
+function buildZillowUrl(address) {
+  const text = zillowSearchText(address);
+  if (!text) return null;
+  return `https://duckduckgo.com/?q=${encodeURIComponent(`!ducky ${text} site:zillow.com`)}`;
+}
+// The house's Zillow id (zpid), the way Zillow's own search box finds it:
+// the browser asks Zillow's public suggestion feed first, then URTO's server
+// (/api/crm/zillow_zpid) if the browser isn't allowed to. Only a suggestion
+// with the same house number counts, so a neighbor's page is never opened.
+const zillowHouseCache = new Map();
+function pickZillowHouse(data, text) {
+  const m = /^\s*(\d+)/.exec(text || '');
+  for (const r of (data && data.results) || []) {
+    const zpid = r && r.metaData && r.metaData.zpid;
+    const display = (r && r.display) || '';
+    if (!zpid) continue;
+    if (m && !new RegExp('^\\s*' + m[1] + '\\b').test(display)) continue;
+    return { zpid: String(zpid), display };
+  }
+  return null;
+}
+async function fetchJsonWithin(url, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    return r.ok ? await r.json() : null;
+  } catch (e) { return null; } finally { clearTimeout(timer); }
+}
+async function findZillowHouse(text) {
+  if (!text) return null;
+  if (zillowHouseCache.has(text)) return zillowHouseCache.get(text);
+  let hit = pickZillowHouse(await fetchJsonWithin(
+    `https://www.zillowstatic.com/autocomplete/v3/suggestions?q=${encodeURIComponent(text)}&resultCount=5`, 3500), text);
+  if (!hit) {
+    const s = await fetchJsonWithin(`/api/crm/zillow_zpid?q=${encodeURIComponent(text)}`, 7000);
+    if (s && s.zpid) hit = { zpid: String(s.zpid), display: s.display || '' };
+  }
+  if (hit) zillowHouseCache.set(text, hit);
+  return hit;
+}
+
+// Zillow's own search page, kept as a backup link under the button. Street,
+// city and "FL zip" stay comma-separated the way Zillow itself writes them.
+function buildZillowSearchUrl(address) {
+  const parts = String(address || '').split(/[\r\n;]/)[0].split(',')
+    .map(cleanAddressForSearch).filter(Boolean);
+  if (!parts.length) return null;
+  if (!parts.some(x => /\bfl(orida)?\b/i.test(x))) parts.push('FL');
+  return `https://www.zillow.com/homes/${parts.map(x => encodeURIComponent(x.replace(/ /g, '-'))).join(',-')}_rb/`;
 }
 
 // A CRM client's address is one free-text field and is sometimes just a bare
@@ -8329,22 +8385,34 @@ function setDialerZillowAddress(address) {
 // on the PC that would look like closing URTO.
 dialerZillowBtn.addEventListener('click', async () => {
   if (!dialerZillowUrl) return;
-  const w = window.open(dialerZillowUrl, '_blank');
-  if (w) { try { w.opener = null; } catch (e) { /* ignore */ } }
-  const addr = cleanAddressForSearch(dialerLookupAddress);
-  const google = `https://www.google.com/search?q=${encodeURIComponent(addr + ' zillow')}`;
-  let lead;
-  if (!w) {
-    lead = `Your browser blocked the new tab — <a href="${dialerZillowUrl}" target="_blank" rel="noopener">open Zillow</a>.`;
-  } else {
-    let copied = false;
-    try { await navigator.clipboard.writeText(addr); copied = true; } catch (e) { /* ignore */ }
-    lead = copied
-      ? '📋 Address copied — if Zillow didn\u2019t find the house, paste it into Zillow\u2019s search box.'
-      : `If Zillow didn\u2019t find the house, search it for: ${escapeHtml(addr)}.`;
+  const addr = zillowSearchText(dialerLookupAddress);
+  const fallbackUrl = dialerZillowUrl;
+  // Open the tab right away (a tab opened after waiting gets blocked), then
+  // point it at the house once Zillow's id is known.
+  const w = window.open('', '_blank');
+  if (w) {
+    try {
+      w.opener = null;
+      w.document.title = 'Zillow';
+      w.document.body.innerHTML = '<p style="font:18px sans-serif;padding:32px;color:#333">Finding ' + escapeHtml(addr) + ' on Zillow\u2026</p>';
+    } catch (e) { /* ignore */ }
   }
-  dialerPaMsg.innerHTML = `${lead} Or <a href="${google}" target="_blank" rel="noopener">find it on Google</a>.`;
+  dialerPaMsg.textContent = 'Finding the house on Zillow\u2026';
   dialerPaMsg.style.display = 'block';
+  const hit = await findZillowHouse(addr);
+  const target = hit ? `https://www.zillow.com/homedetails/${encodeURIComponent(hit.zpid)}_zpid/` : fallbackUrl;
+  if (w) { try { w.location.href = target; } catch (e) { /* ignore */ } }
+  const google = `https://www.google.com/search?q=${encodeURIComponent(addr + ' zillow')}`;
+  const zsearch = buildZillowSearchUrl(dialerLookupAddress);
+  let copied = false;
+  try { await navigator.clipboard.writeText(addr); copied = true; } catch (e) { /* ignore */ }
+  let lead;
+  if (!w) lead = `Your browser blocked the new tab — <a href="${target}" target="_blank" rel="noopener">open the house on Zillow</a>.`;
+  else if (hit) lead = `🏠 Opened ${escapeHtml(hit.display || 'the house')} on Zillow.`;
+  else lead = 'Zillow didn\u2019t give the exact page, so this opened the closest match.';
+  if (copied) lead += ' 📋 Address copied.';
+  dialerPaMsg.innerHTML = `${lead} Wrong house? Try <a href="${google}" target="_blank" rel="noopener">Google</a>`
+    + (zsearch ? ` or <a href="${zsearch}" target="_blank" rel="noopener">Zillow\u2019s own search</a>` : '') + '.';
 });
 
 // The county's Property Search tool is its own separate origin with no
