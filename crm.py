@@ -2618,6 +2618,33 @@ def find_deleted_client_matches(people) -> list:
     return out
 
 
+def list_deleted_clients(limit=5000) -> list:
+    """Every deleted client, newest deletion first, one row per phone number
+    (the most recent deletion wins) — for the Dialer's quick caller lookup
+    (build order #200), so a callback from someone Mario deleted still says
+    who it is. `back_in_crm` is true when that number belongs to a current
+    client again (the live client is shown instead in that case)."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM deleted_clients ORDER BY deleted_at DESC, id DESC LIMIT ?", (int(limit),)
+    ).fetchall()
+    live_keys = {_normalize_phone_key(r["phone"]) for r in conn.execute("SELECT phone FROM clients").fetchall()}
+    conn.close()
+    out, seen = [], set()
+    for r in rows:
+        key = r["phone_key"] or ""
+        dedup = key or ("name:" + _name_key(r["name"]))
+        if dedup in seen:
+            continue
+        seen.add(dedup)
+        out.append({
+            "client_id": r["client_id"], "name": r["name"], "phone": r["phone"],
+            "address": r["address"], "email": r["email"], "deleted_at": r["deleted_at"],
+            "back_in_crm": bool(key) and key in live_keys,
+        })
+    return out
+
+
 def find_duplicate_clients() -> list:
     """Groups clients that share the exact same name (case/whitespace-
     insensitive) — the shape of duplicate a phone-less CSV import row

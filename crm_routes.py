@@ -47,6 +47,11 @@ def crm_create_client():
     return jsonify(client)
 
 
+@crm_bp.route("/api/crm/deleted_clients", methods=["GET"])
+def crm_list_deleted_clients():
+    return jsonify({"deleted": crm.list_deleted_clients()})
+
+
 @crm_bp.route("/api/crm/deleted_clients/matches", methods=["GET"])
 def crm_deleted_client_matches():
     """?q=<JSON list of {name, phone}>. A GET (not a POST) so it's a plain

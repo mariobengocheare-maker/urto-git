@@ -1488,6 +1488,47 @@
     .theme-toggle-btn { bottom: 12px; right: 12px; padding: 8px 13px; font-size: .74rem; }
   }
 
+  /* Dialer quick caller lookup (build order #200): bottom-left box, only
+     on the Dialer tab, to see who's calling back by typing their number. */
+  .caller-lookup {
+    position: fixed; left: 18px; bottom: 18px; z-index: 61; width: 300px;
+    max-width: calc(100vw - 180px);
+  }
+  .caller-lookup.lifted { bottom: 72px; }
+  .caller-lookup-input {
+    width: 100%; box-sizing: border-box; padding: 10px 14px; font-size: .95rem;
+    border-radius: 14px; border: 1px solid rgba(201,162,39,.45);
+    background: rgba(15,22,38,.92); color: var(--text);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  }
+  .caller-lookup-input:focus { outline: none; border-color: var(--gold); box-shadow: 0 6px 18px rgba(0,0,0,.4), 0 0 14px rgba(201,162,39,.3); }
+  .caller-lookup-results {
+    position: absolute; left: 0; right: 0; bottom: calc(100% + 8px);
+    max-height: 55vh; overflow-y: auto; display: none;
+    background: rgba(15,22,38,.97); border: 1px solid rgba(201,162,39,.4);
+    border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.5); padding: 6px;
+  }
+  .caller-lookup-results.show { display: block; }
+  .cl-hit { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--text);
+    padding: 9px 10px; border-radius: 10px; cursor: pointer; font: inherit; }
+  .cl-hit:hover, .cl-hit:focus { background: rgba(201,162,39,.12); outline: none; }
+  .cl-hit + .cl-hit { border-top: 1px solid rgba(255,255,255,.06); }
+  .cl-name { font-weight: 700; font-size: .95rem; }
+  .cl-sub { font-size: .8rem; color: var(--text-secondary); margin-top: 2px; }
+  .cl-tag { display: inline-block; font-size: .68rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-left: 6px; vertical-align: 1px; }
+  .cl-tag.crm { background: rgba(79,195,247,.16); color: #7fd3fb; }
+  .cl-tag.deleted { background: rgba(255,107,107,.16); color: #ff8f8f; }
+  .cl-tag.list { background: rgba(201,162,39,.16); color: var(--gold); }
+  .cl-empty { padding: 10px; font-size: .85rem; color: var(--text-secondary); }
+  .cl-empty button { margin-top: 8px; }
+  @media (max-width: 640px) {
+    .caller-lookup { left: 12px; bottom: 12px; width: auto; right: 150px; max-width: none; }
+    .caller-lookup.lifted { bottom: 62px; }
+    .caller-lookup-input { padding: 9px 12px; font-size: 16px; }
+    .caller-lookup-results { right: -138px; }
+  }
+
   /* Background Sunbiz LLC-owner resolution: a corner progress pill that
      stays visible on every tab while the modal is minimized. */
   .bg-task-pill {
@@ -1701,6 +1742,11 @@
 <div class="space-bg"></div>
 
 <audio id="themeAudio" src="{{ url_for('static', filename='audio/theme.mp3') }}" loop preload="none"></audio>
+<div id="callerLookup" class="caller-lookup" style="display:none">
+  <div id="callerLookupResults" class="caller-lookup-results" role="listbox" aria-label="Who's calling"></div>
+  <input id="callerLookupInput" class="caller-lookup-input" type="search" inputmode="tel" autocomplete="off"
+         placeholder="📞 Who's calling? Type a number" aria-label="Look up a phone number">
+</div>
 <button id="themeToggleBtn" class="theme-toggle-btn" type="button" title="Play background theme">🎵 Play Theme</button>
 <div id="entityResolvePill" class="bg-task-pill" role="button" title="Open the Sunbiz lookup">
   <span class="bt-text" id="entityResolvePillText">🏢 Finding LLC owners…</span>
@@ -4414,6 +4460,8 @@ function showTopTab(target) {
     void target.section.offsetWidth;   // force reflow so the animation restarts
     target.section.classList.add('reveal');
   }
+  const callerBox = document.getElementById('callerLookup');
+  if (callerBox) callerBox.style.display = target.key === 'dialer' ? 'block' : 'none';
   if (target.onShow) target.onShow();
 }
 
@@ -5849,6 +5897,147 @@ async function markLowImportanceLead(clientId, name) {
   try { if (mapData) loadMapData(); } catch (e) { /* ignore */ }
   return body;
 }
+/* ===================== Dialer quick caller lookup (build order #200) =====================
+   Bottom-left box on the Dialer: type part of a number (or a name) the moment
+   someone calls back and see who it is -- CRM clients (same matching as the
+   CRM client search), people on the dial list that's loaded, and contacts
+   Mario deleted from the CRM, marked as deleted. */
+const callerLookupBox = document.getElementById('callerLookup');
+const callerLookupInput = document.getElementById('callerLookupInput');
+const callerLookupResults = document.getElementById('callerLookupResults');
+let callerDeleted = [];
+let callerDeletedLoadedAt = 0;
+
+async function refreshCallerLookupData() {
+  if (!allClients.length) { try { await loadClients(); } catch (e) { /* ignore */ } }
+  if (Date.now() - callerDeletedLoadedAt < 30000) return;
+  try {
+    const res = await fetch('/api/crm/deleted_clients');
+    const body = await res.json();
+    if (res.ok && Array.isArray(body.deleted)) {
+      callerDeleted = body.deleted;
+      callerDeletedLoadedAt = Date.now();
+    }
+  } catch (e) { /* offline or not reachable: CRM matches still work */ }
+}
+
+function callerDigits(v) {
+  let d = String(v || '').replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
+  return d;
+}
+
+function callerMatches(q) {
+  q = (q || '').trim();
+  const qLower = q.toLowerCase();
+  let qDigits = q.replace(/\D/g, '');
+  if (qDigits.length === 11 && qDigits.startsWith('1')) qDigits = qDigits.slice(1);
+  const byDigits = qDigits.length >= 3;
+  const byName = /[a-z]/i.test(q) && qLower.length >= 2;
+  if (!byDigits && !byName) return null;
+  // A leading country code ("+1 954...") matches the number without it.
+  const qNo1 = qDigits.startsWith('1') && qDigits.length >= 4 ? qDigits.slice(1) : null;
+  const hit = (name, phone) =>
+    (byDigits && (callerDigits(phone).includes(qDigits) || (qNo1 && callerDigits(phone).startsWith(qNo1)))) ||
+    (byName && String(name || '').toLowerCase().includes(qLower));
+  const crm = allClients.filter(c => hit(c.name, c.phone)).slice(0, 8);
+  const crmPhones = new Set(allClients.map(c => callerDigits(c.phone)).filter(Boolean));
+  const listed = (dialerList || [])
+    .map((e, i) => ({ e, i }))
+    .filter(({ e }) => !e.clientId && hit(e.name, e.phone) && !crmPhones.has(callerDigits(e.phone)))
+    .slice(0, 5);
+  const deleted = callerDeleted
+    .filter(d => !d.back_in_crm && hit(d.name, d.phone) && !crmPhones.has(callerDigits(d.phone)))
+    .slice(0, 8);
+  return { crm, listed, deleted, qDigits };
+}
+
+function renderCallerLookup() {
+  const m = callerMatches(callerLookupInput.value);
+  if (!m) { callerLookupResults.classList.remove('show'); callerLookupResults.innerHTML = ''; return; }
+  const parts = [];
+  for (const c of m.crm) {
+    const bits = [c.phone, c.address].filter(Boolean).map(escapeHtml);
+    if (c.last_called_at) bits.push('Last called ' + escapeHtml(formatLastCalled(c.last_called_at)));
+    parts.push(`<button type="button" class="cl-hit" data-kind="crm" data-id="${c.id}">
+      <div class="cl-name">${escapeHtml(c.name || 'Unnamed')}<span class="cl-tag crm">In CRM</span></div>
+      <div class="cl-sub">${bits.join(' · ') || '&nbsp;'}</div></button>`);
+  }
+  for (const { e, i } of m.listed) {
+    const bits = [e.phone, e.address].filter(Boolean).map(escapeHtml);
+    parts.push(`<button type="button" class="cl-hit" data-kind="list" data-index="${i}">
+      <div class="cl-name">${escapeHtml(e.name || 'Unknown')}<span class="cl-tag list">On this dial list · #${i + 1}</span></div>
+      <div class="cl-sub">${bits.join(' · ') || '&nbsp;'}</div></button>`);
+  }
+  m.deleted.forEach((d, k) => {
+    const bits = [d.phone, d.address].filter(Boolean).map(escapeHtml);
+    bits.push('Deleted ' + escapeHtml(formatDeletedOn(d.deleted_at)));
+    parts.push(`<button type="button" class="cl-hit" data-kind="deleted" data-k="${k}">
+      <div class="cl-name">${escapeHtml(d.name || 'Unnamed')}<span class="cl-tag deleted">Deleted from CRM</span></div>
+      <div class="cl-sub">${bits.join(' · ')}</div></button>`);
+  });
+  if (!parts.length) {
+    parts.push(`<div class="cl-empty">Nobody in your CRM, this dial list, or your deleted contacts matches that.
+      ${m.qDigits.length >= 7 ? '<br><button type="button" class="small" id="callerLookupAddBtn">+ Add to CRM</button>' : ''}</div>`);
+  }
+  callerLookupResults.innerHTML = parts.join('');
+  callerLookupResults._deleted = m.deleted;
+  callerLookupResults.classList.add('show');
+}
+
+function openAddClientFromCaller(name, phone, address) {
+  resetClientForm();
+  clientFormTitle.textContent = 'Add to CRM';
+  cfName.value = name || '';
+  cfPhone.value = phone || '';
+  cfAddress.value = address || '';
+  document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+  clientFormOverlay.classList.add('show');
+}
+
+callerLookupInput.addEventListener('focus', () => { refreshCallerLookupData().then(renderCallerLookup); renderCallerLookup(); });
+callerLookupInput.addEventListener('input', renderCallerLookup);
+callerLookupInput.addEventListener('keydown', (e) => {
+  // Keep the Dialer's own Enter/arrow shortcuts from firing while typing here.
+  e.stopPropagation();
+  if (e.key === 'Escape') { callerLookupInput.value = ''; renderCallerLookup(); callerLookupInput.blur(); }
+  if (e.key === 'Enter') {
+    const first = callerLookupResults.querySelector('.cl-hit');
+    if (first) first.click();
+  }
+});
+callerLookupResults.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus while clicking a row
+callerLookupResults.addEventListener('click', (e) => {
+  if (e.target.closest('#callerLookupAddBtn')) {
+    openAddClientFromCaller('', callerLookupInput.value.trim(), '');
+    return;
+  }
+  const row = e.target.closest('.cl-hit');
+  if (!row) return;
+  if (row.dataset.kind === 'crm') {
+    openClientDetail(Number(row.dataset.id));
+  } else if (row.dataset.kind === 'list') {
+    dialerIndex = Number(row.dataset.index);
+    renderDialerCard();
+  } else if (row.dataset.kind === 'deleted') {
+    const d = (callerLookupResults._deleted || [])[Number(row.dataset.k)];
+    if (!d) return;
+    // Opens the Add form pre-filled; Cancel there just closes it. Saving asks
+    // the usual "you've deleted this contact before" question (build order #192).
+    openAddClientFromCaller(d.name, d.phone, d.address);
+    clientFormTitle.textContent = 'Add back to CRM';
+  }
+  callerLookupResults.classList.remove('show');
+});
+document.addEventListener('click', (e) => {
+  if (callerLookupBox && !callerLookupBox.contains(e.target)) callerLookupResults.classList.remove('show');
+});
+// Move up out of the way when the LLC-lookup progress pill sits in the same corner.
+setInterval(() => {
+  const pill = document.getElementById('entityResolvePill');
+  if (callerLookupBox) callerLookupBox.classList.toggle('lifted', !!(pill && pill.style.display === 'flex'));
+}, 1000);
+
 function lowImportanceMessage(c) {
   const due = c.next_followup_date ? formatDeletedOn(c.next_followup_date) : '';
   let msg = `⬇ Moved to Low Importance Leads${c.low_importance_list_created ? ' (list created)' : ''}`;
