@@ -2863,6 +2863,11 @@
     <div class="contact-line"><span class="lbl">Email</span><span id="cdEmail">—</span></div>
     <div class="contact-line"><span class="lbl">Contact</span><span id="cdContact">—</span></div>
     <div class="contact-line"><span class="lbl">Address</span><span id="cdAddress">—</span></div>
+    <div class="row" id="cdLookupRow" style="display:none; margin-top:2px">
+      <button type="button" class="ghost small" id="cdZillowBtn">🏠 View on Zillow</button>
+      <button type="button" class="ghost small" id="cdPropertyAppraiserBtn">🏛️ Miami-Dade Property Search</button>
+    </div>
+    <div id="cdLookupMsg" style="display:none; margin-top:4px; font-size:.85em; color:var(--text-secondary)"></div>
     <div class="contact-line"><span class="lbl">Last called (Miami Time)</span><span id="cdLastCalled">—</span> <a href="#" class="call-history-link" id="cdCallHistoryLink">Call History</a></div>
 
     <div class="row">
@@ -6435,6 +6440,7 @@ clientForm.addEventListener('submit', async (e) => {
 /* ===================== Client detail ===================== */
 const clientDetailOverlay = document.getElementById('clientDetailOverlay');
 let currentClientId = null;
+let cdLookupAddress = null;   // best address for the open client card's Zillow/Property Search buttons
 
 async function openClientDetail(id) {
   currentClientId = id;
@@ -6457,6 +6463,11 @@ async function openClientDetail(id) {
   document.getElementById('cdEmail').textContent = c.email || '—';
   document.getElementById('cdContact').textContent = c.contact_info || '—';
   document.getElementById('cdAddress').textContent = c.address || '—';
+  // Zillow / Property Search for this client's address (same lookups as the
+  // Dialer's buttons), using the Map's city/zip for a bare-street address.
+  cdLookupAddress = crmAddressWithGeoZip(c) || null;
+  document.getElementById('cdLookupRow').style.display = buildZillowUrl(cdLookupAddress) ? 'flex' : 'none';
+  document.getElementById('cdLookupMsg').style.display = 'none';
   document.getElementById('cdLastCalled').textContent = formatLastCalled(c.last_called_at);
 
   const followupInfo = document.getElementById('cdFollowupInfo');
@@ -8700,10 +8711,10 @@ function setDialerZillowAddress(address) {
 // match it Mario can paste it into Zillow's search box (or try Google, which
 // usually lands right on the Zillow listing). Never navigates this page away:
 // on the PC that would look like closing URTO.
-dialerZillowBtn.addEventListener('click', async () => {
-  if (!dialerZillowUrl) return;
-  const addr = zillowSearchText(dialerLookupAddress);
-  const fallbackUrl = dialerZillowUrl;
+async function openZillowFor(address, msgEl) {
+  const fallbackUrl = buildZillowUrl(address);
+  if (!fallbackUrl) return;
+  const addr = zillowSearchText(address);
   // Open the tab right away (a tab opened after waiting gets blocked), then
   // point it at the house once Zillow's id is known.
   const w = window.open('', '_blank');
@@ -8714,13 +8725,13 @@ dialerZillowBtn.addEventListener('click', async () => {
       w.document.body.innerHTML = '<p style="font:18px sans-serif;padding:32px;color:#333">Finding ' + escapeHtml(addr) + ' on Zillow\u2026</p>';
     } catch (e) { /* ignore */ }
   }
-  dialerPaMsg.textContent = 'Finding the house on Zillow\u2026';
-  dialerPaMsg.style.display = 'block';
+  msgEl.textContent = 'Finding the house on Zillow\u2026';
+  msgEl.style.display = 'block';
   const hit = await findZillowHouse(addr);
   const target = hit ? `https://www.zillow.com/homedetails/${encodeURIComponent(hit.zpid)}_zpid/` : fallbackUrl;
   if (w) { try { w.location.href = target; } catch (e) { /* ignore */ } }
   const google = `https://www.google.com/search?q=${encodeURIComponent(addr + ' zillow')}`;
-  const zsearch = buildZillowSearchUrl(dialerLookupAddress);
+  const zsearch = buildZillowSearchUrl(address);
   let copied = false;
   try { await navigator.clipboard.writeText(addr); copied = true; } catch (e) { /* ignore */ }
   let lead;
@@ -8728,33 +8739,38 @@ dialerZillowBtn.addEventListener('click', async () => {
   else if (hit) lead = `🏠 Opened ${escapeHtml(hit.display || 'the house')} on Zillow.`;
   else lead = 'Zillow didn\u2019t give the exact page, so this opened the closest match.';
   if (copied) lead += ' 📋 Address copied.';
-  dialerPaMsg.innerHTML = `${lead} Wrong house? Try <a href="${google}" target="_blank" rel="noopener">Google</a>`
+  msgEl.innerHTML = `${lead} Wrong house? Try <a href="${google}" target="_blank" rel="noopener">Google</a>`
     + (zsearch ? ` or <a href="${zsearch}" target="_blank" rel="noopener">Zillow\u2019s own search</a>` : '') + '.';
-});
+}
 
 // The county's Property Search tool is its own separate origin with no
-// confirmed URL parameter to pre-fill and auto-submit its ADDRESS search box
-// (unlike Zillow's own well-known /homes/<address>_rb/ quick-search format) --
-// and even if one existed, a window.open() to another origin can never reach
-// into that tab to fill/submit its form for real, since cross-origin scripts
-// can't touch another site's DOM. So instead of guessing at a link format
-// that might silently do nothing (the exact "it just says not working"
-// failure the Zillow iframe/proxy attempts already hit twice -- see build
-// orders #134/#135/#136), this copies the address to the clipboard and opens
-// the real search tool, so Mario just pastes it into the ADDRESS box instead
-// of retyping it -- a real, honest improvement that doesn't depend on any
-// unverified behavior of a site this sandbox can't even reach.
-dialerPropertyAppraiserBtn.addEventListener('click', async () => {
+// confirmed URL parameter to pre-fill and auto-submit its ADDRESS search box,
+// and a window.open() to another origin can never reach into that tab to
+// fill/submit its form (build orders #165/#166). So this copies the address
+// and opens the real search tool, and Mario pastes it into the ADDRESS box.
+async function openPropertySearchFor(address, msgEl) {
   window.open(PROPERTY_APPRAISER_SEARCH_URL, '_blank', 'noopener');
-  if (!dialerLookupAddress) return;
+  if (!address) return;
   try {
-    await navigator.clipboard.writeText(dialerLookupAddress);
-    dialerPaMsg.textContent = '📋 Address copied — paste it into the ADDRESS box on the county site.';
+    await navigator.clipboard.writeText(address);
+    msgEl.textContent = '📋 Address copied — paste it into the ADDRESS box on the county site.';
   } catch (err) {
-    dialerPaMsg.textContent = `Address: ${dialerLookupAddress} (copy it in manually — clipboard access wasn't available)`;
+    msgEl.textContent = `Address: ${address} (copy it in manually — clipboard access wasn't available)`;
   }
-  dialerPaMsg.style.display = 'block';
+  msgEl.style.display = 'block';
+}
+
+// Never navigates this page away: on the PC that would look like closing URTO.
+dialerZillowBtn.addEventListener('click', () => {
+  if (dialerZillowUrl) openZillowFor(dialerLookupAddress, dialerPaMsg);
 });
+dialerPropertyAppraiserBtn.addEventListener('click', () => openPropertySearchFor(dialerLookupAddress, dialerPaMsg));
+
+// Same two buttons on the CRM client card (cdLookupAddress is set in openClientDetail).
+document.getElementById('cdZillowBtn').addEventListener('click', () =>
+  openZillowFor(cdLookupAddress, document.getElementById('cdLookupMsg')));
+document.getElementById('cdPropertyAppraiserBtn').addEventListener('click', () =>
+  openPropertySearchFor(cdLookupAddress, document.getElementById('cdLookupMsg')));
 
 const dialerClientInfoEl = document.getElementById('dialerClientInfo');
 let dialerInfoToken = 0;
