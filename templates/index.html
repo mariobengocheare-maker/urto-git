@@ -8224,14 +8224,44 @@ function composeFullAddress(address, city, state, zip) {
 // completely alone, so a real, already-correct full address (built via
 // composeFullAddress, or typed in with its own real city/state) is never
 // second-guessed or duplicated.
+// Turns whatever address text is on file into something Zillow's address
+// search can read: only the first line (no "; also ..." or extra notes), no
+// notes in parentheses, no spreadsheet ".0" on numbers, a "#408" unit written
+// as "APT 408", a "1/2" dropped (an encoded slash breaks Zillow's link), and
+// periods/apostrophes/other punctuation removed.
+function cleanAddressForSearch(address) {
+  let s = String(address || '').split(/[\r\n;]/)[0];
+  s = s.replace(/\([^)]*\)/g, ' ');
+  s = s.replace(/\b(\d+)\.0\b/g, '$1');
+  s = s.replace(/\b(apt|unit|ste|suite)\s*#\s*/gi, '$1 ');
+  s = s.replace(/#\s*/g, ' APT ');
+  s = s.replace(/\b\d+\s*\/\s*\d+\b/g, ' ');
+  s = s.replace(/[.'\u2019]/g, '');
+  s = s.replace(/[^A-Za-z0-9\s-]/g, ' ');
+  s = s.replace(/\s*-\s*/g, '-');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
 function buildZillowUrl(address) {
-  const raw = (address || '').trim();
-  if (!raw) return null;
-  const hasFlorida = /\bfl(orida)?\b/i.test(raw);
-  const anchored = hasFlorida ? raw : `${raw}, Miami-Dade County, FL`;
-  const clean = anchored.replace(/[,#]/g, ' ').replace(/\s+/g, ' ').trim();
+  const clean = cleanAddressForSearch(address);
   if (!clean) return null;
-  return `https://www.zillow.com/homes/${encodeURIComponent(clean.replace(/ /g, '-'))}_rb/`;
+  const anchored = /\bfl(orida)?\b/i.test(clean) ? clean : `${clean} Miami-Dade County FL`;
+  return `https://www.zillow.com/homes/${encodeURIComponent(anchored.replace(/ /g, '-'))}_rb/`;
+}
+
+// A CRM client's address is one free-text field and is sometimes just a bare
+// street, while the dial list's own address (from a lookup) can have the
+// city and zip too. Prefer whichever one is more complete.
+function addressHasCityOrZip(address) {
+  return /\b\d{5}\b/.test(address || '') || /\bfl(orida)?\b/i.test(address || '');
+}
+function pickBestAddress(crmAddress, entryAddress) {
+  const crm = (crmAddress || '').trim();
+  const entry = (entryAddress || '').trim();
+  if (!crm) return entry;
+  if (!entry) return crm;
+  if (!addressHasCityOrZip(crm) && addressHasCityOrZip(entry)) return entry;
+  return crm;
 }
 
 // Miami-Dade County's own official Property Search portal (the same site
@@ -8276,8 +8306,28 @@ function setDialerZillowAddress(address) {
   dialerPaMsg.style.display = 'none';
 }
 
-dialerZillowBtn.addEventListener('click', () => {
-  if (dialerZillowUrl) window.open(dialerZillowUrl, '_blank', 'noopener');
+// Opens Zillow and also copies the address, so if Zillow's own search can't
+// match it Mario can paste it into Zillow's search box (or try Google, which
+// usually lands right on the Zillow listing). Never navigates this page away:
+// on the PC that would look like closing URTO.
+dialerZillowBtn.addEventListener('click', async () => {
+  if (!dialerZillowUrl) return;
+  const w = window.open(dialerZillowUrl, '_blank');
+  if (w) { try { w.opener = null; } catch (e) { /* ignore */ } }
+  const addr = cleanAddressForSearch(dialerLookupAddress);
+  const google = `https://www.google.com/search?q=${encodeURIComponent(addr + ' zillow')}`;
+  let lead;
+  if (!w) {
+    lead = `Your browser blocked the new tab — <a href="${dialerZillowUrl}" target="_blank" rel="noopener">open Zillow</a>.`;
+  } else {
+    let copied = false;
+    try { await navigator.clipboard.writeText(addr); copied = true; } catch (e) { /* ignore */ }
+    lead = copied
+      ? '📋 Address copied — if Zillow didn\u2019t find the house, paste it into Zillow\u2019s search box.'
+      : `If Zillow didn\u2019t find the house, search it for: ${escapeHtml(addr)}.`;
+  }
+  dialerPaMsg.innerHTML = `${lead} Or <a href="${google}" target="_blank" rel="noopener">find it on Google</a>.`;
+  dialerPaMsg.style.display = 'block';
 });
 
 // The county's Property Search tool is its own separate origin with no
@@ -8469,7 +8519,7 @@ async function updateDialerClientInfo(entry) {
   // dialer source line happened to carry (e.g. the "CRM Clients" source
   // never even sets entry.address, only folds it into the meta text) --
   // override once the real record resolves.
-  setDialerZillowAddress(c.address);
+  setDialerZillowAddress(pickBestAddress(c.address, entry.address));
   // Fresh entry, fresh editor -- never leave the frequency panel open (or
   // showing a stale schedule) carried over from whoever was on screen before.
   document.getElementById('dciFreqPanel').style.display = 'none';
