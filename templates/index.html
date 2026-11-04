@@ -5744,10 +5744,79 @@ function renderClientList(clients) {
   }
 }
 
+let loadClientsToken = 0;
 async function loadClients() {
-  const res = await fetch('/api/crm/clients');
-  allClients = await res.json();
+  // Only the newest request may draw the list, so a slower request started
+  // before a delete can't put the deleted person back (build order #198).
+  const token = ++loadClientsToken;
+  let list;
+  try {
+    const res = await fetch('/api/crm/clients');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    list = await res.json();
+    if (!Array.isArray(list)) throw new Error((list && list.error) || 'bad response');
+  } catch (e) {
+    return false;
+  }
+  if (token !== loadClientsToken) return true;
+  allClients = list;
   renderClientList(filterClients(clientSearchInput.value));
+  return true;
+}
+
+// Deletes one client and makes them disappear everywhere on screen: the CRM
+// list, any loaded Dialer list, Missed Follow-ups, the Calendar, Contact
+// Lists and the Map (build order #198). Returns false (after telling Mario)
+// if the server didn't confirm the delete, so nothing pretends it worked.
+async function deleteClientEverywhere(clientId, opts = {}) {
+  clientId = Number(clientId);
+  const before = allClients.find((c) => Number(c.id) === clientId);
+  let ok = false, why = '';
+  try {
+    const res = await fetch(`/api/crm/clients/${clientId}`, { method: 'DELETE' });
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* ignore */ }
+    ok = res.ok && !(body && body.error);
+    if (!ok) why = (body && body.error) || `the server answered ${res.status}`;
+  } catch (e) {
+    why = "couldn't reach URTO's server";
+  }
+  if (!ok) {
+    alert(`Couldn't delete this client — ${why}. Nothing was deleted; try again in a moment.`);
+    return false;
+  }
+  allClients = allClients.filter((c) => Number(c.id) !== clientId);
+  renderClientList(filterClients(clientSearchInput.value));
+  removeClientFromDialerList(clientId);
+  if (dialerCurrentClientData && Number(dialerCurrentClientData.id) === clientId) {
+    dialerCurrentClientData = null;
+    dialerClientInfoEl.style.display = 'none';
+  }
+  if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
+  await loadClients();
+  // The server must agree they're gone. If they still show up, say so
+  // instead of leaving Mario wondering.
+  if (allClients.some((c) => Number(c.id) === clientId)) {
+    alert("The server still lists this client after deleting. Refresh the page and try once more.");
+    return false;
+  }
+  try { if (calMonthLabel.offsetParent !== null) renderCalendar(); } catch (e) { /* ignore */ }
+  try { if (contactListsEl.offsetParent !== null) loadContactLists(); } catch (e) { /* ignore */ }
+  try { if (mapData) loadMapData(); } catch (e) { /* ignore */ }
+  // A second copy of the same person (same name, e.g. from an import run
+  // twice) looks exactly like "the delete didn't work". Offer to remove it.
+  if (!opts.skipCopies && before && nameKeyForDelete(before.name)) {
+    const copies = allClients.filter((c) => nameKeyForDelete(c.name) === nameKeyForDelete(before.name));
+    for (const copy of copies) {
+      const detail = [copy.phone, copy.address].filter(Boolean).join(' · ') || 'no phone or address';
+      if (!confirm(`Deleted. There's another copy of ${before.name} in your CRM (${detail}). Delete that one too?`)) break;
+      if (!(await deleteClientEverywhere(copy.id, { skipCopies: true }))) break;
+    }
+  }
+  return true;
+}
+function nameKeyForDelete(name) {
+  return String(name || '').toLowerCase().split(/\s+/).filter(Boolean).join(' ');
 }
 clientSearchInput.addEventListener('input', () => renderClientList(filterClients(clientSearchInput.value)));
 
@@ -6463,21 +6532,18 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
 });
 
 document.getElementById('cdDeleteBtn').addEventListener('click', async () => {
+  const deletedId = Number(currentClientId);
+  if (!deletedId) return;
   if (!confirm('Delete this client and all their notes? This cannot be undone.')) return;
-  const deletedId = currentClientId;
-  await fetch(`/api/crm/clients/${deletedId}`, { method: 'DELETE' });
-  clMembersReturnListId = null;
-  clientDetailOverlay.classList.remove('show');
-  loadClients();
-  // Deleting a client reached via the Missed Follow-ups "no phone" banner
-  // (see build order #112, which only refreshed that banner on a client
-  // SAVE, not a delete) must also drop them from the banner immediately --
-  // otherwise the blob still shows a name that's gone, and clicking it next
-  // was a dead click with no explanation (see build order #113).
-  if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
-  // A deleted client must vanish from any dialer list currently loaded too,
-  // not just the CRM tab -- see removeClientFromDialerList().
-  removeClientFromDialerList(deletedId);
+  const btn = document.getElementById('cdDeleteBtn');
+  btn.disabled = true;
+  try {
+    if (!(await deleteClientEverywhere(deletedId))) return;
+    clMembersReturnListId = null;
+    clientDetailOverlay.classList.remove('show');
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 /* ===================== Contact Lists ===================== */
@@ -8156,9 +8222,13 @@ async function loadDialerList(entries) {
 // Dialer panel's own dciDeleteBtn), since the dialer list persists across
 // tab switches and a client can be deleted from either place.
 function removeClientFromDialerList(clientId) {
+  clientId = Number(clientId);
   if (!clientId) return;
   const before = dialerList.length;
-  dialerList = dialerList.filter((e) => e.clientId !== clientId);
+  // Number() on both sides: an id read from the page is sometimes text and
+  // sometimes a number, and a strict !== between "12" and 12 used to keep a
+  // deleted person in the list (build order #198).
+  dialerList = dialerList.filter((e) => Number(e.clientId) !== clientId);
   if (dialerList.length === before) return; // this list never had that client
   if (dialerIndex >= dialerList.length) dialerIndex = Math.max(0, dialerList.length - 1);
   dialerEmpty.style.display = dialerList.length ? 'none' : 'block';
@@ -8675,17 +8745,13 @@ document.getElementById('dciDeleteBtn').addEventListener('click', async () => {
   const entry = dialerList[dialerIndex];
   if (!entry || !entry.clientId) return;
   if (!confirm('Delete this client and all their notes? This cannot be undone.')) return;
-  const clientId = entry.clientId;
-  await fetch(`/api/crm/clients/${clientId}`, { method: 'DELETE' });
-  loadClients();
-  // Same "keep the Missed Follow-ups banner honest" refresh cdDeleteBtn already
-  // does (build order #112/#113) — a delete from here can equally leave a
-  // stale name in that banner if it's the active source.
-  if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
-  // Mario: deleting a client should remove them from the dialer entirely --
-  // the row, the "In your CRM" panel, all of it -- not just unlink the entry
-  // (build order #128; superseding #127's original "unlink only" behavior).
-  removeClientFromDialerList(clientId);
+  const btn = document.getElementById('dciDeleteBtn');
+  btn.disabled = true;
+  try {
+    await deleteClientEverywhere(Number(entry.clientId));
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 /* ---- Change a linked client's follow-up frequency right from the Dialer,
