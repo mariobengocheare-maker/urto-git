@@ -2226,6 +2226,14 @@ def init_db():
             conn.execute(f"ALTER TABLE {table} ADD COLUMN lng REAL")
             conn.execute(f"ALTER TABLE {table} ADD COLUMN geo_address TEXT")
             conn.execute(f"ALTER TABLE {table} ADD COLUMN geo_status TEXT")
+    # The city + zip the geocoder matched (build order #196), so a bare-street
+    # address like "18001 SW 148TH AVE RD" can still be sent to Zillow as a
+    # full address. NULL = not looked up yet; "" = looked up, provider gave none.
+    for table in ("clients", "transactions", "commission_entries"):
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "geo_zip" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN geo_city TEXT")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN geo_zip TEXT")
     conn.commit()
     _seed_document_types(conn)
     conn.close()
@@ -6299,7 +6307,7 @@ def geocode_pending(time_budget: float = 8.0, max_items: int = 40) -> dict:
             if (processed or deferred) and time.time() - start > time_budget:
                 break
             if map_geo.names_other_state(addr):
-                conn.execute(f"UPDATE {table} SET lat=NULL, lng=NULL, geo_address=?, geo_status='out_of_market' WHERE id=?",
+                conn.execute(f"UPDATE {table} SET lat=NULL, lng=NULL, geo_address=?, geo_status='out_of_market', geo_city='', geo_zip='' WHERE id=?",
                              (addr, row_id))
                 conn.commit()
                 processed += 1
@@ -6314,14 +6322,32 @@ def geocode_pending(time_budget: float = 8.0, max_items: int = 40) -> dict:
                 error = str(e)
                 continue
             if hit:
-                conn.execute(f"UPDATE {table} SET lat=?, lng=?, geo_address=?, geo_status='ok' WHERE id=?",
-                             (hit[0], hit[1], addr, row_id))
+                conn.execute(f"UPDATE {table} SET lat=?, lng=?, geo_address=?, geo_status='ok', geo_city=?, geo_zip=? WHERE id=?",
+                             (hit[0], hit[1], addr, hit[2], hit[3], row_id))
             else:
-                conn.execute(f"UPDATE {table} SET lat=NULL, lng=NULL, geo_address=?, geo_status='failed' WHERE id=?",
+                conn.execute(f"UPDATE {table} SET lat=NULL, lng=NULL, geo_address=?, geo_status='failed', geo_city='', geo_zip='' WHERE id=?",
                              (addr, row_id))
                 failed += 1
             conn.commit()
             processed += 1
+        # Clients placed before build order #196 have a pin but no city/zip on
+        # record. Once nothing else is waiting, look those up again quietly
+        # (only geo_city/geo_zip are written -- the pin and status stay as
+        # they are, and hand-placed pins are never touched).
+        if not rate_limited and not deferred and time.time() - start < time_budget:
+            backfill = conn.execute(
+                "SELECT id, address FROM clients WHERE geo_status = 'ok' AND geo_zip IS NULL "
+                "AND geo_address = address ORDER BY id LIMIT ?", (max_items,)).fetchall()
+            for r in backfill:
+                if time.time() - start > time_budget:
+                    break
+                try:
+                    hit = map_geo.geocode_address(r["address"])
+                except (map_geo.RateLimited, RuntimeError):
+                    break
+                conn.execute("UPDATE clients SET geo_city=?, geo_zip=? WHERE id=?",
+                             ((hit[2] if hit else ""), (hit[3] if hit else ""), r["id"]))
+                conn.commit()
         remaining = _pending_geocode_count(conn)
         conn.close()
     finally:
@@ -6347,7 +6373,7 @@ def place_on_map_manually(kind, row_id, lat, lng) -> bool:
     table, col = _GEO_TABLE_BY_KIND[kind]
     conn = get_conn()
     cur = conn.execute(
-        f"UPDATE {table} SET lat=?, lng=?, geo_address={col}, geo_status='manual' WHERE id=?",
+        f"UPDATE {table} SET lat=?, lng=?, geo_address={col}, geo_status='manual', geo_city='', geo_zip='' WHERE id=?",
         (lat, lng, row_id),
     )
     conn.commit()

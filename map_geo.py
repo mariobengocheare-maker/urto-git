@@ -146,7 +146,8 @@ def _geocode_ors(text):
     if not features:
         return None
     lng, lat = features[0]["geometry"]["coordinates"]
-    return float(lat), float(lng)
+    props = features[0].get("properties") or {}
+    return float(lat), float(lng), props.get("locality") or "", props.get("postalcode") or ""
 
 
 def _geocode_census(text):
@@ -157,19 +158,22 @@ def _geocode_census(text):
     for m in matches:
         c = m.get("coordinates") or {}
         if "x" in c and "y" in c and in_market(float(c["y"]), float(c["x"])):
-            return float(c["y"]), float(c["x"])
+            comp = m.get("addressComponents") or {}
+            return float(c["y"]), float(c["x"]), comp.get("city") or "", comp.get("zip") or ""
     return None
 
 
 def _geocode_nominatim(text):
     lat_min, lat_max, lng_min, lng_max = MARKET_BOUNDS
     results = _get("nominatim", NOMINATIM_URL, params={
-        "q": text, "format": "json", "limit": 1, "countrycodes": "us",
+        "q": text, "format": "json", "limit": 1, "countrycodes": "us", "addressdetails": 1,
         "viewbox": f"{lng_min},{lat_max},{lng_max},{lat_min}", "bounded": 1,
     }, headers={"User-Agent": USER_AGENT})
     if not results:
         return None
-    return float(results[0]["lat"]), float(results[0]["lon"])
+    a = results[0].get("address") or {}
+    city = a.get("city") or a.get("town") or a.get("village") or a.get("hamlet") or ""
+    return float(results[0]["lat"]), float(results[0]["lon"]), city, a.get("postcode") or ""
 
 
 def _providers():
@@ -182,7 +186,10 @@ def _providers():
 
 
 def geocode_address(address: str):
-    """(lat, lng) inside Mario's market, or None for a genuine no-match.
+    """(lat, lng, city, zip) inside Mario's market, or None for a genuine
+    no-match. city/zip are whatever the provider matched ("" if it didn't
+    say) -- the Dialer's Zillow link uses them when the address Mario typed
+    is a bare street (build order #196).
 
     Raises RateLimited when every provider is currently cooling down (the
     caller should wait and resume, NOT mark the address failed), and
@@ -210,8 +217,10 @@ def geocode_address(address: str):
             errors.append(f"{name}: {e}")
             continue
         answered = True
-        if hit and in_market(*hit):
-            return hit
+        if hit and in_market(hit[0], hit[1]):
+            city, zip_code = (hit[2], hit[3]) if len(hit) >= 4 else ("", "")
+            zip_code = str(zip_code or "")[:5]
+            return hit[0], hit[1], str(city or "").strip().title(), zip_code if zip_code.isdigit() else ""
     if answered and not errors:
         return None
     if answered:

@@ -8245,16 +8245,33 @@ function cleanAddressForSearch(address) {
 function buildZillowUrl(address) {
   const clean = cleanAddressForSearch(address);
   if (!clean) return null;
-  const anchored = /\bfl(orida)?\b/i.test(clean) ? clean : `${clean} Miami-Dade County FL`;
+  // Only a plain "FL" when no state is named (stops Zillow guessing Texas,
+  // build order #168). Never "Miami-Dade County": Zillow reads a county name
+  // as a search for the whole county instead of one house (build order #196).
+  const anchored = /\bfl(orida)?\b/i.test(clean) ? clean : `${clean} FL`;
   return `https://www.zillow.com/homes/${encodeURIComponent(anchored.replace(/ /g, '-'))}_rb/`;
 }
 
 // A CRM client's address is one free-text field and is sometimes just a bare
 // street, while the dial list's own address (from a lookup) can have the
 // city and zip too. Prefer whichever one is more complete.
+// A zip is 5 digits at the END ("..., FL 33187"), never the house number at
+// the start -- "18001 SW 148TH AVE RD" has no zip (build order #196). A comma
+// followed by words means a city was typed ("900 NW 10th St, Miami").
 function addressHasCityOrZip(address) {
-  return /\b\d{5}\b/.test(address || '') || /\bfl(orida)?\b/i.test(address || '');
+  const a = String(address || '').trim();
+  return /\bfl(orida)?\b/i.test(a) || /\S\s+\d{5}(-\d{4})?$/.test(a) || /,\s*[A-Za-z]/.test(a);
 }
+// A bare-street CRM address plus the city/zip the Map's address lookup
+// matched for it (build order #196) -- only if that lookup was for this exact
+// address text, so an edited address never borrows the old house's zip.
+function crmAddressWithGeoZip(c) {
+  const addr = (c && c.address || '').trim();
+  if (!addr || addressHasCityOrZip(addr)) return addr;
+  if (!c.geo_zip || (c.geo_address || '').trim() !== addr) return addr;
+  return `${addr}, ${c.geo_city ? c.geo_city + ', ' : ''}FL ${c.geo_zip}`;
+}
+
 function pickBestAddress(crmAddress, entryAddress) {
   const crm = (crmAddress || '').trim();
   const entry = (entryAddress || '').trim();
@@ -8519,7 +8536,7 @@ async function updateDialerClientInfo(entry) {
   // dialer source line happened to carry (e.g. the "CRM Clients" source
   // never even sets entry.address, only folds it into the meta text) --
   // override once the real record resolves.
-  setDialerZillowAddress(pickBestAddress(c.address, entry.address));
+  setDialerZillowAddress(pickBestAddress(crmAddressWithGeoZip(c), entry.address));
   // Fresh entry, fresh editor -- never leave the frequency panel open (or
   // showing a stale schedule) carried over from whoever was on screen before.
   document.getElementById('dciFreqPanel').style.display = 'none';
