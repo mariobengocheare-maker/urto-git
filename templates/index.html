@@ -2085,6 +2085,7 @@
         </div>
         <div class="row" style="gap:8px; margin-top:6px">
           <button type="button" class="ghost small" id="dciAddFollowupDayBtn" title="A one-off reminder on a specific day -- doesn't touch this client's recurring schedule above">📅 Add Follow-up Day</button>
+          <button type="button" class="ghost small" id="dciLowImportanceBtn" title="Move to the Low Importance Leads list with a 6-month follow-up">⬇ Low Importance Lead</button>
         </div>
         <div id="dciSkipMsg" style="display:none; margin-top:6px; font-size:.85em; color:var(--gold)"></div>
         <div id="dciFreqPanel" style="display:none; margin-top:8px">
@@ -2821,8 +2822,10 @@
     <div class="row">
       <button class="ghost small" id="cdEditBtn">Edit</button>
       <button class="ghost small" id="cdTextBtn">📱 Follow-up Text</button>
+      <button class="ghost small" id="cdLowImportanceBtn" title="Move to the Low Importance Leads list with a 6-month follow-up">⬇ Low Importance Lead</button>
       <button class="danger small" id="cdDeleteBtn" style="display:inline-block; background:var(--danger-fg)">Delete Client</button>
     </div>
+    <div id="cdLowImportanceMsg" style="display:none; margin-top:6px; font-size:.85em; color:var(--gold)"></div>
 
     <div class="detail-section">
       <h3>Follow-up Schedule</h3>
@@ -5818,6 +5821,41 @@ async function deleteClientEverywhere(clientId, opts = {}) {
 function nameKeyForDelete(name) {
   return String(name || '').toLowerCase().split(/\s+/).filter(Boolean).join(' ');
 }
+
+// Moves a client to the "Low Importance Leads" Contact List (build order
+// #199): off every other list, onto that one (created the first time), with
+// their own follow-up set to every 6 months from today. They stay in the
+// CRM. Returns the updated client, or null if it didn't work (Mario is told).
+async function markLowImportanceLead(clientId, name) {
+  clientId = Number(clientId);
+  if (!clientId) return null;
+  if (!confirm(`Make ${name || 'this client'} a low importance lead?\n\nThey'll be taken off every contact list they're on and moved to "Low Importance Leads", with a follow-up every 6 months starting today. They stay in your CRM with all their notes.`)) return null;
+  let body = null;
+  try {
+    const res = await fetch(`/api/crm/clients/${clientId}/low_importance`, { method: 'POST' });
+    try { body = await res.json(); } catch (e) { /* ignore */ }
+    if (!res.ok || !body || body.error) {
+      alert(`Couldn't move this client — ${(body && body.error) || `the server answered ${res.status}`}. Nothing was changed.`);
+      return null;
+    }
+  } catch (e) {
+    alert("Couldn't reach URTO's server. Nothing was changed; try again in a moment.");
+    return null;
+  }
+  if (dialerActiveSource === dialerSourceMissedBtn) loadMissedFollowupsSource({ silent: true });
+  try { await loadClients(); } catch (e) { /* ignore */ }
+  try { if (calMonthLabel.offsetParent !== null) renderCalendar(); } catch (e) { /* ignore */ }
+  try { if (contactListsEl.offsetParent !== null) loadContactLists(); } catch (e) { /* ignore */ }
+  try { if (mapData) loadMapData(); } catch (e) { /* ignore */ }
+  return body;
+}
+function lowImportanceMessage(c) {
+  const due = c.next_followup_date ? formatDeletedOn(c.next_followup_date) : '';
+  let msg = `⬇ Moved to Low Importance Leads${c.low_importance_list_created ? ' (list created)' : ''}`;
+  if (c.removed_from_lists && c.removed_from_lists.length) msg += ` — taken off ${c.removed_from_lists.join(', ')}`;
+  if (due) msg += `. Next follow-up ${due}.`;
+  return msg;
+}
 clientSearchInput.addEventListener('input', () => renderClientList(filterClients(clientSearchInput.value)));
 
 async function renderCfListsBox(selectedIds) {
@@ -6212,6 +6250,7 @@ let currentClientId = null;
 async function openClientDetail(id) {
   currentClientId = id;
   resetCdDictation();
+  document.getElementById('cdLowImportanceMsg').style.display = 'none';
   const res = await fetch(`/api/crm/clients/${id}`);
   if (!res.ok) {
     // A stale link to an already-deleted client (e.g. the Missed Follow-ups
@@ -6529,6 +6568,25 @@ document.getElementById('cdEditBtn').addEventListener('click', async () => {
   clMembersReturnListId = null;
   clientDetailOverlay.classList.remove('show');
   clientFormOverlay.classList.add('show');
+});
+
+document.getElementById('cdLowImportanceBtn').addEventListener('click', async () => {
+  const id = Number(currentClientId);
+  if (!id) return;
+  const btn = document.getElementById('cdLowImportanceBtn');
+  const name = (document.getElementById('cdName') || {}).textContent || '';
+  btn.disabled = true;
+  try {
+    const c = await markLowImportanceLead(id, name);
+    if (!c) return;
+    if (Number(currentClientId) !== id) return;
+    await openClientDetail(id);
+    const msg = document.getElementById('cdLowImportanceMsg');
+    msg.textContent = lowImportanceMessage(c);
+    msg.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 document.getElementById('cdDeleteBtn').addEventListener('click', async () => {
@@ -8739,6 +8797,23 @@ document.getElementById('dciAddFollowupDayBtn').addEventListener('click', () => 
   const c = currentDialerClient();
   if (!c) return;
   openEventForm(todayIsoDate(), null, c.id);
+});
+
+document.getElementById('dciLowImportanceBtn').addEventListener('click', async () => {
+  const entry = dialerList[dialerIndex];
+  const c = currentDialerClient();
+  if (!entry || !c) return;
+  const btn = document.getElementById('dciLowImportanceBtn');
+  btn.disabled = true;
+  try {
+    const updated = await markLowImportanceLead(c.id, c.name);
+    if (!updated) return;
+    if (dialerList[dialerIndex] === entry) await updateDialerClientInfo(entry);
+    dciSkipMsg.textContent = lowImportanceMessage(updated);
+    dciSkipMsg.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 document.getElementById('dciDeleteBtn').addEventListener('click', async () => {

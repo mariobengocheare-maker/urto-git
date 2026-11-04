@@ -2790,6 +2790,91 @@ def skip_followup(client_id) -> dict:
     return client_to_dict(row)
 
 
+LOW_IMPORTANCE_LIST_NAME = "Low Importance Leads"
+LOW_IMPORTANCE_FREQUENCY = "6_months"
+
+
+def _low_importance_list_id(conn):
+    """The id of the "Low Importance Leads" Contact List, created the first
+    time anyone is marked low importance (see build order #199). Found by
+    the id saved in app_settings first (so a rename keeps working), then by
+    name, then created with no shared schedule — each client keeps their
+    own 6-month follow-up from the day they were moved."""
+    saved = conn.execute("SELECT value FROM app_settings WHERE key = 'low_importance_list_id'").fetchone()
+    if saved:
+        row = conn.execute("SELECT id FROM contact_lists WHERE id = ?", (saved["value"],)).fetchone()
+        if row:
+            return row["id"], False
+    row = conn.execute(
+        "SELECT id FROM contact_lists WHERE name = ? COLLATE NOCASE ORDER BY id LIMIT 1",
+        (LOW_IMPORTANCE_LIST_NAME,),
+    ).fetchone()
+    created = False
+    if row:
+        list_id = row["id"]
+    else:
+        cur = conn.execute(
+            "INSERT INTO contact_lists (name, frequency_label, interval_days, next_call_date, created_at) VALUES (?, NULL, NULL, NULL, ?)",
+            (LOW_IMPORTANCE_LIST_NAME, _today().isoformat()),
+        )
+        list_id = cur.lastrowid
+        created = True
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('low_importance_list_id', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(list_id),),
+    )
+    return list_id, created
+
+
+def mark_low_importance(client_id) -> dict:
+    """Moves a client to the "Low Importance Leads" Contact List (see build
+    order #199): takes them off every other Contact List, puts them on that
+    one (creating it the first time), and sets their own follow-up to every
+    6 months starting today. They stay in the CRM with their notes and call
+    history; a note records the move."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    list_id, created = _low_importance_list_id(conn)
+    removed = [r["name"] for r in conn.execute(
+        """SELECT contact_lists.name FROM contact_list_members
+           JOIN contact_lists ON contact_lists.id = contact_list_members.list_id
+           WHERE contact_list_members.client_id = ? AND contact_list_members.list_id != ?
+           ORDER BY contact_lists.name COLLATE NOCASE""",
+        (client_id, list_id),
+    ).fetchall()]
+    conn.execute("DELETE FROM contact_list_members WHERE client_id = ? AND list_id != ?", (client_id, list_id))
+    conn.execute(
+        "INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)", (list_id, client_id)
+    )
+    label, interval_days = resolve_interval_days(LOW_IMPORTANCE_FREQUENCY, None, None)
+    next_due = (_today() + timedelta(days=interval_days)).isoformat()
+    conn.execute(
+        "UPDATE clients SET frequency_label = ?, interval_days = ?, next_followup_date = ? WHERE id = ?",
+        (label, interval_days, next_due, client_id),
+    )
+    note = "⬇ Marked as a low importance lead — moved to the Low Importance Leads list"
+    if removed:
+        note += " (taken off: " + ", ".join(removed) + ")"
+    note += f". Follow-up every 6 months, next on {date.fromisoformat(next_due).strftime('%b %d, %Y').replace(' 0', ' ')}."
+    conn.execute(
+        "INSERT INTO notes (client_id, text, created_at) VALUES (?, ?, ?)",
+        (client_id, note, _today().isoformat() + " " + _now_time()),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    conn.close()
+    on_data_changed("low importance lead", row["name"])
+    result = client_to_dict(row)
+    result["low_importance_list_id"] = list_id
+    result["low_importance_list_created"] = created
+    result["removed_from_lists"] = removed
+    return result
+
+
 def get_missed_followups() -> list:
     """Automatic follow-ups that are past their due date and still haven't
     been called — the Dialer's "Missed Follow-ups" source. A client stays

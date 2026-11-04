@@ -82,6 +82,7 @@ _BLOCKED_WRITES = [
     ("POST", r"^/api/crm/showing_days/\d+/stops$"),
     ("POST", r"^/api/crm/showing_days/\d+/optimize$"),
     ("*", r"^/api/crm/skiptrace_results$"),
+    ("POST", r"^/api/crm/clients/\d+/low_importance$"),
 ]
 # Reads that can't work from the copy (they serve uploaded files).
 _BLOCKED_READS = [r"/template$", r"/signed$", r"/file$", r"^/api/backup/snapshots$", r"^/api/crm/zillow_zpid$"]
