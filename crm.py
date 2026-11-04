@@ -1776,6 +1776,9 @@ def init_db():
     list_cols = {row["name"] for row in conn.execute("PRAGMA table_info(contact_lists)").fetchall()}
     if "boundary" not in list_cols:
         conn.execute("ALTER TABLE contact_lists ADD COLUMN boundary TEXT")
+    if "description" not in list_cols:
+        # A free-text description per Contact List (build order #202).
+        conn.execute("ALTER TABLE contact_lists ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     if "is_commercial" not in list_cols:
         conn.execute("ALTER TABLE contact_lists ADD COLUMN is_commercial INTEGER NOT NULL DEFAULT 0")
         conn.execute("ALTER TABLE contact_lists ADD COLUMN asset_class TEXT")
@@ -2167,6 +2170,13 @@ def init_db():
             WHERE cl.kind = 'call' ORDER BY cl.called_at, cl.id
         """)
         conn.execute("INSERT INTO app_settings (key, value) VALUES ('dialer_calls_backfilled', '1')")
+    # Chessboard direction flip (build order #202): pieces now move DOWN the
+    # board and become a Queen on rank 1 (it used to be rank 7). Pieces keep
+    # the square they're shown on; only a Queen still sitting on rank 7 moves
+    # down to rank 1, where Queens live now. Runs once.
+    if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'chess_moves_down'").fetchone():
+        conn.execute("UPDATE chess_pieces SET rank = 1 WHERE piece_type = 'queen' AND rank = 7")
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('chess_moves_down', '1')")
     # Commission Tracker -- transaction_id is ON DELETE SET NULL (not
     # CASCADE): a commission already earned and recorded must never
     # disappear just because the transaction record itself is later
@@ -2978,13 +2988,14 @@ def list_contact_lists() -> list:
     return result
 
 
-def create_contact_list(name, frequency_key, custom_amount, custom_unit) -> dict:
+def create_contact_list(name, frequency_key, custom_amount, custom_unit, description="") -> dict:
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
     next_call_date = (_today() + timedelta(days=interval_days)).isoformat() if interval_days else None
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO contact_lists (name, frequency_label, interval_days, next_call_date, created_at) VALUES (?, ?, ?, ?, ?)",
-        (name, label, interval_days, next_call_date, _today().isoformat()),
+        "INSERT INTO contact_lists (name, frequency_label, interval_days, next_call_date, created_at, description) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (name, label, interval_days, next_call_date, _today().isoformat(), (description or "").strip()),
     )
     conn.commit()
     list_id = cur.lastrowid
@@ -3014,7 +3025,9 @@ def get_contact_list(list_id) -> dict:
     return d
 
 
-def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit) -> dict:
+def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit, description=None) -> dict:
+    """description=None leaves the list's description as it is (the Dialer's
+    schedule editor saves without it); "" clears it."""
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
     conn = get_conn()
     existing = conn.execute("SELECT * FROM contact_lists WHERE id = ?", (list_id,)).fetchone()
@@ -3027,13 +3040,29 @@ def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit
         next_call_date = (_today() + timedelta(days=interval_days)).isoformat()
     else:
         next_call_date = None
+    if description is None:
+        description = existing["description"] if "description" in existing.keys() else ""
     conn.execute(
-        "UPDATE contact_lists SET name=?, frequency_label=?, interval_days=?, next_call_date=? WHERE id=?",
-        (name, label, interval_days, next_call_date, list_id),
+        "UPDATE contact_lists SET name=?, frequency_label=?, interval_days=?, next_call_date=?, description=? WHERE id=?",
+        (name, label, interval_days, next_call_date, (description or "").strip(), list_id),
     )
     conn.commit()
     conn.close()
     on_data_changed("contact list updated")
+    return get_contact_list(list_id)
+
+
+def set_contact_list_description(list_id, description) -> dict:
+    """Saves just the description (the box in Manage Members)."""
+    conn = get_conn()
+    row = conn.execute("SELECT name FROM contact_lists WHERE id = ?", (list_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute("UPDATE contact_lists SET description = ? WHERE id = ?", ((description or "").strip(), list_id))
+    conn.commit()
+    conn.close()
+    on_data_changed("contact list description", row["name"])
     return get_contact_list(list_id)
 
 
@@ -6854,15 +6883,17 @@ def get_map_community(list_id) -> dict:
 # the board stands for all of them). Mario promotes a client into a piece by
 # clicking a square: a rook, knight or bishop -- all three carry the same
 # weight, the shape is just whatever he likes for that client. "Advance" moves
-# a piece one square toward the pawn row when something important happens;
-# reaching rank 7 (the last open rank) makes it a queen = under contract.
+# a piece one square DOWN the board, away from the pawn row at the top, when
+# something important happens; reaching rank 1 (the bottom) makes it a queen =
+# under contract (Mario, build order #202 -- it used to climb toward rank 7).
 # Closing captures it off the board. Every action is written into the
 # client's own notes, so the board is a view of real CRM history, not a
 # separate silo. Squares can hold more than one piece (178 clients won't fit
 # one-per-square), so nothing is ever blocked by an occupied square.
 
 CHESS_PIECE_TYPES = ("rook", "knight", "bishop")
-CHESS_QUEEN_RANK = 7  # ranks 1-7 are open; rank 8 is the pawn row
+CHESS_QUEEN_RANK = 1  # ranks 1-7 are open; rank 8 is the pawn row; rank 1 = Queen
+CHESS_START_RANK = 7  # the first row under the pawns
 CHESS_GLYPHS = {"rook": "♜", "knight": "♞", "bishop": "♝", "queen": "♛", "pawn": "♟"}
 _CHESS_FILES = "abcdefgh"
 
@@ -6909,6 +6940,7 @@ def get_chessboard() -> dict:
         "total_clients": total,
         "pawn_count": max(0, total - len(active)),
         "queen_rank": CHESS_QUEEN_RANK,
+        "start_rank": CHESS_START_RANK,
     }
 
 
@@ -6927,7 +6959,7 @@ def create_chess_piece(client_id, piece_type, file_idx, rank, note="") -> dict:
         file_idx, rank = int(file_idx), int(rank)
     except (TypeError, ValueError):
         raise ValueError("That square isn't on the board.")
-    if not (0 <= file_idx <= 7 and 1 <= rank <= CHESS_QUEEN_RANK):
+    if not (0 <= file_idx <= 7 and CHESS_QUEEN_RANK <= rank <= CHESS_START_RANK):
         raise ValueError("That square isn't on the board.")
     conn = get_conn()
     client = conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,)).fetchone()
@@ -6944,9 +6976,9 @@ def create_chess_piece(client_id, piece_type, file_idx, rank, note="") -> dict:
             f"This client is already on the board as a {_chess_piece_label(existing['piece_type'])} "
             f"on {_chess_square(existing['file'], existing['rank'])}."
         )
-    # Placing a piece straight onto rank 7 means the deal is already under
+    # Placing a piece straight onto rank 1 means the deal is already under
     # contract -- it starts life as a queen.
-    final_type = "queen" if rank >= CHESS_QUEEN_RANK else piece_type
+    final_type = "queen" if rank <= CHESS_QUEEN_RANK else piece_type
     now = _now().isoformat(timespec="seconds")
     cur = conn.execute(
         "INSERT INTO chess_pieces (client_id, piece_type, original_type, file, rank, status, created_at, promoted_at) "
@@ -6982,8 +7014,8 @@ def advance_chess_piece(piece_id, note="") -> dict:
     if row["piece_type"] == "queen":
         conn.close()
         raise ValueError("This piece is already a Queen (Under Contract) — capture it once the deal closes.")
-    new_rank = min(row["rank"] + 1, CHESS_QUEEN_RANK)
-    promoted = new_rank >= CHESS_QUEEN_RANK
+    new_rank = max(row["rank"] - 1, CHESS_QUEEN_RANK)
+    promoted = new_rank <= CHESS_QUEEN_RANK
     now = _now().isoformat(timespec="seconds")
     conn.execute(
         "UPDATE chess_pieces SET rank = ?, piece_type = ?, promoted_at = ? WHERE id = ?",
@@ -6997,6 +7029,51 @@ def advance_chess_piece(piece_id, note="") -> dict:
         _chess_note(row["client_id"], "queen", f"{label} advanced to {sq} and became a Queen (Under Contract).", note)
     else:
         _chess_note(row["client_id"], row["piece_type"], f"{label} advanced to {sq}.", note)
+    return get_chess_piece(piece_id)
+
+
+def move_chess_piece_back(piece_id, undo=False) -> dict:
+    """One square back up the board (toward the pawns). A Queen moved back
+    becomes the piece it was before. With undo=True (the "Undo" right after a
+    move) the note that move wrote is removed instead of adding another one,
+    as long as it's still that client's newest note and under 15 minutes old."""
+    conn = get_conn()
+    row = _active_chess_piece(conn, piece_id)
+    if not row:
+        conn.close()
+        return None
+    if row["rank"] >= CHESS_START_RANK:
+        conn.close()
+        raise ValueError("This piece is already on the first row under the pawns.")
+    new_rank = row["rank"] + 1
+    new_type = row["original_type"] if row["piece_type"] == "queen" else row["piece_type"]
+    if new_type not in CHESS_PIECE_TYPES:
+        new_type = "rook"
+    conn.execute(
+        "UPDATE chess_pieces SET rank = ?, piece_type = ?, promoted_at = ? WHERE id = ?",
+        (new_rank, new_type, None, piece_id),
+    )
+    removed_note = False
+    if undo:
+        last = conn.execute(
+            "SELECT id, text, created_at FROM notes WHERE client_id = ? ORDER BY id DESC LIMIT 1",
+            (row["client_id"],),
+        ).fetchone()
+        if last and " Chessboard: " in (last["text"] or "") and " advanced to " in last["text"]:
+            try:
+                age = _now() - datetime.strptime(last["created_at"], "%Y-%m-%d %H:%M")
+            except (TypeError, ValueError):
+                age = None
+            if age is not None and age.total_seconds() < 15 * 60:
+                conn.execute("DELETE FROM notes WHERE id = ?", (last["id"],))
+                removed_note = True
+    conn.commit()
+    conn.close()
+    sq = _chess_square(row["file"], new_rank)
+    if removed_note:
+        on_data_changed("chess move undone", f"{_client_name(row['client_id'])}: back to {sq}")
+    else:
+        _chess_note(row["client_id"], new_type, f"{_chess_piece_label(new_type)} moved back to {sq}.")
     return get_chess_piece(piece_id)
 
 

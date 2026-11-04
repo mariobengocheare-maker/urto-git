@@ -202,6 +202,7 @@ def crm_create_contact_list():
             frequency_key=data.get("frequency_key"),
             custom_amount=data.get("custom_amount"),
             custom_unit=data.get("custom_unit"),
+            description=data.get("description") or "",
         )
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid custom call schedule amount"}), 400
@@ -229,9 +230,19 @@ def crm_update_contact_list(list_id):
             frequency_key=data.get("frequency_key"),
             custom_amount=data.get("custom_amount"),
             custom_unit=data.get("custom_unit"),
+            description=data.get("description") if "description" in data else None,
         )
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid custom call schedule amount"}), 400
+    if not contact_list:
+        abort(404)
+    return jsonify(contact_list)
+
+
+@crm_bp.route("/api/crm/contact_lists/<int:list_id>/description", methods=["PUT"])
+def crm_contact_list_description(list_id):
+    data = request.get_json(silent=True) or {}
+    contact_list = crm.set_contact_list_description(list_id, data.get("description") or "")
     if not contact_list:
         abort(404)
     return jsonify(contact_list)
@@ -1341,6 +1352,12 @@ def crm_chess_get(piece_id):
 def crm_chess_advance(piece_id):
     data = request.get_json(silent=True) or {}
     return _chess_action(crm.advance_chess_piece, piece_id, data.get("note", ""))
+
+
+@crm_bp.route("/api/crm/chess/pieces/<int:piece_id>/back", methods=["POST"])
+def crm_chess_back(piece_id):
+    data = request.get_json(silent=True) or {}
+    return _chess_action(crm.move_chess_piece_back, piece_id, bool(data.get("undo")))
 
 
 @crm_bp.route("/api/crm/chess/pieces/<int:piece_id>/promote", methods=["POST"])
