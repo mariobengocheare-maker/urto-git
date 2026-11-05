@@ -1056,6 +1056,8 @@
   .sc-missed { font-size: .82rem; color: var(--text-secondary); margin: -4px 0 10px; }
   .sc-missed b { color: #7fd8cf; }
   .cal-cell.no-work { background: repeating-linear-gradient(135deg, rgba(94,200,190,.07) 0 8px, transparent 8px 16px); }
+  .cal-chip.halfday { background: rgba(245,200,90,.22); color: #ffe6a8; border: 1px solid rgba(245,200,90,.5); }
+  .heat-cell.half { box-shadow: inset 0 0 0 2px rgba(245,200,90,.7); }
   .cal-chip.nowork { background: rgba(94,200,190,.25); color: #bff3ec; border: 1px solid rgba(94,200,190,.5); }
   .day-view-nowork { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-size: .88rem; }
   .day-view-nowork input { flex: 1; min-width: 140px; }
@@ -2481,7 +2483,7 @@
         <select id="heatViewSelect"><option value="recent">Recent months</option></select>
       </div>
       <div class="heatmap" id="callHeatmap"></div>
-      <div class="heat-legend">Less <span class="heat-cell"></span><span class="heat-cell l1"></span><span class="heat-cell l2"></span><span class="heat-cell l3"></span><span class="heat-cell hit"></span> Goal hit · <span class="heat-cell off"></span> Day off · <span class="heat-cell weekend"></span> Weekend</div>
+      <div class="heat-legend">Less <span class="heat-cell"></span><span class="heat-cell l1"></span><span class="heat-cell l2"></span><span class="heat-cell l3"></span><span class="heat-cell hit"></span> Goal hit · <span class="heat-cell off"></span> Day off · <span class="heat-cell half"></span> Half day · <span class="heat-cell weekend"></span> Weekend</div>
       <div class="call-year-summary" id="callYearSummary" style="display:none"></div>
       <div class="badge-row" id="callBadges"></div>
     </div>
@@ -7437,6 +7439,8 @@ document.getElementById('calAddEventBtn').addEventListener('click', () => {
 });
 
 let calNoWorkDays = {};   // 'YYYY-MM-DD' -> label, for the month on screen
+let calHalfDays = {};     // same, for half days (half the call goal)
+let calHalfProof = {};    // half day -> original name of its proof file
 
 async function renderCalendar() {
   calMonthLabel.textContent = `${MONTH_NAMES[calMonth - 1]} ${calYear}`;
@@ -7447,8 +7451,11 @@ async function renderCalendar() {
     fetch(`/api/crm/no_work_days?start=${monthStart}&end=${monthEnd}`).catch(() => null),
   ]);
   const events = res.ok ? await res.json() : [];
-  calNoWorkDays = {};
-  if (offRes && offRes.ok) for (const d of await offRes.json()) calNoWorkDays[d.day] = d.label;
+  calNoWorkDays = {}; calHalfDays = {}; calHalfProof = {};
+  if (offRes && offRes.ok) for (const d of await offRes.json()) {
+    (d.kind === 'half' ? calHalfDays : calNoWorkDays)[d.day] = d.label;
+    if (d.kind === 'half' && d.has_proof) calHalfProof[d.day] = d.proof_name || 'proof';
+  }
 
   const eventsByDay = {};
   for (const e of events) {
@@ -7497,6 +7504,13 @@ async function renderCalendar() {
       chip.className = 'cal-chip nowork';
       chip.textContent = `🏖 ${calNoWorkDays[dateStr]}`;
       chip.title = 'Day off — no call goal, and it cuts this week\'s scorecard targets 20%';
+      chipList.appendChild(chip);
+    }
+    if (calHalfDays[dateStr] && !calNoWorkDays[dateStr]) {
+      const chip = document.createElement('div');
+      chip.className = 'cal-chip halfday';
+      chip.textContent = `½ ${calHalfDays[dateStr]}` + (calHalfProof[dateStr] ? ' 📎' : '');
+      chip.title = 'Half day — half the usual call goal, and it cuts this week\'s scorecard targets 10%';
       chipList.appendChild(chip);
     }
     for (const e of (eventsByDay[dateStr] || [])) {
@@ -7569,34 +7583,68 @@ function openDayView(dateStr, dayEvents) {
 function renderDayViewNoWork() {
   const box = document.getElementById('dayViewNoWork');
   const label = calNoWorkDays[dayViewDateStr];
+  const half = calHalfDays[dayViewDateStr];
   if (label) {
     box.innerHTML = `<span>🏖 <b>Day off:</b> ${escapeHtml(label)} — no call goal, and this week's scorecard targets are cut 20%.</span>
       <button type="button" class="ghost small" id="dayViewNoWorkRemove">Remove day off</button>`;
+  } else if (half) {
+    const proof = calHalfProof[dayViewDateStr];
+    box.innerHTML = `<span>½ <b>Half day:</b> ${escapeHtml(half)} — half the usual call goal today, and this week's scorecard targets are cut 10%.
+      ${proof ? `<br>📎 Proof: <a href="/api/crm/no_work_days/${dayViewDateStr}/proof" class="file-preview-link" data-filename="${escapeHtml(proof)}">${escapeHtml(proof)}</a>` : ''}</span>
+      <button type="button" class="ghost small" id="dayViewNoWorkRemove">Remove half day</button>`;
   } else {
-    box.innerHTML = `<span>🏖 Holiday or not working?</span>
-      <input type="text" id="dayViewNoWorkLabel" placeholder="e.g. Thanksgiving" maxlength="80">
+    box.innerHTML = `<span>🏖 Holiday, half day, or not working?</span>
+      <input type="text" id="dayViewNoWorkLabel" placeholder="e.g. Thanksgiving (optional)" maxlength="80">
+      <div style="flex-basis:100%; font-size:.85rem; color:var(--text-secondary)">
+        ½ Half day <b>requires proof</b> — a photo, PDF or any file of what you were doing:
+        <input type="file" id="dayViewHalfProof" style="margin-top:4px; max-width:100%">
+      </div>
+      <div class="field-error" id="dayViewNoWorkErr" style="display:none; flex-basis:100%; color:#ff9b9b; font-size:.85rem"></div>
+      <button type="button" class="small" id="dayViewHalfSave">½ Half day</button>
       <button type="button" class="small" id="dayViewNoWorkSave">Mark as day off</button>`;
   }
 }
 
 document.getElementById('dayViewNoWork').addEventListener('click', async (e) => {
   const save = e.target.closest('#dayViewNoWorkSave');
+  const halfSave = e.target.closest('#dayViewHalfSave');
   const remove = e.target.closest('#dayViewNoWorkRemove');
-  if (!save && !remove) return;
+  if (!save && !halfSave && !remove) return;
   const day = dayViewDateStr;
+  const errEl = document.getElementById('dayViewNoWorkErr');
+  const showErr = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } else alert(m); };
+  const btn = e.target.closest('button');
+  let opts;
+  if (remove) {
+    opts = { method: 'DELETE' };
+  } else if (halfSave) {
+    const file = document.getElementById('dayViewHalfProof').files[0];
+    if (!file) { showErr('A half day needs proof — attach a photo, PDF or other file first.'); return; }
+    const fd = new FormData();
+    fd.append('kind', 'half');
+    fd.append('label', (document.getElementById('dayViewNoWorkLabel').value || '').trim());
+    fd.append('file', file);
+    opts = { method: 'PUT', body: fd };
+  } else {
+    opts = { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: (document.getElementById('dayViewNoWorkLabel').value || '').trim(), kind: 'off' }) };
+  }
+  if (btn) { btn.disabled = true; }
   try {
-    const res = await fetch(`/api/crm/no_work_days/${day}`, {
-      method: save ? 'PUT' : 'DELETE', headers: { 'Content-Type': 'application/json' },
-      body: save ? JSON.stringify({ label: (document.getElementById('dayViewNoWorkLabel').value || '').trim() }) : undefined,
-    });
+    const res = await fetch(`/api/crm/no_work_days/${day}`, opts);
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { alert(data.error || "Couldn't save that."); return; }
-    if (save) calNoWorkDays[day] = data.label; else delete calNoWorkDays[day];
+    if (!res.ok) { showErr(data.error || "Couldn't save that."); if (btn) btn.disabled = false; return; }
+    delete calNoWorkDays[day]; delete calHalfDays[day]; delete calHalfProof[day];
+    if (!remove) {
+      (data.kind === 'half' ? calHalfDays : calNoWorkDays)[day] = data.label;
+      if (data.kind === 'half' && data.has_proof) calHalfProof[day] = data.proof_name || 'proof';
+    }
     renderDayViewNoWork();
     renderCalendar();
     refreshCallGoal();
   } catch (err) {
-    alert("Couldn't reach URTO's server — try again.");
+    showErr("Couldn't reach URTO's server — try again.");
+    if (btn) btn.disabled = false;
   }
 });
 
@@ -11504,9 +11552,11 @@ function renderCallGoal(st) {
   const notStarted = st.started === false;
   const dayOff = !notStarted && st.today_off;
   let leftText = doneAll ? '✅ Goal hit' : `${st.remaining_today} to go`;
+  const halfDay = !notStarted && !dayOff && st.today_half;
   let stackText = st.backlog > 0
-    ? `${dayOff ? (st.today_off === 'Weekend' ? 'Weekend' : 'Day off today') : st.goal + ' for today'} + <b>${st.backlog} stacked</b> from earlier days`
-    : `Goal: ${st.daily_goal || st.goal} calls a day. Short days stack onto the next.`;
+    ? `${dayOff ? (st.today_off === 'Weekend' ? 'Weekend' : 'Day off today') : st.goal + (halfDay ? ' for today (half day)' : ' for today')} + <b>${st.backlog} stacked</b> from earlier days`
+    : (halfDay ? `½ Half day: ${st.goal} calls today instead of ${st.daily_goal}. Short days stack onto the next.`
+      : `Goal: ${st.daily_goal || st.goal} calls a day. Short days stack onto the next.`);
   if (notStarted) {
     leftText = '';
     stackText = `Tracking starts <b>${formatGoalDay(st.start_date)}</b> — ${st.daily_goal} calls a day from then on.`;
@@ -11620,6 +11670,7 @@ function heatCellHtml(d, today) {
     }
     tip = `${formatGoalDay(d.date)}: ${calls} (goal ${d.goal})`;
   }
+  if (d.half && !d.weekend && !d.before) { cls += ' half'; tip += ' — half day'; }
   if (d.date === today) cls += ' today';
   return `<div class="${cls}" title="${escapeHtml(tip)}">${Number(d.date.slice(8, 10))}</div>`;
 }
@@ -11828,8 +11879,8 @@ function renderScorecard(data) {
   const missed = sc.missed_days || [];
   document.getElementById('scMissed').innerHTML = sc.before_tracking ? '' : [
     sc.counted_from && sc.counted_from > sc.week_start ? `Counting from <b>${formatGoalDay(sc.counted_from)}</b>, when the tracker started.` : '',
-    missed.length ? `Targets cut <b>${Math.round((1 - sc.target_factor) * 100)}%</b> for ${missed.length} missed day${missed.length === 1 ? '' : 's'}: ` +
-      missed.map(m => `${formatGoalDay(m.date)} (${escapeHtml(m.label)})`).join(', ') + '.' : '',
+    missed.length ? `Targets cut <b>${Math.round((1 - sc.target_factor) * 100)}%</b> for ${missed.some(m => m.half) ? 'days off and half days' : 'missed day' + (missed.length === 1 ? '' : 's')}: ` +
+      missed.map(m => `${formatGoalDay(m.date)} (${m.half ? '½ ' : ''}${escapeHtml(m.label)})`).join(', ') + '.' : '',
   ].filter(Boolean).join(' ');
   if (sc.before_tracking) {
     document.getElementById('scTable').innerHTML =

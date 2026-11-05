@@ -85,7 +85,7 @@ _BLOCKED_WRITES = [
     ("POST", r"^/api/crm/clients/\d+/low_importance$"),
 ]
 # Reads that can't work from the copy (they serve uploaded files).
-_BLOCKED_READS = [r"/template$", r"/signed$", r"/file$", r"^/api/backup/snapshots$", r"^/api/crm/zillow_zpid$"]
+_BLOCKED_READS = [r"/template$", r"/signed$", r"/file$", r"/proof$", r"^/api/backup/snapshots$", r"^/api/crm/zillow_zpid$"]
 
 _db_lock = threading.RLock()     # guards the copy, the outbox and the offline app
 _state_lock = threading.Lock()

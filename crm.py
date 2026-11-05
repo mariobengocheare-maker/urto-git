@@ -105,6 +105,7 @@ DOCUMENTS_DIR = DATA_DIR / "documents"
 TEMPLATES_DIR = DOCUMENTS_DIR / "templates"
 SIGNED_DIR = DOCUMENTS_DIR / "signed"
 COMMISSION_FILES_DIR = DOCUMENTS_DIR / "commission_files"
+HALF_DAY_PROOF_DIR = DOCUMENTS_DIR / "half_day_proof"
 
 
 def _migrate_legacy_data_dir():
@@ -517,6 +518,18 @@ def _iter_document_backup_files():
         filename = f"{_safe_name(row['title'] or 'Commission', 'Commission')} ({row['id']}){ext}"
         yield ("Commission Files",), filename, src
 
+    conn = get_conn()
+    proof_rows = conn.execute(
+        "SELECT day, label, proof_filename, proof_original_name FROM no_work_days WHERE proof_filename IS NOT NULL"
+    ).fetchall()
+    conn.close()
+    for row in proof_rows:
+        src = HALF_DAY_PROOF_DIR / row["proof_filename"]
+        if not src.exists():
+            continue
+        ext = Path(row["proof_original_name"] or row["proof_filename"]).suffix
+        yield ("Half Day Proof",), f"{row['day']} - {_safe_name(row['label'] or 'Half day', 'Half day')}{ext}", src
+
 
 def _mirror_documents_folder(backup_dir: Path):
     """Mirrors Transaction Manager's uploaded files AND Commission Tracker's
@@ -541,6 +554,7 @@ def _mirror_documents_folder(backup_dir: Path):
         "Transaction Checklist Documents": backup_dir / "Transaction Checklist Documents",
         "Transactions": backup_dir / "Transactions",
         "Commission Files": backup_dir / "Commission Files",
+        "Half Day Proof": backup_dir / "Half Day Proof",
     }
     expected = set()
 
@@ -589,7 +603,7 @@ def _push_documents_to_google_drive(access_token: str, root_folder_id: str):
 
         found_files = {}   # (rel_parts, filename) -> Drive file id
         folder_id_cache = {(): root_folder_id}
-        for root_name in ("Transaction Checklist Documents", "Transactions", "Commission Files"):
+        for root_name in ("Transaction Checklist Documents", "Transactions", "Commission Files", "Half Day Proof"):
             try:
                 root_id = google_drive_api.find_or_create_folder(access_token, root_name, root_folder_id)
                 folder_id_cache[(root_name,)] = root_id
@@ -2146,6 +2160,14 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    # 'off' = a full day off, 'half' = a half day (half the call goal).
+    if "kind" not in [r[1] for r in conn.execute("PRAGMA table_info(no_work_days)").fetchall()]:
+        conn.execute("ALTER TABLE no_work_days ADD COLUMN kind TEXT NOT NULL DEFAULT 'off'")
+    # A half day must carry proof (a photo / PDF / any file) of what Mario was doing.
+    _nwd_cols = [r[1] for r in conn.execute("PRAGMA table_info(no_work_days)").fetchall()]
+    if "proof_filename" not in _nwd_cols:
+        conn.execute("ALTER TABLE no_work_days ADD COLUMN proof_filename TEXT")
+        conn.execute("ALTER TABLE no_work_days ADD COLUMN proof_original_name TEXT")
     # One row per client Mario deletes, so re-adding the same person later
     # can ask "you've deleted this contact before — are you sure?".
     conn.execute("""
@@ -3690,6 +3712,8 @@ def get_morning_briefing_text() -> str:
             goal_part = " Today is marked as a day off, so there's no call goal."
         elif goal["started"]:
             goal_part = f" Your call goal today is {goal['required_today']} calls"
+            if goal.get("today_half"):
+                goal_part += " (it's a half day)"
             goal_part += f", including {goal['backlog']} stacked from earlier days." if goal["backlog"] else "."
         if goal["streak"]["current"] > 0:
             goal_part += f" You're on a {goal['streak']['current']}-day streak."
@@ -5261,50 +5285,99 @@ def _call_goal_history() -> list:
 
 def list_no_work_days(start=None, end=None) -> list:
     conn = get_conn()
-    sql, args = "SELECT day, label FROM no_work_days", []
+    sql, args = ("SELECT day, label, kind, proof_filename, proof_original_name FROM no_work_days"), []
     if start and end:
         sql += " WHERE day BETWEEN ? AND ?"
         args = [str(start), str(end)]
-    rows = [dict(r) for r in conn.execute(sql + " ORDER BY day", args).fetchall()]
+    rows = []
+    for r in conn.execute(sql + " ORDER BY day", args).fetchall():
+        d = dict(r)
+        d["has_proof"] = bool(d.pop("proof_filename"))
+        d["proof_name"] = d.pop("proof_original_name")
+        rows.append(d)
     conn.close()
     return rows
 
 
-def set_no_work_day(day: str, label: str = "") -> dict:
-    """Marks a holiday / day off. Its call goal becomes 0 (nothing stacks),
-    it never breaks a streak, and it cuts that week's scorecard targets 20%."""
+def get_no_work_day_proof(day: str):
+    """(stored filename, original name) of a half day's proof file, or None."""
+    conn = get_conn()
+    r = conn.execute("SELECT proof_filename, proof_original_name FROM no_work_days WHERE day = ?",
+                     ((day or "").strip(),)).fetchone()
+    conn.close()
+    if not r or not r["proof_filename"]:
+        return None
+    return r["proof_filename"], r["proof_original_name"]
+
+
+def set_no_work_day(day: str, label: str = "", kind: str = "off", file_storage=None) -> dict:
+    """Marks a holiday / day off (kind 'off': its call goal becomes 0 and
+    nothing stacks) or a half day (kind 'half': it owes half the usual goal,
+    rounded up). Either one never breaks a streak by itself, and cuts that
+    week's scorecard targets (20% for a day off, 10% for a half day).
+
+    A half day MUST have proof -- a photo, PDF or any file (file_storage)
+    showing what Mario was doing -- opened later from the Calendar. Marking
+    an already-half day again without a new file keeps the existing proof."""
     try:
         d = datetime.strptime((day or "").strip(), "%Y-%m-%d").date()
     except ValueError:
         raise RuntimeError("Pick a valid date.")
-    label = (label or "").strip()[:80] or "No work"
+    kind = "half" if (kind or "").strip().lower() == "half" else "off"
+    label = (label or "").strip()[:80] or ("Half day" if kind == "half" else "No work")
+    has_file = bool(file_storage is not None and (file_storage.filename or "").strip())
     conn = get_conn()
+    existing = conn.execute("SELECT * FROM no_work_days WHERE day = ?", (d.isoformat(),)).fetchone()
+    old_proof = existing["proof_filename"] if existing else None
+    if kind == "half" and not has_file and not (existing and existing["kind"] == "half" and old_proof):
+        conn.close()
+        raise RuntimeError("A half day needs proof — attach a photo, PDF or other file showing what you were doing.")
+    stored = original = None
+    if kind == "half":
+        if has_file:
+            stored, original = _store_upload(file_storage, HALF_DAY_PROOF_DIR)
+        else:
+            stored, original = old_proof, existing["proof_original_name"]
     conn.execute(
-        "INSERT INTO no_work_days (day, label, created_at) VALUES (?, ?, ?) "
-        "ON CONFLICT(day) DO UPDATE SET label = excluded.label",
-        (d.isoformat(), label, _now().isoformat(timespec="seconds")),
+        "INSERT INTO no_work_days (day, label, kind, proof_filename, proof_original_name, created_at) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(day) DO UPDATE SET label = excluded.label, kind = excluded.kind, "
+        "proof_filename = excluded.proof_filename, proof_original_name = excluded.proof_original_name",
+        (d.isoformat(), label, kind, stored, original, _now().isoformat(timespec="seconds")),
     )
     conn.commit()
     conn.close()
-    on_data_changed("no-work day marked", f"{d.isoformat()} ({label})")
-    return {"day": d.isoformat(), "label": label}
+    if old_proof and old_proof != stored:
+        _delete_stored_file(HALF_DAY_PROOF_DIR, old_proof)
+    on_data_changed("half day marked" if kind == "half" else "no-work day marked", f"{d.isoformat()} ({label})")
+    if stored or old_proof:
+        _instant_document_mirror()
+    return {"day": d.isoformat(), "label": label, "kind": kind,
+            "has_proof": bool(stored), "proof_name": original}
 
 
 def remove_no_work_day(day: str) -> bool:
+    day = (day or "").strip()
     conn = get_conn()
-    cur = conn.execute("DELETE FROM no_work_days WHERE day = ?", ((day or "").strip(),))
+    r = conn.execute("SELECT proof_filename FROM no_work_days WHERE day = ?", (day,)).fetchone()
+    cur = conn.execute("DELETE FROM no_work_days WHERE day = ?", (day,))
     conn.commit()
     conn.close()
+    if r and r["proof_filename"]:
+        _delete_stored_file(HALF_DAY_PROOF_DIR, r["proof_filename"])
     if cur.rowcount:
         on_data_changed("no-work day removed", day)
+        if r and r["proof_filename"]:
+            _instant_document_mirror()
     return bool(cur.rowcount)
 
 
 def _goal_plan() -> dict:
     """Everything the goal math needs: goal history, tracking start, days off."""
     hist = _call_goal_history()
+    rows = list_no_work_days()
     return {"hist": hist, "start": hist[0]["from"],
-            "off": {r["day"]: r["label"] for r in list_no_work_days()}}
+            "off": {r["day"]: r["label"] for r in rows if r.get("kind") != "half"},
+            "half": {r["day"]: r["label"] for r in rows if r.get("kind") == "half"}}
 
 
 def _off_label(plan: dict, day: str):
@@ -5319,7 +5392,7 @@ def _off_label(plan: dict, day: str):
 
 def _goal_for_day(plan: dict, day: str) -> int:
     """What a day owes: 0 before tracking started, on a weekend, or on a
-    no-work day."""
+    no-work day; half the usual goal (rounded up) on a half day."""
     if day < plan["start"] or _off_label(plan, day):
         return 0
     hist = plan["hist"]
@@ -5327,6 +5400,8 @@ def _goal_for_day(plan: dict, day: str) -> int:
     for h in hist:
         if h["from"] <= day:
             goal = int(h["goal"])
+    if day in plan.get("half", {}):
+        goal = (goal + 1) // 2   # a half day owes half the goal, rounded up
     return goal
 
 
@@ -5433,6 +5508,7 @@ def get_call_goal_status() -> dict:
         "start_date": start_s,
         "started": started,
         "today_off": _off_label(plan, today_s),
+        "today_half": (plan["half"].get(today_s) if not _off_label(plan, today_s) else None),
         "today": today_s,
         "made_today": stats["today"],
         "backlog": backlog,
@@ -5687,6 +5763,7 @@ def _call_heatmap(plan, counts, today, months=3, year=None) -> list:
         n = counts.get(d, 0) if d >= plan["start"] else 0
         out.append({"date": d, "count": n, "goal": goal, "future": day > today,
                     "before": d < plan["start"], "off": _off_label(plan, d),
+                    "half": plan["half"].get(d) if not _off_label(plan, d) else None,
                     "weekend": day.weekday() >= 5,
                     "hit": goal > 0 and n >= goal})
         day += timedelta(days=1)
@@ -5918,9 +5995,10 @@ NO_WORK_TARGET_CUT = 0.20   # each missed weekday takes 20% off that week's 5-da
 
 
 def _week_missed_days(plan, start, end) -> list:
-    """Weekdays that cut the week's targets: every weekday marked off, plus
-    the weekdays before tracking started (the inception week's Mon/Tue).
-    Weekends never count -- the week's targets are already a 5-day week."""
+    """Weekdays that cut the week's targets: every weekday marked off (a full
+    20% cut), every half day (half of that), plus the weekdays before
+    tracking started (the inception week's Mon/Tue). Weekends never count --
+    the week's targets are already a 5-day week."""
     out = []
     day = start
     while day <= end:
@@ -5928,9 +6006,11 @@ def _week_missed_days(plan, start, end) -> list:
         if day.weekday() >= 5:
             pass
         elif d in plan["off"]:
-            out.append({"date": d, "label": plan["off"][d]})
-        elif d < plan["start"] and day.weekday() < 5:
-            out.append({"date": d, "label": "Before tracking started"})
+            out.append({"date": d, "label": plan["off"][d], "cut": 1.0})
+        elif d < plan["start"]:
+            out.append({"date": d, "label": "Before tracking started", "cut": 1.0})
+        elif d in plan.get("half", {}):
+            out.append({"date": d, "label": plan["half"][d], "cut": 0.5, "half": True})
         day += timedelta(days=1)
     return out
 
@@ -5973,7 +6053,7 @@ def get_weekly_scorecard(week_start=None) -> dict:
     else:
         vals["followups_overdue"] = None
     missed = _week_missed_days(plan, start, end)
-    factor = max(0.0, 1.0 - NO_WORK_TARGET_CUT * min(len(missed), 5))
+    factor = max(0.0, 1.0 - NO_WORK_TARGET_CUT * min(sum(m.get("cut", 1.0) for m in missed), 5))
     full_week_calls = 0   # Mon-Fri goals; weekends are off
     for i in range(5):
         d = (start + timedelta(days=i)).isoformat()

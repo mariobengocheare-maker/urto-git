@@ -1104,11 +1104,28 @@ def no_work_days_list():
 
 @crm_bp.route("/api/crm/no_work_days/<day>", methods=["PUT"])
 def no_work_day_set(day):
-    data = request.get_json(silent=True) or {}
+    # JSON for a plain day off; multipart (with the proof file) for a half day.
+    if request.files or request.form:
+        data = request.form
+    else:
+        data = request.get_json(silent=True) or {}
     try:
-        return jsonify(crm.set_no_work_day(day, data.get("label", "")))
+        return jsonify(crm.set_no_work_day(day, data.get("label", ""), data.get("kind", "off"),
+                                           request.files.get("file")))
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
+
+
+@crm_bp.route("/api/crm/no_work_days/<day>/proof", methods=["GET"])
+def no_work_day_proof(day):
+    found = crm.get_no_work_day_proof(day)
+    if not found or not (crm.HALF_DAY_PROOF_DIR / found[0]).exists():
+        abort(404)
+    return send_file(
+        crm.HALF_DAY_PROOF_DIR / found[0],
+        as_attachment=bool(request.args.get("download")),
+        download_name=found[1] or "proof",
+    )
 
 
 @crm_bp.route("/api/crm/no_work_days/<day>", methods=["DELETE"])
