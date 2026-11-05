@@ -3896,8 +3896,9 @@ function renderEntityResolveResults(results) {
     const zipAddr = primary.address || primary.zip || '';
     const fallbackNote = r.candidates.length > 1
       ? `<span class="np-hint">+${r.candidates.length - 1} fallback${r.candidates.length > 2 ? 's' : ''} if not found</span>` : '';
+    const reusedNote = r.reused ? '<span class="np-hint">✓ looked up before — reused</span>' : '';
     return `<tr>
-      <td>🏢 ${escapeHtml(r.entity_name || '(entity)')}</td>
+      <td>🏢 ${escapeHtml(r.entity_name || '(entity)')}${reusedNote}</td>
       <td>${escapeHtml(primary.first_name || '')} ${escapeHtml(primary.last_name || '')}${fallbackNote}</td>
       <td class="np-addr">${escapeHtml(zipAddr || '—')}</td>
     </tr>`;
@@ -3934,11 +3935,11 @@ async function pollEntityResolve() {
     } else {
       entityResolveCount.textContent = data.status === 'error'
         ? `Resolved ${data.processed} of ${data.total} before hitting an error (${data.error || 'unknown'}) — you can still continue, anything unresolved will show as SKIPPED.`
-        : `Resolved ${data.processed} of ${data.total}. Do these look right?`;
+        : `Resolved ${data.processed} of ${data.total}${data.reused ? ` (${data.reused} already looked up before — reused, no Sunbiz search needed)` : ''}. Do these look right?`;
     }
     entityResolveConfirmBtn.style.display = 'inline-block';
   } else {
-    entityResolveCount.textContent = `Resolved ${data.processed} of ${data.total}…`;
+    entityResolveCount.textContent = `Resolved ${data.processed} of ${data.total}…${data.reused ? ` (${data.reused} reused from before)` : ''}`;
   }
 }
 

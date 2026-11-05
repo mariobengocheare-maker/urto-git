@@ -135,7 +135,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.80.1"
+APP_VERSION = "2.80.2"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -601,6 +601,62 @@ def _record_skiptrace_done(fp, status):
             pass
 
 
+# ---- Remembering which businesses were already looked up on Sunbiz --------
+# Mario: "make it also KNOW if its done this before." A business whose real
+# person Sunbiz already gave us doesn't need that page loaded again (slow, and
+# it risks Sunbiz blocking this connection). Only successful resolutions are
+# kept; a skip/failure is retried next time. Entries expire so a changed
+# registered agent is eventually picked up. ----
+ENTITY_CACHE_PATH = crm.DATA_DIR / "entity_resolved.json"
+ENTITY_CACHE_DAYS = 120
+_entity_cache_lock = threading.Lock()
+
+
+def _entity_cache_key(name):
+    return " ".join(re.sub(r"[^A-Z0-9 ]+", " ", (name or "").upper()).split())
+
+
+def _load_entity_cache() -> dict:
+    try:
+        with open(ENTITY_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _entity_cache_get(cache, name):
+    key = _entity_cache_key(name)
+    hit = cache.get(key) if key else None
+    if not hit or not hit.get("candidates"):
+        return None
+    try:
+        age = datetime.now(ZoneInfo("America/New_York")) - datetime.fromisoformat(hit.get("at", ""))
+        if age.days > ENTITY_CACHE_DAYS:
+            return None
+    except (ValueError, TypeError):
+        return None
+    return hit
+
+
+def _entity_cache_put(name, candidates):
+    key = _entity_cache_key(name)
+    if not key or not candidates:
+        return
+    with _entity_cache_lock:
+        data = _load_entity_cache()
+        data[key] = {"candidates": candidates,
+                     "at": datetime.now(ZoneInfo("America/New_York")).isoformat(timespec="seconds")}
+        try:
+            ENTITY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = ENTITY_CACHE_PATH.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, ENTITY_CACHE_PATH)
+        except OSError:
+            pass
+
+
 def _split_done_rows(rows: list) -> tuple:
     """(rows still to search, how many were already done, {fp: status} of the
     done ones). Rows that already carry a skip_reason never count as done."""
@@ -838,6 +894,9 @@ def resolve_entities_job(job_id, rows, entity_indices):
                 {"first_name": resolved.get("first_name", ""), "last_name": resolved.get("last_name", ""),
                  "resolved_via": resolved.get("resolved_via", "")}
             ])
+
+            if not skip_reason and candidates:
+                _entity_cache_put(entity_name, candidates)
 
             with ENTITY_JOBS_LOCK:
                 job["results"].append({
@@ -1149,13 +1208,30 @@ def resolve_entities():
     if not entity_indices:
         return jsonify({"job_id": None, "total": 0})
 
+    # Businesses already looked up on Sunbiz in an earlier run are reused,
+    # not searched again (unless "search them again anyway" is ticked).
+    reused_results = []
+    if request.form.get("skip_done", "1") == "1":
+        cache = _load_entity_cache()
+        to_resolve = []
+        for i in entity_indices:
+            hit = _entity_cache_get(cache, rows[i].get("entity_name", ""))
+            if hit:
+                reused_results.append({"index": i, "entity_name": rows[i].get("entity_name", ""),
+                                       "skip_reason": None, "candidates": hit["candidates"], "reused": True})
+            else:
+                to_resolve.append(i)
+    else:
+        to_resolve = list(entity_indices)
+
     job_id = uuid.uuid4().hex
     with ENTITY_JOBS_LOCK:
         ENTITY_JOBS[job_id] = {
-            "status": "starting",
+            "status": "done" if not to_resolve else "starting",
             "total": len(entity_indices),
-            "processed": 0,
-            "results": [],
+            "processed": len(reused_results),
+            "reused": len(reused_results),
+            "results": list(reused_results),
             "stop_event": threading.Event(),
             "error": None,
             "created_at": time.time(),
@@ -1164,10 +1240,11 @@ def resolve_entities():
             "browser": "",
         }
 
-    thread = threading.Thread(target=resolve_entities_job_safe, args=(job_id, rows, entity_indices), daemon=True)
-    thread.start()
+    if to_resolve:
+        thread = threading.Thread(target=resolve_entities_job_safe, args=(job_id, rows, to_resolve), daemon=True)
+        thread.start()
 
-    return jsonify({"job_id": job_id, "total": len(entity_indices)})
+    return jsonify({"job_id": job_id, "total": len(entity_indices), "reused": len(reused_results)})
 
 
 @app.route("/api/resolve_entities/<job_id>")
@@ -1180,6 +1257,7 @@ def resolve_entities_status(job_id):
             "status": job["status"],
             "total": job["total"],
             "processed": job["processed"],
+            "reused": job.get("reused", 0),
             "results": job["results"],
             "error": job["error"],
             "note": job.get("note", ""),
