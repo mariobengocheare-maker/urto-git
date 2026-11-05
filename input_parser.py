@@ -119,6 +119,30 @@ def text_contains_address(blob: str, required_tokens: set) -> bool:
     return required_tokens.issubset(blob_tokens)
 
 
+def row_fingerprint(row: dict):
+    """A stable identity for one input row -- who + which property -- used to
+    remember which rows were already searched, so the same list loaded again
+    picks up where it left off instead of spending FOREWARN searches on
+    people already done. Name order doesn't matter (a row swapped in the
+    review step is still the same row), a unit number doesn't matter, and
+    city/state don't matter (the same reasons address_tokens() ignores them).
+    Returns None when there isn't enough to identify the row (no address
+    digits at all), so such a row is never remembered or skipped."""
+    # (the words APT/STE/UNIT are dropped too -- a unit marker isn't identity)
+    addr = sorted(t for t in address_tokens(row.get("address", "") or "", row.get("zip", "") or "")
+                  if t not in ("APT", "STE", "UNIT"))
+    if not addr or not any(ch.isdigit() for t in addr for ch in t):
+        return None
+    if row.get("is_entity"):
+        who = "E|" + " ".join(sorted(normalize(row.get("entity_name", "") or "").split()))
+    else:
+        name = f"{row.get('first_name', '')} {row.get('last_name', '')}"
+        who = "P|" + " ".join(sorted(normalize(name).split()))
+    if who in ("E|", "P|"):
+        return None
+    return who + "|" + " ".join(addr)
+
+
 OUTPUT_FIELDS = [
     "owner", "address", "city", "state", "zip",
     "phone", "status", "notes", "input_owner_name",

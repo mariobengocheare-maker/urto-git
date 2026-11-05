@@ -32,7 +32,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 import crm
 import hosted_sync
 import offline_mode
-from input_parser import OUTPUT_FIELDS, build_output_row, load_rows, address_tokens, text_contains_address
+from input_parser import OUTPUT_FIELDS, build_output_row, load_rows, address_tokens, text_contains_address, row_fingerprint
 
 # `playwright.sync_api` (and lookup_engine.py/llc_lookup.py, which both
 # import it too) is deliberately NOT imported here at module load time --
@@ -135,7 +135,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.79.0"
+APP_VERSION = "2.80.0"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -563,6 +563,58 @@ def _watchdog():
 threading.Thread(target=_watchdog, daemon=True).start()
 
 
+# ---- Remembering which rows were already searched (resume a half-finished
+# list) -- Mario: "if i put a list... and i dont finish it, the NEXT time i
+# put that SAME list into it... it doesnt waste searches on numbers that its
+# already done... picks up where it left off." A row counts as done once its
+# FOREWARN search came back FOUND or NOT_FOUND. ERROR rows (a hiccup, not an
+# answer) and SKIPPED rows (never searched, cost nothing) stay eligible. ----
+SKIPTRACE_DONE_PATH = crm.DATA_DIR / "skiptrace_done.json"
+_skiptrace_done_lock = threading.Lock()
+SKIPTRACE_DONE_STATUSES = ("FOUND", "NOT_FOUND")
+
+
+def _load_skiptrace_done() -> dict:
+    try:
+        with open(SKIPTRACE_DONE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _record_skiptrace_done(fp, status):
+    """Called right after each row's real search finishes (so a stopped,
+    crashed or closed-mid-batch run still remembers everything it got to)."""
+    if not fp or status not in SKIPTRACE_DONE_STATUSES:
+        return
+    with _skiptrace_done_lock:
+        data = _load_skiptrace_done()
+        data[fp] = {"status": status, "at": datetime.now(ZoneInfo("America/New_York")).isoformat(timespec="seconds")}
+        try:
+            SKIPTRACE_DONE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = SKIPTRACE_DONE_PATH.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, SKIPTRACE_DONE_PATH)
+        except OSError:
+            pass
+
+
+def _split_done_rows(rows: list) -> tuple:
+    """(rows still to search, how many were already done, {fp: status} of the
+    done ones). Rows that already carry a skip_reason never count as done."""
+    done = _load_skiptrace_done()
+    keep, skipped = [], []
+    for row in rows:
+        fp = row.get("_fp")
+        if fp and fp in done and not row.get("skip_reason") and done[fp].get("status") in SKIPTRACE_DONE_STATUSES:
+            skipped.append(done[fp]["status"])
+        else:
+            keep.append(row)
+    return keep, len(skipped), {"found": skipped.count("FOUND"), "not_found": skipped.count("NOT_FOUND")}
+
+
 def run_job(job_id, rows):
     # Deliberately lazy -- see the comment on this file's imports up top.
     from playwright.sync_api import sync_playwright
@@ -601,6 +653,8 @@ def run_job(job_id, rows):
                         result = {"phone": "", "status": "ERROR", "notes": str(e)}
 
                 out_row = build_output_row(row, result)
+                if not skip_reason:
+                    _record_skiptrace_done(row.get("_fp"), result.get("status"))
                 writer.writerow(out_row)
                 out_f.flush()
                 _skiptrace_sync_event.set()
@@ -980,9 +1034,14 @@ def preview_names():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
+    done = _load_skiptrace_done()
+    for row in rows:
+        row["_fp"] = row_fingerprint(row)
     preview = [
         {
             "index": i,
+            "already_done": bool(row.get("_fp") and row["_fp"] in done and not row.get("skip_reason")
+                                 and done[row["_fp"]].get("status") in SKIPTRACE_DONE_STATUSES),
             "first_name": row["first_name"],
             "last_name": row["last_name"],
             "is_entity": row["is_entity"],
@@ -994,7 +1053,12 @@ def preview_names():
         }
         for i, row in enumerate(rows)
     ]
-    return jsonify({"rows": preview, "total": len(preview)})
+    done_rows = [r for r in preview if r["already_done"]]
+    found_n = sum(1 for r in done_rows if done[rows[r["index"]]["_fp"]].get("status") == "FOUND")
+    return jsonify({
+        "rows": preview, "total": len(preview), "already_done_count": len(done_rows),
+        "already_done_found": found_n,
+    })
 
 
 def _apply_name_swaps(rows: list, swapped_indices_raw: str) -> list:
@@ -1046,6 +1110,14 @@ def resolve_entities():
         return jsonify({"error": str(e)}), 400
 
     entity_indices = [i for i, row in enumerate(rows) if row.get("is_entity")]
+    if request.form.get("skip_done", "1") == "1":
+        # Businesses already searched in an earlier run don't need their
+        # owner looked up on Sunbiz again either.
+        done = _load_skiptrace_done()
+        entity_indices = [i for i in entity_indices
+                          if not (row_fingerprint(rows[i]) in done
+                                  and done[row_fingerprint(rows[i])].get("status") in SKIPTRACE_DONE_STATUSES
+                                  and not rows[i].get("skip_reason"))]
     if not entity_indices:
         return jsonify({"job_id": None, "total": 0})
 
@@ -1184,17 +1256,29 @@ def upload():
                         "Run this business again once sunbiz.org opens.")
                     row["_resolved_candidates"] = None
 
+    # Remember which rows were already searched in an earlier run, so the
+    # same list loaded again picks up where it left off. Fingerprints are
+    # taken now (after the name swaps, before processing can adjust a name).
+    total_input = len(rows)
+    for row in rows:
+        row["_fp"] = row_fingerprint(row)
+    already_done_count, already_done_detail = 0, {"found": 0, "not_found": 0}
+    if request.form.get("skip_done", "1") == "1":
+        rows, already_done_count, already_done_detail = _split_done_rows(rows)
+
     # Pre-upload CRM dedup (build order #158) -- must run BEFORE any job is
     # created, since a job's existence is what triggers the FOREWARN-login
     # browser window; Mario was explicit this has to happen before that.
-    total_input = len(rows)
     rows, already_in_crm_count = _find_rows_already_in_crm(rows)
 
     if not rows:
         return jsonify({
             "already_in_crm_count": already_in_crm_count,
+            "already_done_count": already_done_count,
+            "already_done_detail": already_done_detail,
             "total_input": total_input,
-            "all_already_in_crm": True,
+            "all_already_in_crm": already_in_crm_count > 0 and already_done_count == 0,
+            "nothing_left": True,
         })
 
     job_id = uuid.uuid4().hex
@@ -1218,6 +1302,8 @@ def upload():
     return jsonify({
         "job_id": job_id,
         "already_in_crm_count": already_in_crm_count,
+        "already_done_count": already_done_count,
+        "already_done_detail": already_done_detail,
         "total_input": total_input,
     })
 
@@ -1261,6 +1347,38 @@ def download(job_id):
     if not job or not job["output_path"]:
         abort(404)
     return send_file(job["output_path"], as_attachment=True, download_name="forewarn_results.csv")
+
+
+NOT_FOUND_COLUMNS = ["status", "reason", "owner", "address", "city", "state", "zip", "input_owner_name"]
+
+
+@app.route("/api/download_notfound/<job_id>")
+def download_notfound(job_id):
+    """Every row of this lookup that did NOT come back with a number --
+    NOT_FOUND, ERROR and SKIPPED -- with the plain reason each one failed
+    (the same text as the Notes column), so Mario can chase them by hand or
+    paste the reasons back to see why a search missed."""
+    job = JOBS.get(job_id)
+    if not job or not job["output_path"]:
+        abort(404)
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=NOT_FOUND_COLUMNS)
+    writer.writeheader()
+    try:
+        with open(job["output_path"], "r", newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                if (r.get("status") or "") == "FOUND":
+                    continue
+                writer.writerow({
+                    "status": r.get("status", ""), "reason": r.get("notes", ""),
+                    "owner": r.get("owner", ""), "address": r.get("address", ""), "city": r.get("city", ""),
+                    "state": r.get("state", ""), "zip": r.get("zip", ""),
+                    "input_owner_name": r.get("input_owner_name", ""),
+                })
+    except OSError:
+        abort(404)
+    return Response("\ufeff" + out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="not_found_numbers.csv"'})
 
 
 @app.route("/api/lookup/weekly_count")

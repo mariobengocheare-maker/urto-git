@@ -1897,6 +1897,7 @@
     <div id="downloadBox">
       <button id="downloadBtn" class="secondary">Download results CSV</button>
       <button id="retainResultsBtn" class="secondary">💾 Retain Found Numbers</button>
+      <button id="downloadNotFoundBtn" class="secondary" style="display:none">⬇ Download not-found list</button>
     </div>
 
     <div class="table-wrap">
@@ -3513,6 +3514,10 @@
         <tbody id="namePreviewBody"></tbody>
       </table>
     </div>
+    <label id="skipDoneRow" style="display:none; align-items:flex-start; gap:8px; margin-top:12px; font-size:.9rem">
+      <input type="checkbox" id="skipDoneCheck" checked style="margin-top:3px">
+      <span id="skipDoneText"></span>
+    </label>
     <div class="modal-actions">
       <button type="button" class="ghost" id="namePreviewCancelBtn">Cancel</button>
       <button type="button" id="namePreviewConfirmBtn">✅ Looks good — Start Lookup</button>
@@ -3745,6 +3750,21 @@ const namePreviewBody = document.getElementById('namePreviewBody');
 const namePreviewConfirmBtn = document.getElementById('namePreviewConfirmBtn');
 let namePreviewRows = [];   // the parsed preview rows, as returned by the server
 let namePreviewSwapped = new Set(); // indices the user has toggled swapped
+let namePreviewDone = null;         // {count, found} -- rows already searched in earlier runs
+const skipDoneCheck = document.getElementById('skipDoneCheck');
+// "1" = skip rows already searched in an earlier run (the default). Only "0"
+// when there ARE such rows and Mario unticked the box to search them again.
+function skipDoneValue() { return namePreviewDone && namePreviewDone.count > 0 && !skipDoneCheck.checked ? '0' : '1'; }
+function renderSkipDoneRow() {
+  const row = document.getElementById('skipDoneRow');
+  if (!namePreviewDone || !namePreviewDone.count) { row.style.display = 'none'; return; }
+  const n = namePreviewDone.count, f = namePreviewDone.found;
+  document.getElementById('skipDoneText').innerHTML =
+    `<b>${n} of ${namePreviewRows.length}</b> ${n === 1 ? 'row was' : 'rows were'} already searched in an earlier run ` +
+    `(${f} found a number, ${n - f} didn't). Skip ${n === 1 ? 'it' : 'them'} so no search is wasted — the lookup picks up with the rest. ` +
+    `<span style="color:var(--text-secondary)">Untick this to search ${n === 1 ? 'it' : 'them'} again anyway.</span>`;
+  row.style.display = 'flex';
+}
 
 function closeNamePreview() {
   namePreviewOverlay.classList.remove('show');
@@ -3767,10 +3787,11 @@ function renderNamePreview() {
       </tr>`;
     }
     const swapped = namePreviewSwapped.has(row.index);
+    const doneTag = row.already_done ? ' <span class="np-hint" style="opacity:1">✓ already searched</span>' : '';
     const shownFirst = swapped ? row.last_name : row.first_name;
     const shownLast = swapped ? row.first_name : row.last_name;
     return `<tr class="name-preview-row swappable${swapped ? ' swapped' : ''}" data-index="${row.index}">
-      <td class="np-name">${escapeHtml(shownFirst)}</td>
+      <td class="np-name">${escapeHtml(shownFirst)}${doneTag}</td>
       <td class="np-name">${escapeHtml(shownLast)}<span class="np-hint">click to swap</span></td>
       <td class="np-addr">${escapeHtml(propertyBits || row.skip_reason || '')}</td>
     </tr>`;
@@ -3927,6 +3948,7 @@ async function startEntityResolve(swappedIndices) {
   entityResolveDone = false;
   const form = new FormData();
   form.append('file', selectedFile);
+  form.append('skip_done', skipDoneValue());
   let data;
   try {
     const res = await fetch('/api/resolve_entities', { method: 'POST', body: form });
@@ -4017,6 +4039,9 @@ startBtn.addEventListener('click', async () => {
   }
 
   namePreviewRows = data.rows;
+  namePreviewDone = { count: data.already_done_count || 0, found: data.already_done_found || 0 };
+  skipDoneCheck.checked = true;
+  renderSkipDoneRow();
   renderNamePreview();
   document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
   namePreviewOverlay.classList.add('show');
@@ -4027,6 +4052,7 @@ async function actuallyStartUpload(swappedIndices, entityResolveJobId, file) {
   form.append('file', file || selectedFile);
   form.append('delay', delayInput.value);
   form.append('swapped_indices', JSON.stringify(swappedIndices));
+  form.append('skip_done', skipDoneValue());
   if (entityResolveJobId) form.append('entity_resolve_job_id', entityResolveJobId);
 
   const res = await fetch('/api/upload', { method: 'POST', body: form });
@@ -4047,15 +4073,29 @@ async function actuallyStartUpload(swappedIndices, entityResolveJobId, file) {
   // explicit ask. If EVERY row in the upload matched, no job exists at
   // all here -- data.job_id is absent -- so show that plainly and stop.
   dedupInfoBox.style.display = 'none';
+  const infoParts = [];
+  if (data.already_done_count > 0) {
+    const d = data.already_done_detail || {};
+    infoParts.push(`${data.already_done_count} of ${data.total_input} rows ${data.already_done_count === 1 ? 'was' : 'were'} already searched in an earlier run ` +
+      `(${d.found || 0} found, ${d.not_found || 0} not found) — skipped, no searches wasted.`);
+  }
   if (data.already_in_crm_count > 0) {
     const n = data.already_in_crm_count;
     const noun = n === 1 ? 'this address is' : `all ${n} of these addresses are`;
-    dedupInfoBox.textContent = data.all_already_in_crm
+    infoParts.push(data.all_already_in_crm
       ? `All ${data.total_input} of these are already in your CRM.`
-      : `${n} of ${data.total_input} rows ${n === 1 ? 'was' : 'were'} skipped -- ${noun} already in your CRM.`;
+      : `${n} ${n === 1 ? 'row was' : 'rows were'} skipped -- ${noun} already in your CRM.`);
+  }
+  if (data.nothing_left) {
+    infoParts.push(data.already_done_count > 0
+      ? 'Nothing left to search — every row on this list was already done. (To search them again, untick the box in the review step.)'
+      : '');
+  }
+  if (infoParts.length) {
+    dedupInfoBox.textContent = infoParts.filter(Boolean).join(' ');
     dedupInfoBox.style.display = 'block';
   }
-  if (data.all_already_in_crm) {
+  if (data.nothing_left || data.all_already_in_crm) {
     startBtn.disabled = false;
     return;
   }
@@ -4089,6 +4129,29 @@ downloadBtn.addEventListener('click', async () => {
   name = name.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\.csv$/i, '').trim() || defaultName;
   try {
     const res = await fetch(`/api/download/${jobId}`);
+    if (!res.ok) throw new Error('The server could not produce the file.');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Couldn't download the file: " + err.message);
+  }
+});
+
+const downloadNotFoundBtn = document.getElementById('downloadNotFoundBtn');
+downloadNotFoundBtn.addEventListener('click', async () => {
+  const defaultName = 'not_found_numbers';
+  let name = prompt('What do you want to name the file?', defaultName);
+  if (name === null) return;
+  name = name.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\.csv$/i, '').trim() || defaultName;
+  try {
+    const res = await fetch(`/api/download_notfound/${jobId}`);
     if (!res.ok) throw new Error('The server could not produce the file.');
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -4179,6 +4242,16 @@ async function poll() {
   }
 
   downloadBox.style.display = data.rows.length > 0 ? 'block' : 'none';
+  // Once the list is finished (or stopped), offer every row that didn't
+  // come back with a number, each with the reason it failed.
+  const notFoundN = data.rows.filter(r => r.status !== 'FOUND').length;
+  const finished = data.status === 'done' || data.status === 'stopped';
+  downloadNotFoundBtn.style.display = notFoundN > 0 ? 'inline-block' : 'none';
+  downloadNotFoundBtn.textContent = `⬇ Download not-found list (${notFoundN})`;
+  if (finished && notFoundN > 0) {
+    const foundN = data.rows.length - notFoundN;
+    statusDiv.textContent += ` ${foundN} found, ${notFoundN} not found — download the not-found list below, each with the reason it failed.`;
+  }
   renderRows(data.rows);
   refreshWeeklyLookupCount();
 }
