@@ -134,7 +134,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.78.1"
+APP_VERSION = "2.78.2"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -642,20 +642,21 @@ def _launch_browser(p, channel=None):
     return p.chromium.launch(**kwargs)
 
 
-def _sunbiz_problem_message(detail):
+def _sunbiz_problem_message(detail, reachable, how):
     """Plain-English explanation shown in the LLC-owner box when Sunbiz
-    couldn't be opened in any browser. Checks from Python, outside the
-    browser, whether this PC can reach Sunbiz at all."""
-    from llc_lookup import check_sunbiz_reachable
-    reachable, how = check_sunbiz_reachable()
+    couldn't be opened. `reachable`/`how` come from check_sunbiz_reachable()
+    (Python asking Sunbiz directly, outside any browser)."""
     if reachable:
         return (f"Sunbiz wouldn't load in the lookup window ({detail}), even though this PC can reach "
                 f"Sunbiz ({how}). Something on this PC may be blocking the automated browser (antivirus "
                 f"or firewall), or Sunbiz is slowing it down after many searches. Wait a few minutes "
                 f"and click Try again.")
-    return (f"Sunbiz isn't answering this PC right now ({how}). Its site may be down or temporarily "
-            f"blocking this connection after many searches. Check that sunbiz.org opens in your normal "
-            f"browser, wait a few minutes, then click Try again.")
+    return (f"Sunbiz isn't answering this PC's internet connection at all right now ({how}) — this "
+            f"isn't the lookup window, URTO itself couldn't reach Sunbiz either. Open sunbiz.org in your "
+            f"normal browser: if it doesn't load there either, Sunbiz is down or is blocking this internet "
+            f"connection for a while (it does this after a lot of searches). Try again in a few hours, or "
+            f"on a different connection (your phone's hotspot). If it DOES load in your normal browser, "
+            f"click Try again.")
 
 
 def resolve_entities_job(job_id, rows, entity_indices):
@@ -678,7 +679,8 @@ def resolve_entities_job(job_id, rows, entity_indices):
     marking every remaining business as failed, and the rows it didn't get
     to are simply left for a retry."""
     from playwright.sync_api import sync_playwright
-    from llc_lookup import resolve_entity_owner
+    import llc_lookup
+    from llc_lookup import resolve_entity_owner, check_sunbiz_reachable
 
     job = ENTITY_JOBS[job_id]
 
@@ -692,6 +694,7 @@ def resolve_entities_job(job_id, rows, entity_indices):
         with ENTITY_JOBS_LOCK:
             job["status"] = "running"
             job["browser"] = "Chromium"
+            job["note"] = "Opening Sunbiz…"
         fallbacks = list(SUNBIZ_FALLBACK_CHANNELS)
 
         def resolve(idx_row):
@@ -708,43 +711,54 @@ def resolve_entities_job(job_id, rows, entity_indices):
             resolved = resolve(row)
 
             if resolved.get("unreachable"):
-                # Sunbiz never loaded. Try a fresh window first, then the
-                # other installed browsers, before giving up on the batch.
-                set_note("Sunbiz isn't loading — retrying in a fresh window…")
-                try:
-                    page.close()
-                except Exception:
-                    pass
-                try:
-                    page = browser.new_page()
-                    resolved = resolve(row)
-                except Exception as e:
-                    resolved = {"unreachable": True, "skip_reason": str(e)}
-                while resolved.get("unreachable") and fallbacks and not job["stop_event"].is_set():
-                    channel, label = fallbacks.pop(0)
-                    set_note(f"Sunbiz still isn't loading — trying {label}…")
-                    try:
-                        new_browser = _launch_browser(p, channel)
-                    except Exception:
-                        continue  # that browser isn't installed on this PC
-                    try:
-                        browser.close()
-                    except Exception:
-                        pass
-                    browser = new_browser
-                    page = browser.new_page()
-                    with ENTITY_JOBS_LOCK:
-                        job["browser"] = label
-                    resolved = resolve(row)
-                set_note("")
-
-            if resolved.get("unreachable"):
                 detail = resolved.get("skip_reason", "")
                 detail = detail.replace("Couldn't open Sunbiz (", "").split(") — this row")[0]
-                message = _sunbiz_problem_message(detail)
-                with ENTITY_JOBS_LOCK:
-                    job["sunbiz_problem"] = message
-                break
+                # First: can this PC reach Sunbiz at all, outside any browser?
+                # If not, no other browser will do better -- say so right away
+                # instead of making Mario watch more blank windows (build
+                # order #204).
+                set_note("Sunbiz isn't loading — checking whether this PC can reach Sunbiz at all…")
+                reachable, how = check_sunbiz_reachable()
+                if reachable:
+                    # The PC can reach Sunbiz, so the problem is this browser
+                    # window. Try a fresh window, then Chrome, then Edge, one
+                    # quick try each.
+                    llc_lookup.NAV_ATTEMPTS = 1
+                    try:
+                        set_note("This PC can reach Sunbiz — retrying in a fresh window…")
+                        try:
+                            page.close()
+                        except Exception:
+                            pass
+                        try:
+                            page = browser.new_page()
+                            resolved = resolve(row)
+                        except Exception as e:
+                            resolved = {"unreachable": True, "skip_reason": str(e)}
+                        while resolved.get("unreachable") and fallbacks and not job["stop_event"].is_set():
+                            channel, label = fallbacks.pop(0)
+                            set_note(f"Sunbiz still isn't loading — trying {label}…")
+                            try:
+                                new_browser = _launch_browser(p, channel)
+                            except Exception:
+                                continue  # that browser isn't installed on this PC
+                            try:
+                                browser.close()
+                            except Exception:
+                                pass
+                            browser = new_browser
+                            page = browser.new_page()
+                            with ENTITY_JOBS_LOCK:
+                                job["browser"] = label
+                            resolved = resolve(row)
+                    finally:
+                        llc_lookup.NAV_ATTEMPTS = 2
+                if resolved.get("unreachable"):
+                    with ENTITY_JOBS_LOCK:
+                        job["sunbiz_problem"] = _sunbiz_problem_message(detail, reachable, how)
+                        job["note"] = ""
+                    break
+            set_note("")
 
             skip_reason = resolved.get("skip_reason")
             candidates = [] if skip_reason else (resolved.get("candidates") or [
@@ -1135,11 +1149,21 @@ def upload():
             resolve_job = ENTITY_JOBS.pop(entity_resolve_job_id, None)
         if resolve_job:
             resolved_by_index = {r["index"]: r for r in resolve_job["results"]}
+            sunbiz_down = bool(resolve_job.get("sunbiz_problem"))
             for idx, row in enumerate(rows):
                 entry = resolved_by_index.get(idx)
                 if entry is not None and row.get("is_entity"):
                     row["_resolved_skip_reason"] = entry["skip_reason"]
                     row["_resolved_candidates"] = entry["candidates"] or None
+                elif sunbiz_down and row.get("is_entity"):
+                    # Sunbiz couldn't be reached minutes ago (build order
+                    # #204); trying it again live for every leftover LLC
+                    # would just hang ~45 seconds per row. Skip them with a
+                    # clear note so they can be re-run once Sunbiz works.
+                    row["_resolved_skip_reason"] = (
+                        "Not looked up — Sunbiz couldn't be reached when this batch started. "
+                        "Run this business again once sunbiz.org opens.")
+                    row["_resolved_candidates"] = None
 
     # Pre-upload CRM dedup (build order #158) -- must run BEFORE any job is
     # created, since a job's existence is what triggers the FOREWARN-login

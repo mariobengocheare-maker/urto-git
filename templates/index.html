@@ -3905,7 +3905,7 @@ async function pollEntityResolve() {
       const left = (data.total || 0) - (data.processed || 0);
       entityResolveCount.textContent = `Resolved ${data.processed} of ${data.total} — stopped because Sunbiz couldn't be opened.`;
       entityResolveProblemText.textContent = data.sunbiz_problem +
-        ` If you start the lookup anyway, the ${left} business${left === 1 ? '' : 'es'} not looked up yet will be tried again during the lookup.`;
+        ` If you start the lookup anyway, the ${left} business${left === 1 ? '' : 'es'} not looked up yet will show as SKIPPED (everyone else is searched normally) — run ${left === 1 ? 'it' : 'them'} again once Sunbiz works.`;
       entityResolveProblem.style.display = 'block';
       entityResolveConfirmBtn.textContent = '▶ Start Lookup anyway';
     } else {

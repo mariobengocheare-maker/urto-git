@@ -36,8 +36,35 @@ class SunbizUnreachable(Exception):
     (see build order #203)."""
 
 
-def open_sunbiz_page(page, url: str = SUNBIZ_SEARCH_URL, attempts: int = 2,
-                     timeout_ms: int = 25000) -> None:
+# How many tries each Sunbiz page load gets. The LLC batch job lowers this to
+# 1 while it's checking a fresh window / another browser, so a Sunbiz that
+# isn't answering is reported in about a minute instead of several.
+NAV_ATTEMPTS = 2
+
+_WAITING_PAGE = """<html><body style="margin:0;font-family:Segoe UI,Arial,sans-serif;background:#0b1530;color:#f5e6c4;
+display:flex;align-items:center;justify-content:center;height:100vh;text-align:center">
+<div><div style="font-size:22px;font-weight:600">URTO is opening Sunbiz&hellip; (try {n} of {total})</div>
+<div style="margin-top:10px;font-size:15px;color:#c9d3ea">If this page stays here, Sunbiz isn't answering.
+URTO will tell you why in the LLC box &mdash; you don't need to do anything in this window.</div></div></body></html>"""
+
+
+def _show_waiting_page(page, n: int, total: int) -> None:
+    """Puts a short message in the window while Sunbiz loads, instead of a
+    blank about:blank page (build order #204). The message stays visible
+    until Sunbiz actually answers, so a stuck load explains itself."""
+    try:
+        # A failed load leaves Chrome's own error page behind, and writing
+        # onto that page makes Chrome re-run the failed load, which then
+        # collides with our retry. Start from a clean blank page first.
+        if not (page.url or "").startswith("about:blank"):
+            page.goto("about:blank", timeout=5000)
+        page.set_content(_WAITING_PAGE.format(n=n, total=total), timeout=3000)
+    except Exception:
+        pass
+
+
+def open_sunbiz_page(page, url: str = SUNBIZ_SEARCH_URL, attempts: int = None,
+                     timeout_ms: int = 20000) -> None:
     """Navigates to a Sunbiz page and confirms the browser actually got
     there. Raises SunbizUnreachable after `attempts` tries.
 
@@ -47,14 +74,27 @@ def open_sunbiz_page(page, url: str = SUNBIZ_SEARCH_URL, attempts: int = 2,
     separate chance to finish loading. A plain 20-second timeout used to be
     the only attempt, and Mario hit a batch where every row failed with the
     Chromium window stuck on about:blank (see build order #203)."""
+    if attempts is None:
+        attempts = NAV_ATTEMPTS
     last = ""
     for i in range(max(1, attempts)):
+        _show_waiting_page(page, i + 1, max(1, attempts))
         try:
             page.goto(url, wait_until="commit", timeout=timeout_ms)
         except PWTimeoutError:
             last = f"Sunbiz didn't answer within {timeout_ms // 1000} seconds"
         except Exception as e:
             last = (str(e).strip().splitlines() or ["unknown error"])[0][:200]
+            if "interrupted by another navigation" in last:
+                # Chrome re-tried the same page on its own (its error page
+                # auto-reloads). Give that load a moment and accept it if it
+                # really reached Sunbiz.
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                except Exception:
+                    pass
+                if "sunbiz" in (page.url or "").lower() and (page.url or "").startswith("http"):
+                    return
         else:
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=20000)
@@ -65,11 +105,11 @@ def open_sunbiz_page(page, url: str = SUNBIZ_SEARCH_URL, attempts: int = 2,
                 return
             last = f"the window stayed on {current or 'a blank page'}"
         if i < attempts - 1:
-            time.sleep(4 + 4 * i)
+            time.sleep(4)
     raise SunbizUnreachable(last or "Sunbiz didn't load")
 
 
-def check_sunbiz_reachable(timeout: float = 15) -> tuple:
+def check_sunbiz_reachable(timeout: float = 12) -> tuple:
     """Asks Sunbiz for its search page straight from Python, outside any
     browser. Tells apart "Sunbiz is down / not answering this PC" from
     "this PC can reach Sunbiz, only the automation browser can't". Returns
