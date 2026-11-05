@@ -4748,20 +4748,44 @@ if (!HOSTED) {
   refreshOfflineBanner();
   setInterval(refreshOfflineBanner, 10000);
 
+  const updateBanner = (text, bg) => {
+    let b = document.getElementById('urtoUpdateBanner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'urtoUpdateBanner';
+      b.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:9999; padding:10px 16px; text-align:center; font-size:.9em; color:#0b1220; font-weight:600;';
+      document.body.appendChild(b);
+    }
+    b.style.background = bg || 'var(--gold)';
+    b.textContent = text;
+    return b;
+  };
+  const showUpdateLog = async (prefix) => {
+    let tail = '';
+    try {
+      const r = await fetch('/api/update_log', { cache: 'no-store' });
+      const d = await r.json();
+      tail = (d.lines || []).filter(l => l.trim()).slice(-4).join(' | ');
+    } catch (e) {}
+    updateBanner(`${prefix}${tail ? ' Last update log: ' + tail : ''}`, '#ffb4a8');
+  };
   fetch('/api/check_update', { method: 'POST' }).then(r => r.json()).then(data => {
-    if (!data || !data.update_available) return;
-    const banner = document.createElement('div');
-    banner.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:9999; padding:10px 16px; text-align:center; font-size:.9em; background:var(--gold); color:#0b1220; font-weight:600;';
-    banner.textContent = `🔄 Updating URTO to v${data.version}... this page will reload automatically.`;
-    document.body.appendChild(banner);
+    if (!data) return;
+    if (data.deferred) {
+      updateBanner(`⏸ URTO v${data.version} is ready, but a lookup is running — it will update on the first refresh after the lookup finishes.`);
+      return;
+    }
+    if (data.spawn_failed) { showUpdateLog(`⚠ URTO v${data.version} is available but couldn't start the update (${data.spawn_failed}).`); return; }
+    if (!data.update_available) return;
+    updateBanner(`🔄 Updating URTO to v${data.version}... this page will reload automatically.`);
     let sawServerDown = false;
     let attempts = 0;
     const poll = () => {
       attempts++;
-      if (attempts > 90) { banner.textContent = 'Taking longer than expected — try reloading the page yourself.'; return; }
-      fetch('/api/version', { cache: 'no-store' }).then(r => {
-        if (!r.ok) { sawServerDown = true; setTimeout(poll, 1000); return; }
-        if (sawServerDown) { location.reload(); return; }
+      if (attempts > 90) { showUpdateLog('⚠ The update didn\'t finish — the old version is still running. Close URTO from Task Manager (end pythonw.exe) and reopen it, or reload the page.'); return; }
+      fetch('/api/version', { cache: 'no-store' }).then(r => r.json().then(v => ({ ok: r.ok, v }))).then(({ ok, v }) => {
+        if (!ok) { sawServerDown = true; setTimeout(poll, 1000); return; }
+        if (sawServerDown || (v && v.version === data.version)) { location.reload(); return; }
         setTimeout(poll, 1000);
       }).catch(() => { sawServerDown = true; setTimeout(poll, 1000); });
     };

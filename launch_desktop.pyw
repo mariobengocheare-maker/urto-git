@@ -101,7 +101,13 @@ def _remote_version():
     shape) — an update check must never be able to block Mario from simply
     opening the app."""
     try:
-        with urllib.request.urlopen(REPO_RAW_APP_URL, timeout=6) as r:
+        # Unique query string + no-cache: GitHub's raw file cache can hold
+        # the old version number for minutes after a push.
+        req = urllib.request.Request(
+            f"{REPO_RAW_APP_URL}?t={int(time.time())}",
+            headers={"Cache-Control": "no-cache", "Pragma": "no-cache", "User-Agent": "URTO"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
             text = r.read().decode("utf-8", errors="replace")
         m = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', text)
         return m.group(1) if m else None
@@ -148,6 +154,17 @@ def check_for_auto_update():
         # notifications. Never let a failed auto-update block a normal
         # launch either way.
         _log_update_bootstrap_failure(installed, remote, e)
+
+
+def _append_update_log(message):
+    try:
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        base = os.path.join(local_appdata, "URTO") if local_appdata else HERE
+        os.makedirs(base, exist_ok=True)
+        with open(os.path.join(base, "update_log.txt"), "a", encoding="utf-8") as f:
+            f.write(f"\n--- {datetime.datetime.now().astimezone().isoformat()} ---\n{message}\n")
+    except Exception:
+        pass
 
 
 def _log_update_bootstrap_failure(installed, remote, exc):
@@ -213,7 +230,9 @@ def relaunch_after_update():
     deliberately never opens a browser tab -- Mario's existing tab is
     already polling /api/version waiting for the server to come back, and
     will reload itself the instant it does."""
+    _append_update_log(f"Refresh-triggered update started (installed {_installed_version()}).")
     check_for_auto_update()
+    _append_update_log(f"Refresh-triggered update finished (installed now {_installed_version()}).")
     if not is_up():
         start_server()
         for _ in range(30):

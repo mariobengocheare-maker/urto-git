@@ -113,7 +113,7 @@ def hosted_setup():
     )
 
 
-_UNGATED_ENDPOINTS = {"hosted_setup", "static", "heartbeat", "shutdown", "api_version", "api_check_update"}
+_UNGATED_ENDPOINTS = {"hosted_setup", "static", "heartbeat", "shutdown", "api_version", "api_check_update", "api_update_log"}
 
 
 @app.before_request
@@ -135,7 +135,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.80.0"
+APP_VERSION = "2.80.1"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -901,12 +901,38 @@ def _remote_app_version():
     of lines. Returns None on any failure (no internet, GitHub hiccup) —
     an update check must never be able to break a normal page load."""
     try:
-        with urllib.request.urlopen(REPO_RAW_APP_URL, timeout=6) as r:
+        # raw.githubusercontent.com keeps its own cached copy of a file for
+        # several minutes after a push, so a plain fetch right after an
+        # update can still answer with the OLD version number. A unique
+        # query string plus no-cache headers asks for the live file.
+        req = urllib.request.Request(
+            f"{REPO_RAW_APP_URL}?t={int(time.time())}",
+            headers={"Cache-Control": "no-cache", "Pragma": "no-cache", "User-Agent": "URTO"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
             text = r.read().decode("utf-8", errors="replace")
         m = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', text)
         return m.group(1) if m else None
     except Exception:
         return None
+
+
+def _update_log_path():
+    base = os.environ.get("LOCALAPPDATA")
+    folder = os.path.join(base, "URTO") if base else os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(folder, "update_log.txt")
+
+
+@app.route("/api/update_log")
+def api_update_log():
+    """Last lines of the update log, so a refresh-update that didn't work can
+    say why on screen instead of needing Mario to go find a file."""
+    try:
+        with open(_update_log_path(), encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+        return jsonify({"lines": lines[-12:]})
+    except OSError:
+        return jsonify({"lines": []})
 
 
 @app.route("/api/check_update", methods=["POST"])
@@ -932,11 +958,13 @@ def api_check_update():
     file the way Stop-button/heartbeat-timeout shutdowns already take care
     to do; the next page load after the scrape finishes will pick the
     update back up."""
-    if _job_in_progress():
-        return jsonify({"update_available": False, "deferred": True})
     remote = _remote_app_version()
-    if not remote or remote == APP_VERSION:
+    if not remote:
+        return jsonify({"update_available": False, "check_failed": True})
+    if remote == APP_VERSION:
         return jsonify({"update_available": False})
+    if _job_in_progress():
+        return jsonify({"update_available": False, "deferred": True, "version": remote})
     here = os.path.dirname(os.path.abspath(__file__))
     creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
@@ -945,8 +973,8 @@ def api_check_update():
             cwd=here, creationflags=creationflags,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
-    except Exception:
-        return jsonify({"update_available": False})
+    except Exception as e:
+        return jsonify({"update_available": False, "spawn_failed": str(e), "version": remote})
     return jsonify({"update_available": True, "version": remote})
 
 
