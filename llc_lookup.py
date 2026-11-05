@@ -111,16 +111,42 @@ def open_sunbiz_page(page, url: str = SUNBIZ_SEARCH_URL, attempts: int = None,
 
 def check_sunbiz_reachable(timeout: float = 12) -> tuple:
     """Asks Sunbiz for its search page straight from Python, outside any
-    browser. Tells apart "Sunbiz is down / not answering this PC" from
-    "this PC can reach Sunbiz, only the automation browser can't". Returns
-    (reachable: bool, detail: str)."""
+    browser, and says what kind of answer came back. Returns
+    (status, detail), status one of:
+      "ok"          - Sunbiz served a normal page (2xx/3xx)
+      "blocked"     - Sunbiz/Cloudflare refused this connection outright
+                      (a block page, a rate-limit page, or a 403/429 that
+                      isn't a challenge)
+      "challenge"   - Cloudflare's "Just a moment" check (a real browser can
+                      sometimes get past it, Python never can)
+      "unreachable" - no answer at all (down, or this PC's connection)
+    An answer is NOT the same as access: Mario's real case (build order
+    #205) was an HTTP 403, which the old version wrongly reported as "this
+    PC can reach Sunbiz"."""
     try:
         import requests
         resp = requests.get(SUNBIZ_SEARCH_URL, timeout=timeout,
                             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-        return True, f"HTTP {resp.status_code}"
     except Exception as e:
-        return False, (str(e).strip().splitlines() or ["no answer"])[0][:200]
+        return "unreachable", (str(e).strip().splitlines() or ["no answer"])[0][:200]
+    code = resp.status_code
+    body = (resp.text or "")[:6000].lower()
+    title = ""
+    m = re.search(r"<title>(.*?)</title>", body, re.S)
+    if m:
+        title = re.sub(r"\s+", " ", m.group(1)).strip()[:80]
+    detail = f"HTTP {code}" + (f", page title '{title}'" if title else "")
+    if code < 400:
+        return "ok", detail
+    if any(k in body for k in ("you have been blocked", "access denied", "error code: 1020",
+                               "error code: 1015", "rate limited", "you are being rate limited")) or code == 429:
+        return "blocked", detail
+    if any(k in body for k in ("just a moment", "challenge-platform", "cf-chl", "checking your browser",
+                               "verify you are human")):
+        return "challenge", detail
+    if code in (401, 403):
+        return "blocked", detail
+    return "unreachable", detail
 
 # Sunbiz sits behind Cloudflare, which can serve a "Just a moment..." bot-
 # check interstitial instead of the real page — confirmed live (see build

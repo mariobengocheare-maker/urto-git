@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import threading
+import random
 import time
 import urllib.request
 import uuid
@@ -134,7 +135,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.78.2"
+APP_VERSION = "2.78.3"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -642,21 +643,31 @@ def _launch_browser(p, channel=None):
     return p.chromium.launch(**kwargs)
 
 
-def _sunbiz_problem_message(detail, reachable, how):
+def _sunbiz_problem_message(detail, status, how):
     """Plain-English explanation shown in the LLC-owner box when Sunbiz
-    couldn't be opened. `reachable`/`how` come from check_sunbiz_reachable()
+    couldn't be opened. `status`/`how` come from check_sunbiz_reachable()
     (Python asking Sunbiz directly, outside any browser)."""
-    if reachable:
-        return (f"Sunbiz wouldn't load in the lookup window ({detail}), even though this PC can reach "
-                f"Sunbiz ({how}). Something on this PC may be blocking the automated browser (antivirus "
-                f"or firewall), or Sunbiz is slowing it down after many searches. Wait a few minutes "
-                f"and click Try again.")
-    return (f"Sunbiz isn't answering this PC's internet connection at all right now ({how}) — this "
-            f"isn't the lookup window, URTO itself couldn't reach Sunbiz either. Open sunbiz.org in your "
-            f"normal browser: if it doesn't load there either, Sunbiz is down or is blocking this internet "
-            f"connection for a while (it does this after a lot of searches). Try again in a few hours, or "
-            f"on a different connection (your phone's hotspot). If it DOES load in your normal browser, "
-            f"click Try again.")
+    check = ("Open search.sunbiz.org in your normal Chrome to see the same thing yourself.")
+    if status == "blocked":
+        return (f"Sunbiz is refusing this internet connection right now ({how} — that means access denied). "
+                f"Sunbiz's security service does this after a lot of automated searches in a short time. "
+                f"It isn't something URTO or your PC can click past. {check} If it's blocked there too, "
+                f"wait a few hours (sometimes until tomorrow) or run the LLCs on a different connection, "
+                f"like your phone's hotspot. In the meantime, Start Lookup anyway still searches everyone "
+                f"who isn't an LLC.")
+    if status == "challenge":
+        return (f"Sunbiz's security check is stopping the lookup window ({how}). {check} If you get a "
+                f"\"verify you are human\" page there, click it once, wait a few minutes, then click Try "
+                f"again here. If it keeps happening, Sunbiz is limiting this connection after many "
+                f"searches — try again in a few hours or on your phone's hotspot.")
+    if status == "ok":
+        return (f"Sunbiz wouldn't load in the lookup window ({detail}), even though URTO can reach "
+                f"Sunbiz directly ({how}). Something on this PC may be blocking the automated browser "
+                f"(antivirus or firewall). Wait a few minutes and click Try again.")
+    return (f"Sunbiz isn't answering this PC's internet connection at all right now ({how}). {check} "
+            f"If it doesn't load there either, Sunbiz is down or blocking this connection — try again "
+            f"in a few hours, or on a different connection (your phone's hotspot). If it DOES load in "
+            f"your normal browser, click Try again.")
 
 
 def resolve_entities_job(job_id, rows, entity_indices):
@@ -703,9 +714,14 @@ def resolve_entities_job(job_id, rows, entity_indices):
             except Exception as e:
                 return {"skip_reason": f"Error while resolving via Sunbiz: {e}"}
 
-        for idx in entity_indices:
+        for n_done, idx in enumerate(entity_indices):
             if job["stop_event"].is_set():
                 break
+            if n_done:
+                # A short, uneven pause between businesses, so a batch looks
+                # less like a bot to Sunbiz's security service and is less
+                # likely to get this connection blocked (build order #205).
+                time.sleep(random.uniform(2.0, 4.5))
             row = rows[idx]
             entity_name = row.get("entity_name", "")
             resolved = resolve(row)
@@ -718,14 +734,17 @@ def resolve_entities_job(job_id, rows, entity_indices):
                 # instead of making Mario watch more blank windows (build
                 # order #204).
                 set_note("Sunbiz isn't loading — checking whether this PC can reach Sunbiz at all…")
-                reachable, how = check_sunbiz_reachable()
-                if reachable:
+                status, how = check_sunbiz_reachable()
+                # Only worth trying other browsers when Sunbiz isn't flatly
+                # refusing this connection: a real Chrome/Edge can sometimes
+                # get past Cloudflare's check, nothing gets past a block.
+                if status in ("ok", "challenge"):
                     # The PC can reach Sunbiz, so the problem is this browser
                     # window. Try a fresh window, then Chrome, then Edge, one
                     # quick try each.
                     llc_lookup.NAV_ATTEMPTS = 1
                     try:
-                        set_note("This PC can reach Sunbiz — retrying in a fresh window…")
+                        set_note("Retrying Sunbiz in a fresh window…")
                         try:
                             page.close()
                         except Exception:
@@ -755,7 +774,7 @@ def resolve_entities_job(job_id, rows, entity_indices):
                         llc_lookup.NAV_ATTEMPTS = 2
                 if resolved.get("unreachable"):
                     with ENTITY_JOBS_LOCK:
-                        job["sunbiz_problem"] = _sunbiz_problem_message(detail, reachable, how)
+                        job["sunbiz_problem"] = _sunbiz_problem_message(detail, status, how)
                         job["note"] = ""
                     break
             set_note("")
