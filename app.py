@@ -135,7 +135,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.80.2"
+APP_VERSION = "2.80.3"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -574,13 +574,75 @@ _skiptrace_done_lock = threading.Lock()
 SKIPTRACE_DONE_STATUSES = ("FOUND", "NOT_FOUND")
 
 
-def _load_skiptrace_done() -> dict:
+_seeded_outputs = {}  # result-file path -> mtime already folded into the memory
+
+
+def _seed_done_from_outputs(data: dict) -> bool:
+    """Lookups run BEFORE the "already searched" memory existed (or before it
+    could save a row) still left a result CSV in outputs/. Fold every FOUND /
+    NOT_FOUND row from those files into the memory, so rows searched in any
+    earlier run are never searched again. Returns True if anything was added."""
+    changed = False
+    try:
+        files = list(OUTPUT_DIR.glob("*.csv"))
+    except OSError:
+        return False
+    for path in files:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if _seeded_outputs.get(str(path)) == mtime:
+            continue
+        try:
+            with open(path, "r", encoding="utf-8-sig", newline="") as f:
+                out_rows = list(csv.DictReader(f))
+        except OSError:
+            continue
+        stamp = datetime.fromtimestamp(mtime, ZoneInfo("America/New_York")).isoformat(timespec="seconds")
+        for r in out_rows:
+            status = (r.get("status") or "").strip()
+            if status not in SKIPTRACE_DONE_STATUSES:
+                continue
+            owner = (r.get("owner") or "").strip()
+            parts = owner.split()
+            candidates = []
+            if len(parts) >= 2:
+                candidates.append(row_fingerprint({
+                    "address": r.get("address", ""), "zip": r.get("zip", ""),
+                    "first_name": " ".join(parts[:-1]), "last_name": parts[-1], "is_entity": False}))
+            raw = (r.get("input_owner_name") or "").strip()
+            if raw:
+                candidates.append(row_fingerprint({
+                    "address": r.get("address", ""), "zip": r.get("zip", ""),
+                    "entity_name": raw, "is_entity": True}))
+            for fp in candidates:
+                if fp and fp not in data:
+                    data[fp] = {"status": status, "at": stamp}
+                    changed = True
+        _seeded_outputs[str(path)] = mtime
+    return changed
+
+
+def _load_skiptrace_done(seed=True) -> dict:
     try:
         with open(SKIPTRACE_DONE_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        data = data if isinstance(data, dict) else {}
     except (OSError, ValueError):
-        return {}
+        data = {}
+    if seed:
+        with _skiptrace_done_lock:
+            if _seed_done_from_outputs(data):
+                try:
+                    SKIPTRACE_DONE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = SKIPTRACE_DONE_PATH.with_suffix(".tmp")
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(data, f)
+                    os.replace(tmp, SKIPTRACE_DONE_PATH)
+                except OSError:
+                    pass
+    return data
 
 
 def _record_skiptrace_done(fp, status):
@@ -589,7 +651,7 @@ def _record_skiptrace_done(fp, status):
     if not fp or status not in SKIPTRACE_DONE_STATUSES:
         return
     with _skiptrace_done_lock:
-        data = _load_skiptrace_done()
+        data = _load_skiptrace_done(seed=False)
         data[fp] = {"status": status, "at": datetime.now(ZoneInfo("America/New_York")).isoformat(timespec="seconds")}
         try:
             SKIPTRACE_DONE_PATH.parent.mkdir(parents=True, exist_ok=True)
