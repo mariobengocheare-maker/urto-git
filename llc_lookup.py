@@ -27,6 +27,61 @@ from playwright.sync_api import TimeoutError as PWTimeoutError
 
 SUNBIZ_SEARCH_URL = "https://search.sunbiz.org/Inquiry/CorporationSearch/ByName"
 
+
+class SunbizUnreachable(Exception):
+    """The browser couldn't open Sunbiz at all — the window sat on a blank
+    page (about:blank) or the connection failed outright. Different from
+    "Sunbiz answered but had no match": nothing about the entity itself is
+    known yet, so the row should be retried, not reported as a real miss
+    (see build order #203)."""
+
+
+def open_sunbiz_page(page, url: str = SUNBIZ_SEARCH_URL, attempts: int = 2,
+                     timeout_ms: int = 25000) -> None:
+    """Navigates to a Sunbiz page and confirms the browser actually got
+    there. Raises SunbizUnreachable after `attempts` tries.
+
+    Waits only for the server's first response ("commit") instead of the
+    whole page, so one slow image or script can't make a page that already
+    loaded count as a failure; the page's own content is then given its own
+    separate chance to finish loading. A plain 20-second timeout used to be
+    the only attempt, and Mario hit a batch where every row failed with the
+    Chromium window stuck on about:blank (see build order #203)."""
+    last = ""
+    for i in range(max(1, attempts)):
+        try:
+            page.goto(url, wait_until="commit", timeout=timeout_ms)
+        except PWTimeoutError:
+            last = f"Sunbiz didn't answer within {timeout_ms // 1000} seconds"
+        except Exception as e:
+            last = (str(e).strip().splitlines() or ["unknown error"])[0][:200]
+        else:
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=20000)
+            except PWTimeoutError:
+                pass
+            current = page.url or ""
+            if current.startswith("http") and "sunbiz" in current.lower():
+                return
+            last = f"the window stayed on {current or 'a blank page'}"
+        if i < attempts - 1:
+            time.sleep(4 + 4 * i)
+    raise SunbizUnreachable(last or "Sunbiz didn't load")
+
+
+def check_sunbiz_reachable(timeout: float = 15) -> tuple:
+    """Asks Sunbiz for its search page straight from Python, outside any
+    browser. Tells apart "Sunbiz is down / not answering this PC" from
+    "this PC can reach Sunbiz, only the automation browser can't". Returns
+    (reachable: bool, detail: str)."""
+    try:
+        import requests
+        resp = requests.get(SUNBIZ_SEARCH_URL, timeout=timeout,
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        return True, f"HTTP {resp.status_code}"
+    except Exception as e:
+        return False, (str(e).strip().splitlines() or ["no answer"])[0][:200]
+
 # Sunbiz sits behind Cloudflare, which can serve a "Just a moment..." bot-
 # check interstitial instead of the real page — confirmed live (see build
 # order #150, a real skip Mario hit reading exactly this page's title/body).
@@ -394,7 +449,11 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
     """
     visited = _visited if _visited is not None else set()
     try:
-        page.goto(SUNBIZ_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
+        try:
+            open_sunbiz_page(page)
+        except SunbizUnreachable as e:
+            return {"first_name": "", "last_name": "", "resolved_via": "", "unreachable": True,
+                    "skip_reason": f"Couldn't open Sunbiz ({e}) — this row will be tried again"}
 
         # A slow client-side render (not just the initial HTML) could still
         # be filling in the search form after domcontentloaded fires — give
@@ -708,7 +767,7 @@ def _navigate_to_officer_search_page(page) -> bool:
     anything, in which case the caller falls back to the old guessed URL
     as a last resort."""
     try:
-        page.goto(SUNBIZ_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
+        open_sunbiz_page(page)
         try:
             page.wait_for_load_state("networkidle", timeout=8000)
         except PWTimeoutError:
@@ -749,7 +808,7 @@ def _officer_search_attempt(page, first_name: str, last_name: str, debug: bool =
         if not _navigate_to_officer_search_page(page):
             # Last resort -- the old guessed URL, kept in case some Sunbiz
             # deployment/path variant actually does serve it correctly.
-            page.goto(SUNBIZ_OFFICER_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
+            open_sunbiz_page(page, SUNBIZ_OFFICER_SEARCH_URL, attempts=1)
             try:
                 page.wait_for_load_state("networkidle", timeout=8000)
             except PWTimeoutError:

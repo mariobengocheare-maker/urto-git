@@ -3531,6 +3531,11 @@
     </p>
     <p class="sub" id="entityResolveCount" style="font-weight:600;">Starting…</p>
     <div class="entity-resolve-track"><div class="bt-fill" id="entityResolveFill"></div></div>
+    <p class="sub" id="entityResolveNote" style="display:none; color:var(--gold-bright, #f5d27a);"></p>
+    <div id="entityResolveProblem" style="display:none; margin:8px 0; padding:10px 12px; border:1px solid rgba(255,107,107,0.55); background:rgba(255,107,107,0.10); border-radius:10px; color:#ffd2d2;">
+      <div id="entityResolveProblemText"></div>
+      <button type="button" id="entityResolveRetryBtn" style="margin-top:8px;">🔄 Try again</button>
+    </div>
     <div id="entityResolveList" class="cl-member-box" style="max-height:380px; padding:0; display:none;">
       <table class="name-preview-table">
         <thead><tr><th>Business</th><th>Resolved to</th><th>Zip / Address</th></tr></thead>
@@ -3808,6 +3813,9 @@ const entityResolveList = document.getElementById('entityResolveList');
 const entityResolveBody = document.getElementById('entityResolveBody');
 const entityResolveConfirmBtn = document.getElementById('entityResolveConfirmBtn');
 const entityResolveCancelBtn = document.getElementById('entityResolveCancelBtn');
+const entityResolveNote = document.getElementById('entityResolveNote');
+const entityResolveProblem = document.getElementById('entityResolveProblem');
+const entityResolveProblemText = document.getElementById('entityResolveProblemText');
 let entityResolveJobId = null;
 let entityResolvePollTimer = null;
 let entityResolvePendingSwaps = [];
@@ -3885,13 +3893,26 @@ async function pollEntityResolve() {
   }
   const finished = data.status === 'done' || data.status === 'stopped' || data.status === 'error';
   updateEntityResolveProgress(data.processed || 0, data.total || 0, finished);
+  // While Sunbiz won't load, the server retries in a fresh window and then
+  // in Chrome/Edge (build order #203) -- say so instead of looking frozen.
+  entityResolveNote.textContent = data.note || '';
+  entityResolveNote.style.display = (data.note && !finished) ? 'block' : 'none';
   if (finished) {
     clearInterval(entityResolvePollTimer);
     entityResolvePollTimer = null;
     entityResolveDone = true;
-    entityResolveCount.textContent = data.status === 'error'
-      ? `Resolved ${data.processed} of ${data.total} before hitting an error (${data.error || 'unknown'}) — you can still continue, anything unresolved will show as SKIPPED.`
-      : `Resolved ${data.processed} of ${data.total}. Do these look right?`;
+    if (data.sunbiz_problem) {
+      const left = (data.total || 0) - (data.processed || 0);
+      entityResolveCount.textContent = `Resolved ${data.processed} of ${data.total} — stopped because Sunbiz couldn't be opened.`;
+      entityResolveProblemText.textContent = data.sunbiz_problem +
+        ` If you start the lookup anyway, the ${left} business${left === 1 ? '' : 'es'} not looked up yet will be tried again during the lookup.`;
+      entityResolveProblem.style.display = 'block';
+      entityResolveConfirmBtn.textContent = '▶ Start Lookup anyway';
+    } else {
+      entityResolveCount.textContent = data.status === 'error'
+        ? `Resolved ${data.processed} of ${data.total} before hitting an error (${data.error || 'unknown'}) — you can still continue, anything unresolved will show as SKIPPED.`
+        : `Resolved ${data.processed} of ${data.total}. Do these look right?`;
+    }
     entityResolveConfirmBtn.style.display = 'inline-block';
   } else {
     entityResolveCount.textContent = `Resolved ${data.processed} of ${data.total}…`;
@@ -3925,6 +3946,9 @@ async function startEntityResolve(swappedIndices) {
   entityResolveList.style.display = 'none';
   entityResolveBody.innerHTML = '';
   entityResolveConfirmBtn.style.display = 'none';
+  entityResolveConfirmBtn.textContent = '✅ Looks good — Start Lookup';
+  entityResolveProblem.style.display = 'none';
+  entityResolveNote.style.display = 'none';
   updateEntityResolveProgress(0, data.total, false);
   reopenEntityResolve();
   pollEntityResolve();
@@ -3946,6 +3970,17 @@ entityResolveOverlay.addEventListener('click', (e) => {
   if (e.target === entityResolveOverlay) minimizeEntityResolve();
 });
 entityResolvePill.addEventListener('click', reopenEntityResolve);
+// Sunbiz couldn't be opened (build order #203): run the whole LLC lookup
+// again on the same file, with the same name swaps.
+document.getElementById('entityResolveRetryBtn').addEventListener('click', () => {
+  if (entityResolveFile) selectedFile = entityResolveFile;
+  const swaps = entityResolvePendingSwaps;
+  if (entityResolvePollTimer) { clearInterval(entityResolvePollTimer); entityResolvePollTimer = null; }
+  entityResolveJobId = null;
+  entityResolveCount.textContent = 'Starting again…';
+  entityResolveProblem.style.display = 'none';
+  startEntityResolve(swaps);
+});
 entityResolveConfirmBtn.addEventListener('click', () => {
   entityResolveOverlay.classList.remove('show');
   entityResolvePill.style.display = 'none';

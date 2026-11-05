@@ -134,7 +134,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.78.0"
+APP_VERSION = "2.78.1"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -572,7 +572,7 @@ def run_job(job_id, rows):
     job["output_path"] = str(output_path)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = _launch_browser(p)
         page = browser.new_page()
         page.goto(FOREWARN_SEARCH_URL, wait_until="domcontentloaded")
 
@@ -624,6 +624,40 @@ def run_job_safe(job_id, rows):
         JOBS[job_id]["error"] = str(e)
 
 
+# Browsers the LLC-owner lookup can fall back to when Sunbiz won't load in
+# Playwright's own bundled Chromium (see build order #203). "chrome" is
+# Mario's real Google Chrome if installed; "msedge" ships with every
+# Windows 10/11 PC. Either one is a separate, fresh window with its own
+# empty profile -- it never touches his normal browser's tabs or logins.
+SUNBIZ_FALLBACK_CHANNELS = [("chrome", "Google Chrome"), ("msedge", "Microsoft Edge")]
+
+
+def _launch_browser(p, channel=None):
+    """Opens a visible browser window for Skip Trace. Turns off the one
+    automation flag sites like Sunbiz's Cloudflare check most easily, which
+    changes nothing about how the page behaves for us."""
+    kwargs = {"headless": False, "args": ["--disable-blink-features=AutomationControlled"]}
+    if channel:
+        kwargs["channel"] = channel
+    return p.chromium.launch(**kwargs)
+
+
+def _sunbiz_problem_message(detail):
+    """Plain-English explanation shown in the LLC-owner box when Sunbiz
+    couldn't be opened in any browser. Checks from Python, outside the
+    browser, whether this PC can reach Sunbiz at all."""
+    from llc_lookup import check_sunbiz_reachable
+    reachable, how = check_sunbiz_reachable()
+    if reachable:
+        return (f"Sunbiz wouldn't load in the lookup window ({detail}), even though this PC can reach "
+                f"Sunbiz ({how}). Something on this PC may be blocking the automated browser (antivirus "
+                f"or firewall), or Sunbiz is slowing it down after many searches. Wait a few minutes "
+                f"and click Try again.")
+    return (f"Sunbiz isn't answering this PC right now ({how}). Its site may be down or temporarily "
+            f"blocking this connection after many searches. Check that sunbiz.org opens in your normal "
+            f"browser, wait a few minutes, then click Try again.")
+
+
 def resolve_entities_job(job_id, rows, entity_indices):
     """Resolves every LLC/entity row's real person via Sunbiz up front, all
     in one pass, BEFORE any FOREWARN search or login ever happens — see
@@ -635,32 +669,88 @@ def resolve_entities_job(job_id, rows, entity_indices):
     function never calls it), and reuses the exact same shared-page Sunbiz
     automation `process_row()` normally calls live, per row, during the real
     run — the only difference is WHEN it runs and that the result gets shown
-    to Mario for approval first instead of being spent immediately."""
+    to Mario for approval first instead of being spent immediately.
+
+    If Sunbiz won't open at all (build order #203: the window sat on
+    about:blank and every row failed), it tries a fresh window, then Google
+    Chrome, then Microsoft Edge. If none of them can open Sunbiz, the batch
+    stops there with a plain explanation (`sunbiz_problem`) instead of
+    marking every remaining business as failed, and the rows it didn't get
+    to are simply left for a retry."""
     from playwright.sync_api import sync_playwright
     from llc_lookup import resolve_entity_owner
 
     job = ENTITY_JOBS[job_id]
+
+    def set_note(text):
+        with ENTITY_JOBS_LOCK:
+            job["note"] = text
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = _launch_browser(p)
         page = browser.new_page()
         with ENTITY_JOBS_LOCK:
             job["status"] = "running"
+            job["browser"] = "Chromium"
+        fallbacks = list(SUNBIZ_FALLBACK_CHANNELS)
+
+        def resolve(idx_row):
+            try:
+                return resolve_entity_owner(page, idx_row.get("entity_name", ""))
+            except Exception as e:
+                return {"skip_reason": f"Error while resolving via Sunbiz: {e}"}
 
         for idx in entity_indices:
             if job["stop_event"].is_set():
                 break
             row = rows[idx]
             entity_name = row.get("entity_name", "")
-            try:
-                resolved = resolve_entity_owner(page, entity_name)
-                skip_reason = resolved.get("skip_reason")
-                candidates = [] if skip_reason else (resolved.get("candidates") or [
-                    {"first_name": resolved.get("first_name", ""), "last_name": resolved.get("last_name", ""),
-                     "resolved_via": resolved.get("resolved_via", "")}
-                ])
-            except Exception as e:
-                skip_reason = f"Error while resolving via Sunbiz: {e}"
-                candidates = []
+            resolved = resolve(row)
+
+            if resolved.get("unreachable"):
+                # Sunbiz never loaded. Try a fresh window first, then the
+                # other installed browsers, before giving up on the batch.
+                set_note("Sunbiz isn't loading — retrying in a fresh window…")
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                try:
+                    page = browser.new_page()
+                    resolved = resolve(row)
+                except Exception as e:
+                    resolved = {"unreachable": True, "skip_reason": str(e)}
+                while resolved.get("unreachable") and fallbacks and not job["stop_event"].is_set():
+                    channel, label = fallbacks.pop(0)
+                    set_note(f"Sunbiz still isn't loading — trying {label}…")
+                    try:
+                        new_browser = _launch_browser(p, channel)
+                    except Exception:
+                        continue  # that browser isn't installed on this PC
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                    browser = new_browser
+                    page = browser.new_page()
+                    with ENTITY_JOBS_LOCK:
+                        job["browser"] = label
+                    resolved = resolve(row)
+                set_note("")
+
+            if resolved.get("unreachable"):
+                detail = resolved.get("skip_reason", "")
+                detail = detail.replace("Couldn't open Sunbiz (", "").split(") — this row")[0]
+                message = _sunbiz_problem_message(detail)
+                with ENTITY_JOBS_LOCK:
+                    job["sunbiz_problem"] = message
+                break
+
+            skip_reason = resolved.get("skip_reason")
+            candidates = [] if skip_reason else (resolved.get("candidates") or [
+                {"first_name": resolved.get("first_name", ""), "last_name": resolved.get("last_name", ""),
+                 "resolved_via": resolved.get("resolved_via", "")}
+            ])
 
             with ENTITY_JOBS_LOCK:
                 job["results"].append({
@@ -671,7 +761,10 @@ def resolve_entities_job(job_id, rows, entity_indices):
                 })
                 job["processed"] += 1
 
-        browser.close()
+        try:
+            browser.close()
+        except Exception:
+            pass
 
     with ENTITY_JOBS_LOCK:
         job["status"] = "stopped" if job["stop_event"].is_set() else "done"
@@ -933,6 +1026,9 @@ def resolve_entities():
             "stop_event": threading.Event(),
             "error": None,
             "created_at": time.time(),
+            "note": "",
+            "sunbiz_problem": None,
+            "browser": "",
         }
 
     thread = threading.Thread(target=resolve_entities_job_safe, args=(job_id, rows, entity_indices), daemon=True)
@@ -953,6 +1049,9 @@ def resolve_entities_status(job_id):
             "processed": job["processed"],
             "results": job["results"],
             "error": job["error"],
+            "note": job.get("note", ""),
+            "sunbiz_problem": job.get("sunbiz_problem"),
+            "browser": job.get("browser", ""),
         })
 
 
