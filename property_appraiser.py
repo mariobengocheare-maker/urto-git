@@ -230,12 +230,25 @@ def _click_search_icon(page) -> bool:
 _NO_RESULTS_RE = re.compile(r"no\s+(results|records|properties|matches)|0\s+results|not\s+found", re.IGNORECASE)
 
 
+# The REAL owner-search results page (seen in Mario's screenshot, build order
+# #212) is a list of entries shaped like:
+#   "Exact match not found for search criteria entered.  1 possible match(es)
+#    are listed below. Click on the Folio number to view property details.
+#    1 FOLIO:30-6924-009-0180 SUB-DIVISION: GOLDEN PARK OWNER: DOORS 2 HEAVEN
+#    LLC PROP. ADDR:23380 SW 119 AVE UNINCORPORATED COUNTY"
+# -- a street and a municipality, with no "FL" and no zip. The zip is only on
+# the property's own page, reached by clicking the folio number.
+_LIST_RESULT_RE = re.compile(
+    r"FOLIO:\s*(?P<folio>[\d-]+)\s*SUB-?\s*DIVISION:\s*(?P<sub>.*?)\s*OWNER:\s*(?P<owner>.*?)\s*"
+    r"PROP\.?\s*ADDR:\s*(?P<addr>.*?)(?=\s*(?:\d+\s+)?FOLIO:|\s*The information contained|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _extract_results(page) -> list:
-    """Returns every address-shaped block of text found on the results
-    page, each tagged with a chunk of surrounding text (`context`) to
-    check the owner's name against — coarse, text-based extraction rather
-    than relying on any specific DOM structure this site might actually
-    use, since that structure has never been seen directly."""
+    """Every property found on the results page. First the site's own list
+    format (folio / owner / property address, no zip yet), then -- as a
+    fallback -- any full "street, city, FL zip" address in the page text."""
     try:
         body_text = page.inner_text("body")
     except Exception:
@@ -243,6 +256,18 @@ def _extract_results(page) -> list:
     lines = [l.strip() for l in body_text.splitlines() if l.strip()]
     joined = "\n".join(lines)
     results = []
+    for m in _LIST_RESULT_RE.finditer(joined):
+        addr = re.sub(r"\s+", " ", m.group("addr")).strip().upper()
+        if not addr:
+            continue
+        results.append({
+            "address": addr, "city": "", "state": "FL", "zip": "",
+            "folio": m.group("folio").strip(),
+            "owner": re.sub(r"\s+", " ", m.group("owner")).strip(),
+            "context": re.sub(r"\s+", " ", m.group("owner")).strip(),
+        })
+    if results:
+        return results
     for m in _ADDRESS_RE.finditer(joined):
         context_start = max(0, m.start() - 300)
         results.append({
@@ -253,6 +278,73 @@ def _extract_results(page) -> list:
             "context": joined[context_start:m.end()],
         })
     return results
+
+
+def _open_folio_and_read_zip(page, chosen: dict) -> bool:
+    """The results list has no zip. Click the folio number to open the
+    property's own page and read the zip (and city) from it. Fills
+    chosen["zip"/"city"/"address"] and returns True if a zip was found."""
+    folio = chosen.get("folio")
+    if not folio:
+        return False
+    context = page.context
+    pages_before = len(context.pages)
+    clicked = False
+    for getter in (
+        lambda: page.get_by_role("link", name=re.compile(re.escape(folio))),
+        lambda: page.get_by_text(folio, exact=False),
+    ):
+        try:
+            loc = getter()
+            for i in range(min(loc.count(), 3)):
+                el = loc.nth(i)
+                if el.is_visible():
+                    el.click()
+                    clicked = True
+                    break
+        except Exception:
+            continue
+        if clicked:
+            break
+    if not clicked:
+        return False
+    page.wait_for_timeout(1500)
+    target = context.pages[-1] if len(context.pages) > pages_before else page
+    deadline = time.time() + 25
+    body = ""
+    while time.time() < deadline:
+        if _loading_visible(target):
+            target.wait_for_timeout(500)
+            continue
+        try:
+            body = target.inner_text("body")
+        except Exception:
+            body = ""
+        if folio.replace("-", "") in body.replace("-", "") and re.search(r"FL\.?\s*\d{5}", body, re.IGNORECASE):
+            break
+        target.wait_for_timeout(700)
+    chosen["detail_text"] = body
+    key = _address_key(chosen["address"])
+    flat = re.sub(r"[ \t]+", " ", body)
+    if key:
+        # Anchored on the house number so an earlier number on the page (the
+        # folio, a phone) can't be swallowed into the street.
+        m = re.search(
+            r"(?P<street>\b" + re.escape(key[0]) + r"\s+[A-Za-z0-9 .#/-]{0,60}?)\s*[,\n]\s*"
+            r"(?P<city>[A-Za-z][A-Za-z .]*?),?\s*FL\.?\s*(?P<zip>\d{5})",
+            flat, re.IGNORECASE)
+        if m and _address_key(m.group("street")) == key:
+            chosen["zip"] = m.group("zip")
+            chosen["city"] = m.group("city").strip().upper()
+            chosen["address"] = re.sub(r"\s+", " ", m.group("street")).strip().upper()
+            return True
+        # The address and "FL 33xxx" may be laid out on one line, or split
+        # over several lines, with no comma.
+        m = re.search(r"\b" + re.escape(key[0]) + r"\b[\s\S]{0,140}?\bFL\.?\s*(\d{5})", flat, re.IGNORECASE)
+        if m:
+            chosen["zip"] = m.group(1)
+            return True
+    return False
 
 
 def _name_matches(owner_name: str, context_text: str) -> bool:
@@ -396,6 +488,13 @@ def find_property_by_owner_name(page, owner_name: str, subject_address: str = No
         tier_note = ("the only property found under this name" if len(name_matched) == 1 else
                      f"picked from {len(name_matched)} properties found under this name with "
                      f"no address to disambiguate by — double-check this one manually")
+
+    if not chosen.get("zip"):
+        if not _open_folio_and_read_zip(page, chosen):
+            return {"skip_reason": f"Found the property on Miami-Dade Property Appraiser (folio "
+                                    f"{chosen.get('folio', '?')}, {chosen['address']}) but couldn't read its zip "
+                                    f"code from the property's own page — "
+                                    f"{(chosen.get('detail_text') or _diag(page))[:500]!r}"}
 
     return {
         "address": chosen["address"], "city": chosen["city"], "state": chosen["state"], "zip": chosen["zip"],

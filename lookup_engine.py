@@ -97,6 +97,11 @@ def extract_first_phone(page) -> str:
     return match.group(0) if match else ""
 
 
+# Upper bound on the extra name x zip searches one LLC row can spend (each is a
+# real FOREWARN search against the weekly quota).
+MAX_CROSS_COMBO_SEARCHES = 12
+
+
 def process_row(page, row: dict, debug: bool = False) -> dict:
     # A note input_parser.py may have already attached at parse time (e.g.
     # the owner name was recovered from the case's own Defendant field, or
@@ -185,28 +190,90 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
             tiebreaker_address=match_address, debug=debug,
         )
         if pa_result.get("skip_reason"):
-            return {"phone": "", "status": "SKIPPED", "notes": entity_note + pa_result["skip_reason"]}
-        row["address"] = pa_result["address"]
-        row["city"] = pa_result["city"]
-        row["state"] = pa_result["state"]
-        row["zip"] = pa_result["zip"]
-        entity_note += pa_result.get("note", "")
+            # An LLC row whose Sunbiz people already carry their own zips can
+            # still be searched under THOSE (verified against each person's
+            # own on-file address) -- only give up when there's nothing at all
+            # to search under (build order #212).
+            if not (candidates and any(c.get("zip") for c in candidates)):
+                return {"phone": "", "status": "SKIPPED", "notes": entity_note + pa_result["skip_reason"]}
+            entity_note += ("Couldn't find the property's own zip on Property Appraiser "
+                             f"({pa_result['skip_reason'][:160]}...) -- searching under the Sunbiz people's own zips instead. ")
+        else:
+            row["address"] = pa_result["address"]
+            row["city"] = pa_result["city"]
+            row["state"] = pa_result["state"]
+            row["zip"] = pa_result["zip"]
+            entity_note += pa_result.get("note", "")
 
-    result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip,
-                                   match_address=match_address)
+    # Every (name, zip) pair actually searched for this row, so the
+    # cross-product pass below never repeats one (each search is a real,
+    # quota-counted FOREWARN lookup).
+    tried_combos = set()
+
+    def _combo(first, last, zip_used):
+        return (first.strip().lower(), last.strip().lower(), (zip_used or "").strip())
+
+    tried_combos.add(_combo(row["first_name"], row["last_name"], search_zip or row["zip"]))
+    if (search_zip or row["zip"]).strip():
+        result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip,
+                                       match_address=match_address)
+    else:
+        result = {"phone": "", "status": "NOT_FOUND", "notes": "No zip to search this person under yet. "}
 
     if candidates and result["status"] == "NOT_FOUND":
         for fallback in candidates[1:]:
+            fb_zip = fallback.get("zip") or None
+            if not (fb_zip or row["zip"].strip()):
+                continue  # nothing to search this person under
             row["first_name"] = fallback["first_name"]
             row["last_name"] = fallback["last_name"]
-            search_zip = fallback.get("zip") or None
+            search_zip = fb_zip
             match_address = fallback.get("address") or None
             entity_note += (f"No FOREWARN match for that name — retrying via Sunbiz "
                              f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}. ")
+            tried_combos.add(_combo(fallback["first_name"], fallback["last_name"], search_zip or row["zip"]))
             result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip,
                                            match_address=match_address)
             if result["status"] != "NOT_FOUND":
                 break
+
+    # Mario (build order #212): "find a zip code and use that zip code against
+    # a name until it finds a name, try every combination of names and zip
+    # codes (that are on the LLC names not just any name) until we get a hit."
+    # Each Sunbiz person above was only searched under their OWN zip. Now,
+    # every person tied to THIS LLC is also tried under every zip tied to it:
+    # the property's own zip (from the CSV or Property Appraiser) first, then
+    # the other people's zips. Names come only from this LLC's Sunbiz record,
+    # never from anywhere else. A hit here is verified against the property's
+    # own address (strict -- no "unique candidate" shortcut, since this person
+    # wasn't searched under their own zip).
+    if candidates and result["status"] == "NOT_FOUND":
+        zips_for_llc = []
+        for z in [row["zip"].strip()] + [(c.get("zip") or "").strip() for c in candidates]:
+            if z and z not in zips_for_llc:
+                zips_for_llc.append(z)
+        extra_runs = 0
+        found_in_cross = False
+        for z in zips_for_llc:
+            for cand in candidates:
+                if found_in_cross or extra_runs >= MAX_CROSS_COMBO_SEARCHES:
+                    break
+                if _combo(cand["first_name"], cand["last_name"], z) in tried_combos:
+                    continue
+                if not row["zip"].strip() or not row["address"].strip():
+                    continue  # no property address to verify against
+                row["first_name"] = cand["first_name"]
+                row["last_name"] = cand["last_name"]
+                tried_combos.add(_combo(cand["first_name"], cand["last_name"], z))
+                extra_runs += 1
+                entity_note += (f"Also tried {cand['first_name']} {cand['last_name']} under zip {z}. ")
+                result = _run_forewarn_search(page, row, debug=debug, search_zip=z, match_address=None)
+                if result["status"] != "NOT_FOUND":
+                    found_in_cross = True
+            if found_in_cross or extra_runs >= MAX_CROSS_COMBO_SEARCHES:
+                break
+        if extra_runs >= MAX_CROSS_COMBO_SEARCHES and result["status"] == "NOT_FOUND":
+            entity_note += (f"(Stopped after {MAX_CROSS_COMBO_SEARCHES} extra name/zip combinations.) ")
 
     # Last resort before giving up entirely: Mario's own real case (build
     # order #151) — a plain individual owner whose FOREWARN search under
