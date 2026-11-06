@@ -9581,14 +9581,29 @@ function renderDialerOutcomeRow(entry) {
     b.classList.toggle('active', b.dataset.outcome === dialerLastCall.outcome));
 }
 
+let dialerOutcomeSaving = false;
 dialerOutcomeRow.addEventListener('click', async (e) => {
   const btn = e.target.closest('.outcome-btn');
-  if (!btn || !dialerLastCall) return;
+  if (!btn) return;
+  if (!dialerLastCall) { dialerOutcomeMsg.textContent = 'Place the call first (Call button or Enter), then mark how it went.'; return; }
+  if (dialerOutcomeSaving) { dialerOutcomeMsg.textContent = 'Still saving the last tap…'; return; }
   const call = dialerLastCall;
-  const outcome = call.outcome === btn.dataset.outcome ? '' : btn.dataset.outcome;
-  dialerOutcomeMsg.textContent = '';
-  const data = await saveCallOutcome(call.id, outcome);
-  if (!data) return;
+  const previous = call.outcome;
+  const outcome = previous === btn.dataset.outcome ? '' : btn.dataset.outcome;
+  // Show the tap right away (and say it's saving) so a slow connection never
+  // looks like "nothing happened"; put it back if the save fails.
+  dialerOutcomeSaving = true;
+  call.outcome = outcome || null;
+  renderDialerOutcomeRow(dialerList[dialerIndex]);
+  dialerOutcomeMsg.textContent = 'Saving…';
+  let data = null;
+  try { data = await saveCallOutcome(call.id, outcome); } finally { dialerOutcomeSaving = false; }
+  if (!data) {
+    call.outcome = previous;
+    renderDialerOutcomeRow(dialerList[dialerIndex]);
+    dialerOutcomeMsg.textContent = "⚠ That didn't save — tap it again. (If it keeps failing, check the connection banner at the top.)";
+    return;
+  }
   call.outcome = data.outcome;
   renderDialerOutcomeRow(dialerList[dialerIndex]);
   const entry = call.entry;
@@ -9599,7 +9614,9 @@ dialerOutcomeRow.addEventListener('click', async (e) => {
     dialerOutcomeMsg.textContent = entry.clientId ? 'Nice! Put the appointment on the calendar:' : 'Nice! Add them to your CRM to put it on the calendar.';
     if (entry.clientId) openEventForm(todayIsoDate(), null, entry.clientId);
   } else if (data.outcome) {
-    dialerOutcomeMsg.textContent = 'Saved.';
+    dialerOutcomeMsg.textContent = '✓ Saved.';
+  } else {
+    dialerOutcomeMsg.textContent = 'Cleared.';
   }
 });
 
@@ -11862,17 +11879,18 @@ function outcomeOptions(selected) {
 // Saves an outcome; returns the server's reply (or null on failure).
 async function saveCallOutcome(callId, outcome) {
   try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 20000);  // never hang silently
     const res = await fetch(`/api/crm/dialer_calls/${callId}/outcome`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ outcome }),
-    });
+      body: JSON.stringify({ outcome }), signal: ctl.signal,
+    }).finally(() => clearTimeout(timer));
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { alert(data.error || "Couldn't save that."); return null; }
     if (data.goal) renderCallGoal(data.goal);
     return data;
   } catch (e) {
-    alert("Couldn't reach URTO's server — try again.");
-    return null;
+    return null;  // the caller shows the message
   }
 }
 
