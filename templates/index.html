@@ -9562,6 +9562,10 @@ function logCallForEntry(entry) {
         if (!dialerLastCall || dialerLastCall.id !== data.id) dialerLastCall = { id: data.id, entry, outcome: null };
         if (dialerList[dialerIndex] === entry) renderDialerOutcomeRow(entry);
       }
+      // The server also matches by phone: if this number belongs to a CRM client
+      // the Dialer hadn't matched yet, adopt them so their panel and Last called
+      // show up straight away.
+      if (!entry.clientId && data && data.client && data.client.id) entry.clientId = data.client.id;
       if (entry.clientId && dialerList[dialerIndex] === entry) updateDialerClientInfo(entry);
     })
     .catch(() => {});

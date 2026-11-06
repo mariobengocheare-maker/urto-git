@@ -2192,6 +2192,12 @@ def init_db():
             WHERE cl.kind = 'call' ORDER BY cl.called_at, cl.id
         """)
         conn.execute("INSERT INTO app_settings (key, value) VALUES ('dialer_calls_backfilled', '1')")
+    # One-time repair (build order #215): calls placed from the Dialer before
+    # the person was a CRM client were never attached to them, so "Last
+    # called" said Never. Link every such call to the client with that phone.
+    if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'orphan_calls_linked_v1'").fetchone():
+        _link_orphan_calls(conn)
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('orphan_calls_linked_v1', '1')")
     # Chessboard direction flip (build order #202): pieces now move DOWN the
     # board and become a Queen on rank 1 (it used to be rank 7). Pieces keep
     # the square they're shown on; only a Queen still sitting on rank 7 moves
@@ -2463,6 +2469,52 @@ def _repair_stale_followup_schedule(conn, d: dict) -> bool:
     return True
 
 
+def _link_orphan_calls(conn, only_client=None) -> int:
+    """Attaches Dialer calls that were logged with no client (the number was
+    called before that person was in the CRM, or the Dialer hadn't matched
+    them yet) to the CRM client with the same phone number: they get a
+    call_log entry and the client's last_called_at moves forward if the call
+    is newer. Without this, "Last called" said Never for someone Mario had
+    definitely called (build order #215). Never removes or backdates
+    anything. `only_client` limits it to one client id (used on save); None
+    sweeps every client (used once at startup). Returns calls linked."""
+    orphans = conn.execute(
+        "SELECT id, called_at, phone FROM dialer_calls WHERE client_id IS NULL AND phone != ''").fetchall()
+    if not orphans:
+        return 0
+    by_key = {}
+    for r in orphans:
+        k = _normalize_phone_key(r["phone"])
+        if k:
+            by_key.setdefault(k, []).append(r)
+    if not by_key:
+        return 0
+    q = "SELECT id, phone, last_called_at FROM clients WHERE phone IS NOT NULL AND phone != ''"
+    args = ()
+    if only_client is not None:
+        q += " AND id = ?"
+        args = (only_client,)
+    linked = 0
+    for c in conn.execute(q, args).fetchall():
+        calls = by_key.get(_normalize_phone_key(c["phone"]))
+        if not calls:
+            continue
+        newest = c["last_called_at"] or ""
+        for r in calls:
+            conn.execute("UPDATE dialer_calls SET client_id = ? WHERE id = ?", (c["id"], r["id"]))
+            if not conn.execute("SELECT 1 FROM call_log WHERE client_id = ? AND called_at = ?",
+                                (c["id"], r["called_at"])).fetchone():
+                conn.execute("INSERT INTO call_log (client_id, called_at, kind) VALUES (?, ?, 'call')",
+                             (c["id"], r["called_at"]))
+            if r["called_at"] > newest:
+                newest = r["called_at"]
+            linked += 1
+        if newest and newest != (c["last_called_at"] or ""):
+            conn.execute("UPDATE clients SET last_called_at = ? WHERE id = ?", (newest, c["id"]))
+        by_key.pop(_normalize_phone_key(c["phone"]), None)
+    return linked
+
+
 def create_client(name, phone, contact_info, address, frequency_key, custom_amount, custom_unit, list_ids=None, start_date=None, email=None) -> dict:
     dup = find_client_by_phone(phone)
     if dup:
@@ -2490,6 +2542,7 @@ def create_client(name, phone, contact_info, address, frequency_key, custom_amou
                 "INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)",
                 (list_id, client_id),
             )
+    _link_orphan_calls(conn, client_id)
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
@@ -2586,6 +2639,7 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
                 "INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)",
                 (list_id, client_id),
             )
+    _link_orphan_calls(conn, client_id)
     conn.commit()
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     conn.close()
@@ -5611,6 +5665,14 @@ def log_dialer_call(name: str = "", phone: str = "", client_id=None) -> dict:
         cid = None
     if cid is not None and not conn.execute("SELECT 1 FROM clients WHERE id = ?", (cid,)).fetchone():
         cid = None
+    if cid is None and key:
+        # The Dialer may not have matched this number to a CRM client yet (or
+        # the entry came from a lookup list): find them by phone ourselves so
+        # the call still counts as theirs (build order #215).
+        for r in conn.execute("SELECT id, phone FROM clients WHERE phone IS NOT NULL AND phone != ''").fetchall():
+            if _normalize_phone_key(r["phone"]) == key:
+                cid = r["id"]
+                break
     duplicate_of = None
     if key:
         cutoff = (now - timedelta(seconds=DIALER_CALL_DEDUP_SECONDS)).isoformat(timespec="seconds")
