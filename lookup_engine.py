@@ -220,7 +220,16 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
     else:
         result = {"phone": "", "status": "NOT_FOUND", "notes": "No zip to search this person under yet. "}
 
-    if candidates and result["status"] == "NOT_FOUND":
+    # A match with "no phone on record" isn't a finished answer for an LLC row
+    # (build order #213): another person on the same Sunbiz record may have a
+    # number, so keep going through the rest and only fall back to the
+    # no-phone match if nobody else turns one up.
+    no_phone_keep = None
+    if candidates and result["status"] in ("NOT_FOUND", "FOUND_NO_PHONE"):
+        if result["status"] == "FOUND_NO_PHONE":
+            no_phone_keep = (dict(result), row["first_name"], row["last_name"])
+            entity_note += (f"{row['first_name']} {row['last_name']} matched but FOREWARN has no phone for them "
+                             f"— checking the other names on this LLC. ")
         for fallback in candidates[1:]:
             fb_zip = fallback.get("zip") or None
             if not (fb_zip or row["zip"].strip()):
@@ -234,8 +243,13 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
             tried_combos.add(_combo(fallback["first_name"], fallback["last_name"], search_zip or row["zip"]))
             result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip,
                                            match_address=match_address)
-            if result["status"] != "NOT_FOUND":
+            if result["status"] == "FOUND_NO_PHONE" and no_phone_keep is None:
+                no_phone_keep = (dict(result), row["first_name"], row["last_name"])
+            if result["status"] == "FOUND":
                 break
+        if result["status"] != "FOUND" and no_phone_keep is not None:
+            result = no_phone_keep[0]
+            row["first_name"], row["last_name"] = no_phone_keep[1], no_phone_keep[2]
 
     # Mario (build order #212): "find a zip code and use that zip code against
     # a name until it finds a name, try every combination of names and zip
@@ -459,6 +473,22 @@ def _run_forewarn_search(page, row: dict, debug: bool = False, search_zip: str =
                                   f"with the second surname alone -- retried with just the first surname "
                                   f"('{first_name} {first_surname}'), and that's what returned results. ")
                 last_name = first_surname
+
+    # A trailing word after the middle name can be a second surname ("GONZALEZ
+    # JESUS D RIVERA" -> Rivera). Only tried for a plain owner when everything
+    # above returned nothing at all (build order #213) -- the same address check
+    # below still has to confirm it.
+    if count == 0 and first_name and not row.get("is_entity") and not match_address:
+        for alt in row.get("alt_last_names") or []:
+            if alt.strip().lower() in (last_name.strip().lower(), *[w.lower() for w in surname_words]):
+                continue
+            run_search(page, first_name, alt, effective_search_zip)
+            count = wait_for_results_or_none(page)
+            if count > 0:
+                compound_note += (f"'{first_name} {last_name}' returned nothing on FOREWARN -- retried with the "
+                                   f"extra surname in the name ('{first_name} {alt}'), and that's what returned results. ")
+                last_name = alt
+                break
 
     if count == 0:
         result["notes"] = compound_note + zip_note + "No results returned by FOREWARN for this name/zip."

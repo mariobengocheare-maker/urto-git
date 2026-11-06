@@ -74,6 +74,13 @@ def normalize(text: str) -> str:
     text = re.sub(r"[.,#]", "", text)
     tokens = text.split()
     tokens = [ABBREVIATIONS.get(t, t) for t in tokens]
+    # Ordinal suffixes are dropped from street numbers ("122ND" -> "122",
+    # "303RD" -> "303"): county tax rolls often write "SW 122 PL" while
+    # FOREWARN's address history writes "SW 122ND PL" (and the reverse), so a
+    # perfectly correct address failed the match purely over "ND" (build order
+    # #213, a real batch of NOT_FOUND rows). Applied to BOTH sides of every
+    # comparison, so the two always agree whichever form each one uses.
+    tokens = [re.sub(r"^(\d+)(?:ST|ND|RD|TH)$", r"\1", t) for t in tokens]
     return " ".join(tokens)
 
 
@@ -157,6 +164,11 @@ ENTITY_TOKENS = {
     "ASSOCIATES", "ASSOC", "PARTNERSHIP", "PARTNERS", "GROUP",
     "ENTERPRISES", "INVESTMENTS", "REALTY", "CONDOMINIUM",
     "CHURCH", "FOUNDATION", "BANK",
+    # Plain trade-name words with no LLC/Inc suffix ("CLEANING EDGECOMB DUST
+    # MOP") -- never a person, and searching one wastes a real FOREWARN search.
+    "CLEANING", "SERVICES", "SERVICE", "CONSTRUCTION", "MAINTENANCE",
+    "PLUMBING", "ROOFING", "MOTORS", "RESTAURANT", "DEVELOPMENT",
+    "DEVELOPERS", "MANAGEMENT", "CAPITAL", "VENTURES", "FUND",
 }
 
 # Subset of ENTITY_TOKENS that are actual registered-business-entity suffixes
@@ -333,14 +345,37 @@ def _clean(text: str) -> str:
     return text
 
 
-def _no_entity(first_name="", last_name="", skip_reason=""):
+def _no_entity(first_name="", last_name="", skip_reason="", alt_last_names=None, parse_note=""):
     """Shared return shape so every parse_owner_name path — person, entity,
     or skip — carries the same keys."""
     return {
         "first_name": first_name, "last_name": last_name,
         "is_entity": False, "entity_name": "",
         "skip_reason": skip_reason,
+        "alt_last_names": alt_last_names or [],
+        "parse_note": parse_note,
     }
+
+
+def _extra_surnames(tokens: list) -> list:
+    """For a county-order name 'LAST FIRST [MIDDLE...]', any trailing word
+    after the middle that could be a second surname ('GONZALEZ JESUS D
+    RIVERA' -> Rivera, 'ALFONSO ARMANY LAZARO ROSQUETE' -> Rosquete). Only a
+    fallback for when the main name returns nothing on FOREWARN. Stops at '&'
+    (that's a co-owner), skips suffixes, initials and anything that is a
+    common first name (a plain middle name like 'MICHAEL')."""
+    from name_hints import is_common_first_name
+    rest = []
+    for t in tokens[2:]:
+        if t == "&":
+            break
+        rest.append(t)
+    out = []
+    if rest:
+        t = rest[-1]
+        if len(t) >= 4 and t.isalpha() and t not in SUFFIXES and not is_common_first_name(t):
+            out.append(t.title())
+    return out
 
 
 def _try_extract_trust_person(tokens: list, name_order: str = "last_first") -> dict:
@@ -447,9 +482,25 @@ def parse_owner_name(owner_raw: str, name_order: str = "last_first") -> dict:
         if len(tokens) >= 3 and tokens[1] in SUFFIXES:
             last_name, first_name = tokens[0], tokens[2]
         elif tokens[1] == "&":
-            return _no_entity(skip_reason="Ambiguous multi-owner name format — needs manual review")
+            # "ALDINE & HERRING JR HERBERT L": the first owner is a single
+            # word with no surname, the second is a full county-order name.
+            # Search the second owner (it's a complete name); the address
+            # check afterwards still has to confirm it, so a wrong guess can't
+            # turn into a wrong-person match.
+            right = [t for t in tokens[2:]]
+            if "&" in right or len(right) < 2:
+                return _no_entity(skip_reason="Ambiguous multi-owner name format — needs manual review")
+            if len(right) >= 3 and right[1] in SUFFIXES:
+                r_last, r_first = right[0], right[2]
+            else:
+                r_last, r_first = right[0], right[1]
+            return _no_entity(first_name=r_first.title(), last_name=r_last.title(),
+                              parse_note=f"Two owners listed ('{tokens[0].title()}' with no surname, and "
+                                         f"'{r_first.title()} {r_last.title()}') — searched the one with a full name. ")
         else:
             last_name, first_name = tokens[0], tokens[1]
+        return _no_entity(first_name=first_name.title(), last_name=last_name.title(),
+                          alt_last_names=_extra_surnames(tokens))
 
     return _no_entity(first_name=first_name.title(), last_name=last_name.title())
 
@@ -592,6 +643,9 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
         out["is_entity"] = parsed["is_entity"]
         out["entity_name"] = parsed["entity_name"]
         out["skip_reason"] = parsed["skip_reason"]
+        out["alt_last_names"] = parsed.get("alt_last_names", [])
+        if parsed.get("parse_note"):
+            out["parse_note"] = out.get("parse_note", "") + parsed["parse_note"]
         if used_defendant_fallback and not out["skip_reason"]:
             out["parse_note"] = (
                 out.get("parse_note", "")

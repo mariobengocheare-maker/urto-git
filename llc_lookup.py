@@ -20,6 +20,7 @@ a wrong guess — the exact same rule this app already applies to ambiguous
 owner-name columns (see input_parser.py).
 """
 
+import difflib
 import re
 import time
 
@@ -441,6 +442,7 @@ def _click_best_match(page, entity_name: str) -> bool:
     Returns False if nothing looks like a real match (rather than guessing
     and opening an unrelated entity)."""
     target = re.sub(r"[^A-Z0-9]", "", entity_name.upper())
+    seen = []
     links = page.get_by_role("link")
     count = links.count()
     best_idx, best_score = -1, 0.0
@@ -454,10 +456,19 @@ def _click_best_match(page, entity_name: str) -> bool:
         if candidate == target:
             best_idx, best_score = i, 1.0
             break
+        seen.append(text)
         if target in candidate or candidate in target:
             score = min(len(target), len(candidate)) / max(len(target), len(candidate))
             if score > best_score:
                 best_idx, best_score = i, score
+        else:
+            # A near-identical spelling ("KROME GROWN FARM CORP" vs "KROME
+            # GROWN FARMS CORP"): accepted only at a very high similarity, so
+            # a different business is never opened by mistake (build order #213).
+            ratio = difflib.SequenceMatcher(None, target, candidate).ratio()
+            if ratio >= 0.92 and ratio * 0.97 > best_score:
+                best_idx, best_score = i, max(ratio * 0.97, 0.6)
+    _click_best_match.seen = seen[:8]
     if best_idx < 0 or best_score < 0.6:
         return False
     links.nth(best_idx).click()
@@ -621,7 +632,9 @@ def resolve_entity_owner(page, entity_name: str, debug: bool = False,
         if not REGISTERED_AGENT_LABEL.search(body_text):
             if not _click_best_match(page, entity_name):
                 return {"first_name": "", "last_name": "", "resolved_via": "",
-                        "skip_reason": f"No matching entity found on Sunbiz for '{entity_name}'"}
+                        "skip_reason": f"No matching entity found on Sunbiz for '{entity_name}'"
+                                       + (f" (Sunbiz listed: {'; '.join(getattr(_click_best_match, 'seen', []))})"
+                                          if getattr(_click_best_match, 'seen', None) else "")}
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=15000)
             except PWTimeoutError:

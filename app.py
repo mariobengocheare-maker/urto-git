@@ -14,6 +14,7 @@ automation, driven from your own machine.
 import csv
 import io
 import json
+from name_hints import looks_reversed
 import os
 import re
 import subprocess
@@ -135,7 +136,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.80.5"
+APP_VERSION = "2.80.6"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -1199,6 +1200,11 @@ def preview_names():
             "city": row["city"],
             "zip": row["zip"],
             "skip_reason": row["skip_reason"],
+            # A free, built-in guess (see name_hints.py): "Acevedo Ximena" is
+            # almost certainly last-name-first. The review screen pre-swaps
+            # these; Mario can still click to undo.
+            "suggest_swap": bool(not row["is_entity"] and not row["skip_reason"]
+                                 and looks_reversed(row["first_name"], row["last_name"])),
         }
         for i, row in enumerate(rows)
     ]

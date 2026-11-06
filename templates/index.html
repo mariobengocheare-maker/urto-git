@@ -3750,6 +3750,7 @@ const namePreviewBody = document.getElementById('namePreviewBody');
 const namePreviewConfirmBtn = document.getElementById('namePreviewConfirmBtn');
 let namePreviewRows = [];   // the parsed preview rows, as returned by the server
 let namePreviewSwapped = new Set(); // indices the user has toggled swapped
+let namePreviewSuggested = new Set(); // indices swapped automatically because they looked reversed
 let namePreviewDone = null;         // {count, found} -- rows already searched in earlier runs
 const skipDoneCheck = document.getElementById('skipDoneCheck');
 // "1" = skip rows already searched in an earlier run (the default). Only "0"
@@ -3787,7 +3788,8 @@ function renderNamePreview() {
       </tr>`;
     }
     const swapped = namePreviewSwapped.has(row.index);
-    const doneTag = row.already_done ? ' <span class="np-hint" style="opacity:1">✓ already searched</span>' : '';
+    const doneTag = row.already_done ? ' <span class="np-hint" style="opacity:1">✓ already searched</span>'
+      : (swapped && namePreviewSuggested.has(row.index) ? ' <span class="np-hint" style="opacity:1">↔ looked reversed — swapped for you</span>' : '');
     const shownFirst = swapped ? row.last_name : row.first_name;
     const shownLast = swapped ? row.first_name : row.last_name;
     return `<tr class="name-preview-row swappable${swapped ? ' swapped' : ''}" data-index="${row.index}">
@@ -4040,6 +4042,10 @@ startBtn.addEventListener('click', async () => {
   }
 
   namePreviewRows = data.rows;
+  // Rows that are almost certainly last-name-first ("Acevedo Ximena") come
+  // pre-swapped; the row says so and a click undoes it.
+  namePreviewSuggested = new Set(namePreviewRows.filter(r => r.suggest_swap && !r.already_done).map(r => r.index));
+  namePreviewSwapped = new Set(namePreviewSuggested);
   namePreviewDone = { count: data.already_done_count || 0, found: data.already_done_found || 0 };
   skipDoneCheck.checked = true;
   renderSkipDoneRow();
