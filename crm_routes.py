@@ -1104,14 +1104,16 @@ def no_work_days_list():
 
 @crm_bp.route("/api/crm/no_work_days/<day>", methods=["PUT"])
 def no_work_day_set(day):
-    # JSON for a plain day off; multipart (with the proof file) for a half day.
+    # JSON when there's no file (a day off, or a half day with a written
+    # description); multipart when a proof file is attached.
     if request.files or request.form:
         data = request.form
     else:
         data = request.get_json(silent=True) or {}
     try:
         return jsonify(crm.set_no_work_day(day, data.get("label", ""), data.get("kind", "off"),
-                                           request.files.get("file")))
+                                           request.files.get("file"),
+                                           note=data.get("note") if "note" in data else None))
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
 

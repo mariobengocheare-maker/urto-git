@@ -7544,7 +7544,8 @@ document.getElementById('calAddEventBtn').addEventListener('click', () => {
 
 let calNoWorkDays = {};   // 'YYYY-MM-DD' -> label, for the month on screen
 let calHalfDays = {};     // same, for half days (half the call goal)
-let calHalfProof = {};    // half day -> original name of its proof file
+let calHalfProof = {};    // day (half or off) -> original name of its attached file
+let calDayNote = {};      // day (half or off) -> written description
 
 async function renderCalendar() {
   calMonthLabel.textContent = `${MONTH_NAMES[calMonth - 1]} ${calYear}`;
@@ -7555,10 +7556,11 @@ async function renderCalendar() {
     fetch(`/api/crm/no_work_days?start=${monthStart}&end=${monthEnd}`).catch(() => null),
   ]);
   const events = res.ok ? await res.json() : [];
-  calNoWorkDays = {}; calHalfDays = {}; calHalfProof = {};
+  calNoWorkDays = {}; calHalfDays = {}; calHalfProof = {}; calDayNote = {};
   if (offRes && offRes.ok) for (const d of await offRes.json()) {
     (d.kind === 'half' ? calHalfDays : calNoWorkDays)[d.day] = d.label;
-    if (d.kind === 'half' && d.has_proof) calHalfProof[d.day] = d.proof_name || 'proof';
+    if (d.has_proof) calHalfProof[d.day] = d.proof_name || 'proof';
+    if (d.note) calDayNote[d.day] = d.note;
   }
 
   const eventsByDay = {};
@@ -7606,14 +7608,14 @@ async function renderCalendar() {
     if (calNoWorkDays[dateStr]) {
       const chip = document.createElement('div');
       chip.className = 'cal-chip nowork';
-      chip.textContent = `🏖 ${calNoWorkDays[dateStr]}`;
+      chip.textContent = `🏖 ${calNoWorkDays[dateStr]}` + (calHalfProof[dateStr] ? ' 📎' : '') + (calDayNote[dateStr] ? ' 📝' : '');
       chip.title = 'Day off — no call goal, and it cuts this week\'s scorecard targets 20%';
       chipList.appendChild(chip);
     }
     if (calHalfDays[dateStr] && !calNoWorkDays[dateStr]) {
       const chip = document.createElement('div');
       chip.className = 'cal-chip halfday';
-      chip.textContent = `½ ${calHalfDays[dateStr]}` + (calHalfProof[dateStr] ? ' 📎' : '');
+      chip.textContent = `½ ${calHalfDays[dateStr]}` + (calHalfProof[dateStr] ? ' 📎' : '') + (calDayNote[dateStr] ? ' 📝' : '');
       chip.title = 'Half day — half the usual call goal, and it cuts this week\'s scorecard targets 10%';
       chipList.appendChild(chip);
     }
@@ -7688,19 +7690,22 @@ function renderDayViewNoWork() {
   const box = document.getElementById('dayViewNoWork');
   const label = calNoWorkDays[dayViewDateStr];
   const half = calHalfDays[dayViewDateStr];
+  const proof = calHalfProof[dayViewDateStr];
+  const note = calDayNote[dayViewDateStr];
+  const details = `${note ? `<br>📝 ${escapeHtml(note).replace(/\n/g, '<br>')}` : ''}` +
+    `${proof ? `<br>📎 Attachment: <a href="/api/crm/no_work_days/${dayViewDateStr}/proof" class="file-preview-link" data-filename="${escapeHtml(proof)}">${escapeHtml(proof)}</a>` : ''}`;
   if (label) {
-    box.innerHTML = `<span>🏖 <b>Day off:</b> ${escapeHtml(label)} — no call goal, and this week's scorecard targets are cut 20%.</span>
+    box.innerHTML = `<span>🏖 <b>Day off:</b> ${escapeHtml(label)} — no call goal, and this week's scorecard targets are cut 20%.${details}</span>
       <button type="button" class="ghost small" id="dayViewNoWorkRemove">Remove day off</button>`;
   } else if (half) {
-    const proof = calHalfProof[dayViewDateStr];
-    box.innerHTML = `<span>½ <b>Half day:</b> ${escapeHtml(half)} — half the usual call goal today, and this week's scorecard targets are cut 10%.
-      ${proof ? `<br>📎 Proof: <a href="/api/crm/no_work_days/${dayViewDateStr}/proof" class="file-preview-link" data-filename="${escapeHtml(proof)}">${escapeHtml(proof)}</a>` : ''}</span>
+    box.innerHTML = `<span>½ <b>Half day:</b> ${escapeHtml(half)} — half the usual call goal today, and this week's scorecard targets are cut 10%.${details}</span>
       <button type="button" class="ghost small" id="dayViewNoWorkRemove">Remove half day</button>`;
   } else {
     box.innerHTML = `<span>🏖 Holiday, half day, or not working?</span>
       <input type="text" id="dayViewNoWorkLabel" placeholder="e.g. Thanksgiving (optional)" maxlength="80">
+      <textarea id="dayViewNoWorkNote" rows="2" maxlength="2000" style="flex-basis:100%" placeholder="What were you doing? A short written description (optional for a day off — a half day needs this OR a file)"></textarea>
       <div style="flex-basis:100%; font-size:.85rem; color:var(--text-secondary)">
-        ½ Half day <b>requires proof</b> — a photo, PDF or any file of what you were doing:
+        Attachment (optional) — a photo, PDF or any file:
         <input type="file" id="dayViewHalfProof" style="margin-top:4px; max-width:100%">
       </div>
       <div class="field-error" id="dayViewNoWorkErr" style="display:none; flex-basis:100%; color:#ff9b9b; font-size:.85rem"></div>
@@ -7721,27 +7726,34 @@ document.getElementById('dayViewNoWork').addEventListener('click', async (e) => 
   let opts;
   if (remove) {
     opts = { method: 'DELETE' };
-  } else if (halfSave) {
-    const file = document.getElementById('dayViewHalfProof').files[0];
-    if (!file) { showErr('A half day needs proof — attach a photo, PDF or other file first.'); return; }
-    const fd = new FormData();
-    fd.append('kind', 'half');
-    fd.append('label', (document.getElementById('dayViewNoWorkLabel').value || '').trim());
-    fd.append('file', file);
-    opts = { method: 'PUT', body: fd };
   } else {
-    opts = { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label: (document.getElementById('dayViewNoWorkLabel').value || '').trim(), kind: 'off' }) };
+    const kind = halfSave ? 'half' : 'off';
+    const label = (document.getElementById('dayViewNoWorkLabel').value || '').trim();
+    const note = (document.getElementById('dayViewNoWorkNote').value || '').trim();
+    const file = document.getElementById('dayViewHalfProof').files[0];
+    // A half day needs proof: a written description OR a file is enough.
+    if (kind === 'half' && !file && !note) {
+      showErr('A half day needs proof — write a short description of what you were doing, or attach a file.');
+      return;
+    }
+    if (file) {
+      const fd = new FormData();
+      fd.append('kind', kind); fd.append('label', label); fd.append('note', note); fd.append('file', file);
+      opts = { method: 'PUT', body: fd };
+    } else {
+      opts = { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label, kind, note }) };
+    }
   }
   if (btn) { btn.disabled = true; }
   try {
     const res = await fetch(`/api/crm/no_work_days/${day}`, opts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { showErr(data.error || "Couldn't save that."); if (btn) btn.disabled = false; return; }
-    delete calNoWorkDays[day]; delete calHalfDays[day]; delete calHalfProof[day];
+    delete calNoWorkDays[day]; delete calHalfDays[day]; delete calHalfProof[day]; delete calDayNote[day];
     if (!remove) {
       (data.kind === 'half' ? calHalfDays : calNoWorkDays)[day] = data.label;
-      if (data.kind === 'half' && data.has_proof) calHalfProof[day] = data.proof_name || 'proof';
+      if (data.has_proof) calHalfProof[day] = data.proof_name || 'proof';
+      if (data.note) calDayNote[day] = data.note;
     }
     renderDayViewNoWork();
     renderCalendar();

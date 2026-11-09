@@ -2168,6 +2168,9 @@ def init_db():
     if "proof_filename" not in _nwd_cols:
         conn.execute("ALTER TABLE no_work_days ADD COLUMN proof_filename TEXT")
         conn.execute("ALTER TABLE no_work_days ADD COLUMN proof_original_name TEXT")
+    # A written description can stand in for (or sit beside) the proof file.
+    if "note" not in _nwd_cols:
+        conn.execute("ALTER TABLE no_work_days ADD COLUMN note TEXT")
     # One row per client Mario deletes, so re-adding the same person later
     # can ask "you've deleted this contact before — are you sure?".
     conn.execute("""
@@ -5339,7 +5342,7 @@ def _call_goal_history() -> list:
 
 def list_no_work_days(start=None, end=None) -> list:
     conn = get_conn()
-    sql, args = ("SELECT day, label, kind, proof_filename, proof_original_name FROM no_work_days"), []
+    sql, args = ("SELECT day, label, kind, proof_filename, proof_original_name, note FROM no_work_days"), []
     if start and end:
         sql += " WHERE day BETWEEN ? AND ?"
         args = [str(start), str(end)]
@@ -5348,6 +5351,7 @@ def list_no_work_days(start=None, end=None) -> list:
         d = dict(r)
         d["has_proof"] = bool(d.pop("proof_filename"))
         d["proof_name"] = d.pop("proof_original_name")
+        d["note"] = d.get("note") or ""
         rows.append(d)
     conn.close()
     return rows
@@ -5364,15 +5368,17 @@ def get_no_work_day_proof(day: str):
     return r["proof_filename"], r["proof_original_name"]
 
 
-def set_no_work_day(day: str, label: str = "", kind: str = "off", file_storage=None) -> dict:
+def set_no_work_day(day: str, label: str = "", kind: str = "off", file_storage=None, note=None) -> dict:
     """Marks a holiday / day off (kind 'off': its call goal becomes 0 and
     nothing stacks) or a half day (kind 'half': it owes half the usual goal,
     rounded up). Either one never breaks a streak by itself, and cuts that
     week's scorecard targets (20% for a day off, 10% for a half day).
 
-    A half day MUST have proof -- a photo, PDF or any file (file_storage)
-    showing what Mario was doing -- opened later from the Calendar. Marking
-    an already-half day again without a new file keeps the existing proof."""
+    A half day needs PROOF of what Mario was doing: a photo, PDF or any file
+    (file_storage), OR a written description (note) -- either one is enough.
+    A full day off needs neither, but can carry both. Opened later from the
+    Calendar. Marking the same day again without a new file keeps the
+    existing proof; note=None keeps the existing description, "" clears it."""
     try:
         d = datetime.strptime((day or "").strip(), "%Y-%m-%d").date()
     except ValueError:
@@ -5383,20 +5389,21 @@ def set_no_work_day(day: str, label: str = "", kind: str = "off", file_storage=N
     conn = get_conn()
     existing = conn.execute("SELECT * FROM no_work_days WHERE day = ?", (d.isoformat(),)).fetchone()
     old_proof = existing["proof_filename"] if existing else None
-    if kind == "half" and not has_file and not (existing and existing["kind"] == "half" and old_proof):
+    old_note = ((existing["note"] if existing else None) or "").strip()
+    new_note = old_note if note is None else (str(note).strip()[:2000])
+    if kind == "half" and not has_file and not old_proof and not new_note:
         conn.close()
-        raise RuntimeError("A half day needs proof — attach a photo, PDF or other file showing what you were doing.")
-    stored = original = None
-    if kind == "half":
-        if has_file:
-            stored, original = _store_upload(file_storage, HALF_DAY_PROOF_DIR)
-        else:
-            stored, original = old_proof, existing["proof_original_name"]
+        raise RuntimeError("A half day needs proof — write a short description of what you were doing, "
+                           "or attach a photo, PDF or other file.")
+    if has_file:
+        stored, original = _store_upload(file_storage, HALF_DAY_PROOF_DIR)
+    else:
+        stored, original = old_proof, (existing["proof_original_name"] if existing else None)
     conn.execute(
-        "INSERT INTO no_work_days (day, label, kind, proof_filename, proof_original_name, created_at) VALUES (?, ?, ?, ?, ?, ?) "
+        "INSERT INTO no_work_days (day, label, kind, proof_filename, proof_original_name, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(day) DO UPDATE SET label = excluded.label, kind = excluded.kind, "
-        "proof_filename = excluded.proof_filename, proof_original_name = excluded.proof_original_name",
-        (d.isoformat(), label, kind, stored, original, _now().isoformat(timespec="seconds")),
+        "proof_filename = excluded.proof_filename, proof_original_name = excluded.proof_original_name, note = excluded.note",
+        (d.isoformat(), label, kind, stored, original, new_note or None, _now().isoformat(timespec="seconds")),
     )
     conn.commit()
     conn.close()
@@ -5406,7 +5413,7 @@ def set_no_work_day(day: str, label: str = "", kind: str = "off", file_storage=N
     if stored or old_proof:
         _instant_document_mirror()
     return {"day": d.isoformat(), "label": label, "kind": kind,
-            "has_proof": bool(stored), "proof_name": original}
+            "has_proof": bool(stored), "proof_name": original, "note": new_note}
 
 
 def remove_no_work_day(day: str) -> bool:
