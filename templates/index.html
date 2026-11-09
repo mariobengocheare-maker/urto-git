@@ -2885,11 +2885,13 @@
     <div class="contact-line"><span class="lbl">Last called (Miami Time)</span><span id="cdLastCalled">—</span> <a href="#" class="call-history-link" id="cdCallHistoryLink">Call History</a></div>
 
     <div class="row">
+      <button class="small" id="cdCallBtn" title="Call this client (counts toward today's calls)">📞 Call</button>
       <button class="ghost small" id="cdEditBtn">Edit</button>
       <button class="ghost small" id="cdTextBtn">📱 Follow-up Text</button>
       <button class="ghost small" id="cdLowImportanceBtn" title="Move to the Low Importance Leads list with a 6-month follow-up">⬇ Low Importance Lead</button>
       <button class="danger small" id="cdDeleteBtn" style="display:inline-block; background:var(--danger-fg)">Delete Client</button>
     </div>
+    <div id="cdCallMsg" style="display:none; margin-top:6px; font-size:.85em; color:var(--gold)"></div>
     <div id="cdLowImportanceMsg" style="display:none; margin-top:6px; font-size:.85em; color:var(--gold)"></div>
 
     <div class="detail-section">
@@ -2979,6 +2981,7 @@
       <textarea id="chessPieceNote" rows="3" placeholder="e.g. Signed listing agreement, showing set for Saturday"></textarea>
     </div>
     <div class="chess-piece-actions">
+      <button type="button" id="chessCallBtn">📞 Call</button>
       <button type="button" id="chessAdvanceBtn">▼ Move Rook down</button>
       <button type="button" class="ghost" id="chessBackBtn">▲ Move back up</button>
       <button type="button" class="ghost" id="chessPromoteBtn">♛ Promote to Queen now</button>
@@ -5234,6 +5237,21 @@ document.getElementById('textPresetAddBtn').addEventListener('click', async () =
   }
 });
 
+document.getElementById('cdCallBtn').addEventListener('click', () => {
+  const msg = document.getElementById('cdCallMsg');
+  const who = cdCallClient;
+  if (!who || !callClientNow(who, data => {
+    if (data && data.client && currentClientId === who.id) {
+      document.getElementById('cdLastCalled').textContent = formatLastCalled(data.client.last_called_at);
+    }
+  })) {
+    msg.textContent = 'No phone number on file for this client — add one with Edit.';
+  } else {
+    msg.textContent = `📞 Calling ${who.name}… (logged as a call)`;
+  }
+  msg.style.display = 'block';
+});
+
 document.getElementById('cdTextBtn').addEventListener('click', () => {
   openTextFollowup(
     document.getElementById('cdName').textContent,
@@ -6605,6 +6623,7 @@ clientForm.addEventListener('submit', async (e) => {
 /* ===================== Client detail ===================== */
 const clientDetailOverlay = document.getElementById('clientDetailOverlay');
 let currentClientId = null;
+let cdCallClient = null;   // who the client card's Call button dials
 let cdLookupAddress = null;   // best address for the open client card's Zillow/Property Search buttons
 
 async function openClientDetail(id) {
@@ -6634,6 +6653,9 @@ async function openClientDetail(id) {
   document.getElementById('cdLookupRow').style.display = buildZillowUrl(cdLookupAddress) ? 'flex' : 'none';
   document.getElementById('cdLookupMsg').style.display = 'none';
   document.getElementById('cdLastCalled').textContent = formatLastCalled(c.last_called_at);
+  cdCallClient = { id: c.id, name: c.name, phone: c.phone };
+  document.getElementById('cdCallBtn').style.display = normalizePhone(c.phone) ? '' : 'none';
+  document.getElementById('cdCallMsg').style.display = 'none';
 
   const followupInfo = document.getElementById('cdFollowupInfo');
   const completeBtn = document.getElementById('cdCompleteFollowupBtn');
@@ -9554,6 +9576,31 @@ document.getElementById('dictateSaveBtn').addEventListener('click', async () => 
 
 document.getElementById('dictateDiscardBtn').addEventListener('click', resetDictation);
 
+// Every `tel:` hand-off from a menu (client card, Chessboard, Map) goes through
+// here so a test can stub it -- and so every one of them is counted.
+function openTelUrl(url) { window.location.href = url; }
+
+// Call a CRM client from any menu outside the Dialer. It's logged exactly like
+// a Dialer call (counts toward the daily goal, stamps Last called, restarts the
+// follow-up clock), then the number is handed to the phone app. Returns false
+// when there's no number to call.
+function callClientNow(client, onLogged) {
+  const tel = normalizePhone(client && client.phone);
+  if (!tel) return false;
+  fetch('/api/crm/dialer_calls', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+    body: JSON.stringify({ name: client.name || '', phone: client.phone || '', client_id: client.id || null }),
+  })
+    .then(res => res.ok ? res.json() : null)
+    .then(data => {
+      if (data && data.goal) renderCallGoal(data.goal);
+      if (onLogged) onLogged(data);
+    })
+    .catch(() => {});
+  openTelUrl('tel:' + tel);
+  return true;
+}
+
 // There's no reliable browser event for "the tel: call actually happened" —
 // clicking to call is treated as the call, same approximation the rest of
 // the Dialer (dictation, follow-up text) already relies on.
@@ -10798,10 +10845,16 @@ function showMapClientPanel(c) {
     <div>${followup}</div>
     ${lists.length ? `<h3>Communities</h3><div>${lists.map(mapListChip).join('')}</div>` : ''}
     <div class="row" style="margin-top:14px; gap:8px; flex-wrap:wrap">
+      ${normalizePhone(c.phone) ? '<button type="button" class="small" id="mapCallClientBtn">📞 Call</button>' : ''}
       <button type="button" class="small" id="mapOpenClientBtn">Open client card</button>
     </div>`;
   wireMapListChips(mapPanelBody);
   document.getElementById('mapOpenClientBtn').addEventListener('click', () => openClientDetail(c.id));
+  const mapCallBtn = document.getElementById('mapCallClientBtn');
+  if (mapCallBtn) mapCallBtn.addEventListener('click', () => {
+    callClientNow({ id: c.id, name: c.name, phone: c.phone });
+    mapCallBtn.textContent = '📞 Calling… (logged)';
+  });
   showMapPanel();
 }
 
@@ -11600,6 +11653,26 @@ async function chessPieceAction(path, method, okMsg, opts = {}) {
   }
 }
 
+document.getElementById('chessCallBtn').addEventListener('click', async () => {
+  const p = chessCurrentPiece;
+  const errEl = document.getElementById('chessPieceError');
+  const msgEl = document.getElementById('chessPieceMsg');
+  errEl.style.display = 'none'; msgEl.style.display = 'none';
+  try {
+    // fresh phone number, in case it was edited since the board loaded
+    const res = await fetch(`/api/crm/clients/${p.client_id}`);
+    if (!res.ok) throw new Error('Couldn\'t load this client — try again.');
+    const c = await res.json();
+    if (!callClientNow({ id: c.id, name: c.name, phone: c.phone })) {
+      throw new Error(`No phone number on file for ${c.name} — add one on their client card.`);
+    }
+    msgEl.textContent = `📞 Calling ${c.name}… (logged as a call)`;
+    msgEl.style.display = 'block';
+  } catch (e) {
+    errEl.textContent = e.message || 'Couldn\'t reach URTO\'s server — try again.';
+    errEl.style.display = 'block';
+  }
+});
 document.getElementById('chessAdvanceBtn').addEventListener('click', () =>
   chessPieceAction(`/api/crm/chess/pieces/${chessCurrentPiece.id}/advance`, 'POST', p =>
     p.piece_type === 'queen' ? `♛ Reached ${p.square} — it's a Queen now (Under Contract)!` : `▼ Moved down to ${p.square}. Saved to notes.`));
