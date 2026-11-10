@@ -136,7 +136,7 @@ def _require_hosted_setup():
 # shown alongside it is NOT hand-typed (that used to drift out of sync with
 # reality) — see _get_last_updated_display() below, which reads the real
 # install moment straight off whatever PC is actually running this.
-APP_VERSION = "2.80.11"
+APP_VERSION = "2.80.12"
 
 LAST_UPDATED_MARKER = Path(__file__).parent / "last_updated.txt"
 
@@ -506,6 +506,19 @@ def heartbeat():
 SHUTDOWN_GRACE_SECONDS = 5
 
 
+def _log_exit(reason: str):
+    """Writes why this server is shutting itself down to DATA_DIR/exit_log.txt.
+    Mario hit a "nothing loads anywhere" glitch (every tab's requests failing
+    at once) that looked like the local server having stopped, but there was
+    no trace of why; this makes the next one readable."""
+    try:
+        crm.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(crm.DATA_DIR / "exit_log.txt", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat(timespec='seconds')}  v{APP_VERSION}  {reason}\n")
+    except Exception:
+        pass
+
+
 def _delayed_shutdown_check():
     with _active_tabs_lock:
         any_tabs_left = bool(_active_tabs)
@@ -518,6 +531,7 @@ def _delayed_shutdown_check():
         # what actually finishes the exit once that settles.
         _stop_all_jobs()
         if _safe_to_exit():
+            _log_exit("last tab closed (shutdown signal), no one came back within the grace window")
             _final_skiptrace_sync()
             os._exit(0)
 
@@ -538,15 +552,33 @@ def shutdown():
 
 
 def _watchdog():
+    last_tick = time.time()
+    quiet_until = 0.0
     while True:
         time.sleep(5)
         now = time.time()
+        # If this 5-second sleep took much longer than 5 seconds, the PC was
+        # asleep (or frozen) in between. Every open tab stopped heartbeating
+        # during that time too, so on wake the stored heartbeats all look
+        # hours old -- without this check the very first tick after a long
+        # sleep concluded "every tab is gone" and shut the server down
+        # before the waking tab could send its next heartbeat, leaving a
+        # page where nothing loads. After a sleep, count every tab as just
+        # seen and give them a minute to check in.
+        if now - last_tick > 45:
+            with _active_tabs_lock:
+                for tid in list(_active_tabs):
+                    _active_tabs[tid] = now
+            quiet_until = now + 60
+        last_tick = now
         with _active_tabs_lock:
             stale = [tid for tid, t in _active_tabs.items() if now - t > HEARTBEAT_TIMEOUT]
             for tid in stale:
                 del _active_tabs[tid]
             any_tabs_left = bool(_active_tabs)
         within_startup_grace = (now - _server_started_at) < STARTUP_GRACE_SECONDS
+        if now < quiet_until:
+            continue
         if _ever_connected["v"] and not any_tabs_left and not within_startup_grace:
             # Every tab has been gone for a while -- same as
             # _delayed_shutdown_check(), stop any running scrape first, then
@@ -557,6 +589,7 @@ def _watchdog():
             # finish.
             _stop_all_jobs()
             if _safe_to_exit():
+                _log_exit("no open tab has checked in for a long time (watchdog)")
                 _final_skiptrace_sync()
                 os._exit(0)
 

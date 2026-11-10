@@ -4650,12 +4650,39 @@ setTimeout(() => {
 // shutdown machinery applies there.
 if (!HOSTED) {
   const URTO_TAB_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  // If URTO's program on this PC stops (or is restarting) every request on the
+  // page fails at once -- the calendar, backup status, lists all just sit
+  // empty with no explanation. The heartbeat is the one thing that runs every
+  // few seconds regardless, so it also watches for that: after several misses
+  // in a row it says so, and as soon as the server answers again the page
+  // reloads itself.
+  let heartbeatMisses = 0;
+  let serverDownBanner = null;
   const sendHeartbeat = () => {
     fetch('/api/heartbeat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tab_id: URTO_TAB_ID }),
-    }).catch(() => {});
+    }).then(res => {
+      if (!res.ok) throw new Error('bad answer');
+      if (serverDownBanner) { location.reload(); return; }
+      heartbeatMisses = 0;
+    }).catch(() => {
+      heartbeatMisses++;
+      if (heartbeatMisses >= 3 && !serverDownBanner && !document.getElementById('urtoUpdateBanner')) {
+        serverDownBanner = document.createElement('div');
+        serverDownBanner.id = 'urtoServerDownBanner';
+        serverDownBanner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;padding:10px 16px;text-align:center;background:#7a1f1f;color:#fff;font-size:.95rem';
+        serverDownBanner.innerHTML = '⚠ URTO\'s program on this PC stopped, so nothing can load. Double-click the <b>URTO</b> icon on your desktop to start it again — this page reloads by itself once it\'s back.';
+        document.body.appendChild(serverDownBanner);
+      }
+    });
   };
+  // Waking from sleep or switching back to the tab: check in right away
+  // instead of waiting for the next 5-second tick (a hidden tab's timers run
+  // far slower).
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') sendHeartbeat();
+  });
   // Fire one immediately on load, not just on the first 5s interval tick — a
   // freshly-opened tab (e.g. right after the URTO Updater launches a new one)
   // needs to register itself in _active_tabs FAST. Mario hit the race this
