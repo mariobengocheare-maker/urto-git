@@ -8131,10 +8131,56 @@ function setDialerSourceActive(btn) {
 
 dialerSourcePasteBtn.addEventListener('click', () => setDialerSourceActive(dialerSourcePasteBtn));
 
-dialerSourceCrmBtn.addEventListener('click', async () => {
-  setDialerSourceActive(dialerSourceCrmBtn);
-  const res = await fetch('/api/crm/clients');
-  const clients = await res.json();
+// Every source button used to do a bare `await fetch(...)`: if that one request
+// hiccuped (a slow PC-to-cloud connection, a cloud restart, an error page instead
+// of the list) the click did nothing at all and the Dialer just said "No list
+// loaded yet." Now each load retries quietly, and if it still can't get the list
+// it says so on screen with a Try again link.
+async function dialerFetchJson(url, expectArray) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, attempt * 900));
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const res = await fetch(url, { signal: ctl.signal });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data === null || (data && data.error && !Array.isArray(data))) {
+        lastErr = new Error((data && data.error) || `server answered ${res.status}`);
+      } else if (expectArray && !Array.isArray(data)) {
+        lastErr = new Error('the server sent back something unexpected');
+      } else {
+        return data;
+      }
+    } catch (e) {
+      lastErr = new Error(e && e.name === 'AbortError' ? 'it took too long to answer' : 'URTO could not reach its server');
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr || new Error('unknown problem');
+}
+
+let dialerSourceLoadToken = 0;
+async function runDialerSource(btn, loader) {
+  const token = ++dialerSourceLoadToken;
+  setDialerSourceActive(btn);
+  try {
+    await loader();
+  } catch (e) {
+    if (token !== dialerSourceLoadToken) return;   // Mario already picked another source
+    dialerNoPhoneNote.innerHTML = `⚠ Couldn't load this list — ${escapeHtml(e.message || 'something went wrong')}. ` +
+      '<a href="#" id="dialerSourceRetryLink">Try again</a>';
+    dialerNoPhoneNote.style.display = 'block';
+    document.getElementById('dialerSourceRetryLink').addEventListener('click', (ev) => {
+      ev.preventDefault();
+      btn.click();
+    });
+  }
+}
+
+dialerSourceCrmBtn.addEventListener('click', () => runDialerSource(dialerSourceCrmBtn, async () => {
+  const clients = await dialerFetchJson('/api/crm/clients', true);
   const urgency = { overdue: 0, due_today: 1, upcoming: 2 };
   const withPhones = clients
     .filter(c => c.phone && c.phone.trim())
@@ -8151,16 +8197,14 @@ dialerSourceCrmBtn.addEventListener('click', async () => {
     name: c.name, phone: c.phone, clientId: c.id,
     meta: [c.address, followupLabel(c)].filter(Boolean).join(' · '),
   })));
-});
+}));
 
-dialerSourceLookupBtn.addEventListener('click', async () => {
-  setDialerSourceActive(dialerSourceLookupBtn);
+dialerSourceLookupBtn.addEventListener('click', () => runDialerSource(dialerSourceLookupBtn, async () => {
   if (!jobId) {
     alert('No Owner Lookup results in this session yet. Run a lookup first, in the Owner Lookup tab.');
     return;
   }
-  const res = await fetch(`/api/status/${jobId}`);
-  const data = await res.json();
+  const data = await dialerFetchJson(`/api/status/${jobId}`, false);
   const found = (data.rows || []).filter(r => r.status === 'FOUND' && r.phone);
   if (found.length === 0) {
     alert('No FOUND results with a phone number in the current lookup session yet.');
@@ -8170,12 +8214,10 @@ dialerSourceLookupBtn.addEventListener('click', async () => {
     const fullAddr = composeFullAddress(r.address, r.city, r.state, r.zip);
     return { name: r.owner, phone: r.phone, address: fullAddr, meta: fullAddr };
   }));
-});
+}));
 
-dialerSourceTodayBtn.addEventListener('click', async () => {
-  setDialerSourceActive(dialerSourceTodayBtn);
-  const res = await fetch('/api/crm/followups/today');
-  const items = res.ok ? await res.json() : [];
+dialerSourceTodayBtn.addEventListener('click', () => runDialerSource(dialerSourceTodayBtn, async () => {
+  const items = await dialerFetchJson('/api/crm/followups/today', true);
   const withPhones = items.filter(i => i.phone && i.phone.trim());
   if (withPhones.length === 0) {
     alert('No follow-ups due today with a phone number on file.');
@@ -8185,7 +8227,7 @@ dialerSourceTodayBtn.addEventListener('click', async () => {
     name: i.client_name || i.title, phone: i.phone, clientId: i.client_id,
     meta: [i.time ? formatTime12(i.time) : '', i.title, i.status === 'overdue' ? 'OVERDUE' : ''].filter(Boolean).join(' · '),
   })));
-});
+}));
 
 function formatMissedDate(iso) {
   if (!iso) return '';
@@ -8200,8 +8242,13 @@ function formatMissedDate(iso) {
 // up" alert so an unrelated client save elsewhere never pops it unexpectedly.
 async function loadMissedFollowupsSource(opts = {}) {
   const silent = !!opts.silent;
-  const res = await fetch('/api/crm/followups/missed');
-  const items = res.ok ? await res.json() : [];
+  let items;
+  try {
+    items = await dialerFetchJson('/api/crm/followups/missed', true);
+  } catch (e) {
+    if (silent) return;   // a quiet background refresh that failed just leaves the list as it was
+    throw e;
+  }
   const withPhones = items.filter(i => i.phone && i.phone.trim());
   const noPhone = items.filter(i => !i.phone || !i.phone.trim());
 
@@ -8233,21 +8280,16 @@ async function loadMissedFollowupsSource(opts = {}) {
   })));
 }
 
-dialerSourceMissedBtn.addEventListener('click', async () => {
-  setDialerSourceActive(dialerSourceMissedBtn);
-  await loadMissedFollowupsSource();
-});
+dialerSourceMissedBtn.addEventListener('click', () => runDialerSource(dialerSourceMissedBtn, () => loadMissedFollowupsSource()));
 
-dialerSourceListBtn.addEventListener('click', async () => {
-  setDialerSourceActive(dialerSourceListBtn);
+dialerSourceListBtn.addEventListener('click', () => runDialerSource(dialerSourceListBtn, async () => {
   dialerCompleteRoundBtn.style.display = 'none';
   dialerListDueHint.textContent = '';
   dialerCurrentListId = null;
   dialerCurrentListData = null;
   document.getElementById('dialerListFreqToggleBtn').style.display = 'none';
   document.getElementById('dialerListFreqPanel').style.display = 'none';
-  const res = await fetch('/api/crm/contact_lists');
-  dialerContactLists = res.ok ? await res.json() : [];
+  dialerContactLists = await dialerFetchJson('/api/crm/contact_lists', true);
   if (dialerContactLists.length === 0) {
     dialerListSelect.innerHTML = '<option value="">No contact lists yet — create one in URTO CRM → Contact Lists</option>';
     return;
@@ -8255,7 +8297,7 @@ dialerSourceListBtn.addEventListener('click', async () => {
   dialerListSelect.innerHTML = dialerContactLists.map(l =>
     `<option value="${l.id}">${escapeHtml(l.name)} (${l.member_count})</option>`
   ).join('');
-});
+}));
 
 document.getElementById('dialerLoadListBtn').addEventListener('click', async () => {
   const listId = Number(dialerListSelect.value);
