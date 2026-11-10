@@ -1962,6 +1962,8 @@
     <div class="row" style="margin-top:0">
       <button id="addClientBtn">+ Add Client</button>
       <button class="ghost" id="findDuplicatesBtn">🔍 Find Duplicate Clients</button>
+      <button class="ghost" id="trashBtn">🗑 Recently Deleted</button>
+      <button class="ghost" id="recoverBtn">🛟 Recover Missing Notes &amp; Calls</button>
     </div>
 
     <div class="card">
@@ -2692,6 +2694,35 @@
       wrong one is itself undoable.
     </p>
     <div id="restoreList">Loading backups…</div>
+  </div>
+</div>
+
+<!-- Recently Deleted (recycle bin) modal -->
+<div class="modal-overlay" id="trashOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Recently Deleted</h2>
+      <button class="modal-close" id="trashCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">
+      Everything you delete is kept here with its notes and call history. Restore puts it back exactly as it was.
+    </p>
+    <div id="trashList">Loading…</div>
+  </div>
+</div>
+
+<!-- Recover missing notes & calls from backups modal -->
+<div class="modal-overlay" id="recoverOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Recover Missing Notes &amp; Calls</h2>
+      <button class="modal-close" id="recoverCloseBtn">&times;</button>
+    </div>
+    <p class="sub" style="margin-top:-8px;">
+      URTO looks through every backup for notes and call history that your CRM doesn't have anymore, and puts
+      them back. Nothing already in your CRM is changed or removed, and a safety snapshot is taken first.
+    </p>
+    <div id="recoverBody">Looking through your backups…</div>
   </div>
 </div>
 
@@ -5004,9 +5035,12 @@ async function checkDataHealth() {
       dataHealthWarningText.textContent = `⚠ Couldn't check backup health: ${h.error}`;
       dataHealthWarning.style.display = 'flex';
     } else if (!h.ok) {
+      const bits = [];
+      if ((h.short || ['clients']).includes('clients')) bits.push(`${h.current_count} client${h.current_count === 1 ? '' : 's'} (a backup has ${h.best_known_count})`);
+      if ((h.short || []).includes('notes')) bits.push(`${h.current_notes} notes (a backup has ${h.best_notes})`);
+      if ((h.short || []).includes('calls')) bits.push(`${h.current_calls} logged calls (a backup has ${h.best_calls})`);
       dataHealthWarningText.textContent =
-        `⚠ Your CRM shows ${h.current_count} client${h.current_count === 1 ? '' : 's'}, but a recent backup ` +
-        `has ${h.best_known_count} — some data may be missing.`;
+        `⚠ Your CRM shows ${bits.join(' and ')} — some data may be missing. Use "Recover Missing Notes & Calls" on the Clients view.`;
       dataHealthWarning.style.display = 'flex';
     } else {
       dataHealthWarning.style.display = 'none';
@@ -5072,6 +5106,121 @@ async function openRestoreModal() {
 }
 
 document.getElementById('openRestoreBtn').addEventListener('click', openRestoreModal);
+
+/* ---- Recycle bin + recover from backups (build order #220) ---- */
+const trashOverlay = document.getElementById('trashOverlay');
+const trashList = document.getElementById('trashList');
+const recoverOverlay = document.getElementById('recoverOverlay');
+const recoverBody = document.getElementById('recoverBody');
+const TRASH_KIND_LABEL = { client: 'Person', note: 'Note', list: 'Contact list' };
+
+async function openTrashModal() {
+  trashOverlay.classList.add('show');
+  trashList.innerHTML = 'Loading…';
+  try {
+    const res = await fetch('/api/crm/trash');
+    const body = await res.json();
+    if (!res.ok || body.error) throw new Error(body.error || res.status);
+    if (!body.items.length) {
+      trashList.innerHTML = '<div class="empty-state">Nothing has been deleted yet.</div>';
+      return;
+    }
+    trashList.innerHTML = body.items.map((it) => `
+      <div class="restore-row" data-id="${it.id}">
+        <div>
+          <strong>${escapeHtml(it.label || '(no name)')}</strong>
+          <span class="restore-count">${TRASH_KIND_LABEL[it.kind] || it.kind}</span>
+          <div class="sub" style="margin:2px 0 0;">${escapeHtml(it.summary || '')}${it.extra ? ' · ' + escapeHtml(it.extra) : ''}</div>
+          <div class="sub" style="margin:2px 0 0;">Deleted ${escapeHtml(formatNoteTime(it.deleted_at))}</div>
+        </div>
+        <button class="small trash-restore-btn">Restore</button>
+      </div>`).join('');
+    trashList.querySelectorAll('.trash-restore-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.closest('.restore-row').dataset.id;
+        btn.disabled = true; btn.textContent = 'Restoring…';
+        try {
+          const res = await fetch(`/api/crm/trash/${id}/restore`, { method: 'POST' });
+          const out = await res.json();
+          if (!res.ok || out.error) throw new Error(out.error || res.status);
+          btn.textContent = '✓ Restored';
+          try { await loadClients(); } catch (e) { /* ignore */ }
+          try { if (contactListsEl.offsetParent !== null) loadContactLists(); } catch (e) { /* ignore */ }
+        } catch (e) {
+          btn.disabled = false; btn.textContent = 'Restore';
+          alert(`Couldn't restore: ${e.message}`);
+        }
+      });
+    });
+  } catch (e) {
+    trashList.innerHTML = `<div class="empty-state">Couldn't load the list (${escapeHtml(String(e.message || e))}). Try again in a moment.</div>`;
+  }
+}
+
+async function openRecoverModal() {
+  recoverOverlay.classList.add('show');
+  recoverBody.innerHTML = 'Looking through your backups…';
+  try {
+    const res = await fetch('/api/backup/recover_history/scan', { method: 'POST' });
+    const sc = await res.json();
+    if (!res.ok || sc.error) throw new Error(sc.error || res.status);
+    if (!sc.notes_missing && !sc.calls_missing && !sc.people.length) {
+      recoverBody.innerHTML = `<div class="empty-state">Nothing is missing. Checked ${sc.backups_scanned} backup${sc.backups_scanned === 1 ? '' : 's'} and every note and call in them is already in your CRM.</div>`;
+      return;
+    }
+    const aff = sc.affected.slice(0, 15).map((a) =>
+      `<li>${escapeHtml(a.name)} — ${a.notes} note${a.notes === 1 ? '' : 's'}, ${a.calls} call${a.calls === 1 ? '' : 's'}</li>`).join('');
+    const ppl = sc.people.map((p, i) => `
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" class="recover-person" data-key="${escapeHtml(p.key)}" ${p.default_checked ? 'checked' : ''}>
+        <strong>${escapeHtml(p.name || '(no name)')}</strong> ${p.phone ? '· ' + escapeHtml(p.phone) : ''}
+        — ${p.notes} note${p.notes === 1 ? '' : 's'}, ${p.calls} call${p.calls === 1 ? '' : 's'}
+        ${p.lists.length ? '· on list: ' + escapeHtml(p.lists.join(', ')) : ''}
+        ${p.deleted_at ? '<span class="sub"> · you deleted them on ' + escapeHtml(formatNoteTime(p.deleted_at)) + '</span>' : ''}
+      </label>`).join('');
+    recoverBody.innerHTML = `
+      <p>Checked <strong>${sc.backups_scanned}</strong> backup${sc.backups_scanned === 1 ? '' : 's'}. Missing from your CRM:
+        <strong>${sc.notes_missing}</strong> note${sc.notes_missing === 1 ? '' : 's'} and
+        <strong>${sc.calls_missing}</strong> call${sc.calls_missing === 1 ? '' : 's'}
+        for people who are still in your CRM${aff ? ':' : '.'}</p>
+      ${aff ? `<ul>${aff}</ul>` : ''}
+      ${sc.people.length ? `<p style="margin-top:14px;"><strong>People who are in a backup but not in your CRM</strong> (with their notes and calls).
+        Tick the ones to bring back:</p>${ppl}` : ''}
+      <div class="row" style="margin-top:14px;">
+        <button id="recoverApplyBtn">Put it all back</button>
+        <button class="ghost" id="recoverCancelBtn">Cancel</button>
+      </div>
+      <div id="recoverMsg" class="sub"></div>`;
+    document.getElementById('recoverCancelBtn').addEventListener('click', () => recoverOverlay.classList.remove('show'));
+    document.getElementById('recoverApplyBtn').addEventListener('click', async () => {
+      const keys = [...recoverBody.querySelectorAll('.recover-person:checked')].map((el) => el.dataset.key);
+      const btn = document.getElementById('recoverApplyBtn');
+      const msg = document.getElementById('recoverMsg');
+      btn.disabled = true; btn.textContent = 'Putting it back…';
+      try {
+        const r = await fetch('/api/backup/recover_history/apply', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ people: keys }),
+        });
+        const out = await r.json();
+        if (!r.ok || out.error) throw new Error(out.error || r.status);
+        recoverBody.innerHTML = `<div class="empty-state">✓ Done. Put back ${out.notes_added} note${out.notes_added === 1 ? '' : 's'}, ${out.calls_added} call${out.calls_added === 1 ? '' : 's'} and ${out.people_added} ${out.people_added === 1 ? 'person' : 'people'}.</div>`;
+        try { await loadClients(); } catch (e) { /* ignore */ }
+        try { if (contactListsEl.offsetParent !== null) loadContactLists(); } catch (e) { /* ignore */ }
+        try { checkDataHealth(); } catch (e) { /* ignore */ }
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Put it all back';
+        msg.textContent = `Couldn't recover: ${e.message}. Nothing was changed.`;
+      }
+    });
+  } catch (e) {
+    recoverBody.innerHTML = `<div class="empty-state">Couldn't read the backups (${escapeHtml(String(e.message || e))}). Try again in a moment.</div>`;
+  }
+}
+document.getElementById('trashBtn').addEventListener('click', openTrashModal);
+document.getElementById('trashCloseBtn').addEventListener('click', () => trashOverlay.classList.remove('show'));
+document.getElementById('recoverBtn').addEventListener('click', openRecoverModal);
+document.getElementById('recoverCloseBtn').addEventListener('click', () => recoverOverlay.classList.remove('show'));
+
 document.getElementById('dataHealthRestoreBtn').addEventListener('click', openRestoreModal);
 document.getElementById('restoreCloseBtn').addEventListener('click', () => restoreOverlay.classList.remove('show'));
 
@@ -6075,7 +6224,24 @@ async function deleteClientEverywhere(clientId, opts = {}) {
     const copies = allClients.filter((c) => nameKeyForDelete(c.name) === nameKeyForDelete(before.name));
     for (const copy of copies) {
       const detail = [copy.phone, copy.address].filter(Boolean).join(' · ') || 'no phone or address';
-      if (!confirm(`Deleted. There's another copy of ${before.name} in your CRM (${detail}). Delete that one too?`)) break;
+      // Never offer to delete a copy that has notes or call history: that
+      // history would go with it (build order #220).
+      let hist = null;
+      try {
+        const [nr, cr] = await Promise.all([
+          fetch(`/api/crm/clients/${copy.id}`).then((r) => r.json()),
+          fetch(`/api/crm/clients/${copy.id}/call_history`).then((r) => r.json()),
+        ]);
+        const nn = (nr.notes || []).length;
+        const cc = Array.isArray(cr) ? cr.length : 0;
+        hist = { notes: nn, calls: cc };
+      } catch (e) { hist = null; }
+      if (!hist) break; // can't tell whether it has history, so leave it alone
+      if (hist.notes || hist.calls) {
+        alert(`Deleted. There's another copy of ${before.name} (${detail}) but it has ${hist.notes} note${hist.notes === 1 ? '' : 's'} and ${hist.calls} call${hist.calls === 1 ? '' : 's'}, so it was left alone. Use "Find Duplicate Clients" to merge copies without losing anything.`);
+        break;
+      }
+      if (!confirm(`Deleted. There's another copy of ${before.name} in your CRM (${detail}). It has no notes or calls. Delete that one too?`)) break;
       if (!(await deleteClientEverywhere(copy.id, { skipCopies: true }))) break;
     }
   }

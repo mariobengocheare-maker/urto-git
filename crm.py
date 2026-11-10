@@ -788,6 +788,7 @@ def _write_full_data_export(backup_dir: Path):
         "weekly_scorecards": [dict(r) for r in conn.execute("SELECT * FROM weekly_scorecards ORDER BY week_start").fetchall()],
         "no_work_days": [dict(r) for r in conn.execute("SELECT * FROM no_work_days ORDER BY day").fetchall()],
         "deleted_clients": [dict(r) for r in conn.execute("SELECT * FROM deleted_clients ORDER BY id").fetchall()],
+        "trash": [dict(r) for r in conn.execute("SELECT * FROM trash ORDER BY id").fetchall()],
         "contact_lists": [dict(r) for r in conn.execute("SELECT * FROM contact_lists ORDER BY id").fetchall()],
         "contact_list_members": [dict(r) for r in conn.execute("SELECT * FROM contact_list_members").fetchall()],
         "cre_units": [dict(r) for r in conn.execute("SELECT * FROM cre_units ORDER BY id").fetchall()],
@@ -861,7 +862,7 @@ def import_full_data_export(data: dict) -> dict:
         "clients", "notes", "call_log", "dialer_calls", "contact_lists", "contact_list_members", "cre_units",
         "chess_pieces", "events", "document_types", "transactions", "transaction_documents",
         "lookup_stats", "text_presets", "text_sequences", "text_sequence_sends", "commission_entries", "eos_rocks", "waterfall_items",
-        "showing_days", "showing_stops", "skiptrace_results", "weekly_scorecards", "no_work_days", "deleted_clients", "activity_log",
+        "showing_days", "showing_stops", "skiptrace_results", "weekly_scorecards", "no_work_days", "deleted_clients", "trash", "activity_log",
     ]
     counts = {}
     try:
@@ -1536,14 +1537,31 @@ def list_available_snapshots() -> list:
     return results
 
 
+def _count_table_in_db(db_path: Path, table: str):
+    if not db_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+        conn.close()
+        return row[0]
+    except Exception:
+        return None
+
+
 def _read_data_health_counts():
-    current = _count_clients_in_db(DB_PATH) or 0
+    """(live, best-known-in-the-mirror) for clients, notes and call history."""
     mirrors = [
         s for s in list_available_snapshots()
         if s["filename"] == LATEST_NAME and s["client_count"] is not None
     ]
-    best = max((s["client_count"] for s in mirrors), default=current)
-    return current, best
+    out = {}
+    for label, table in (("clients", "clients"), ("notes", "notes"), ("calls", "call_log")):
+        current = _count_table_in_db(DB_PATH, table) or 0
+        vals = [_count_table_in_db(Path(m["path"]), table) for m in mirrors]
+        best = max([v for v in vals if v is not None], default=current)
+        out[label] = (current, best)
+    return out
 
 
 # ---- Offline copy for the desktop app (build order #185) ----
@@ -1622,16 +1640,320 @@ def check_data_health() -> dict:
     corresponding backup pass finishes), so a mismatch found while it's
     still true gets a brief bounded wait-and-recheck before ever being
     reported, rather than declaring data loss off a stale mirror read."""
-    current_count, best = _read_data_health_counts()
-    if current_count >= best:
-        return {"ok": True, "current_count": current_count, "best_known_count": best}
+    def verdict(counts):
+        short = [k for k in ("clients", "notes", "calls") if counts[k][0] < counts[k][1]]
+        res = {
+            "ok": not short,
+            "current_count": counts["clients"][0], "best_known_count": counts["clients"][1],
+            "current_notes": counts["notes"][0], "best_notes": counts["notes"][1],
+            "current_calls": counts["calls"][0], "best_calls": counts["calls"][1],
+            "short": short,
+        }
+        return res
 
+    result = verdict(_read_data_health_counts())
+    if result["ok"]:
+        return result
     for _ in range(15):
         if not _dirty:
             break
         time.sleep(0.2)
-    current_count, best = _read_data_health_counts()
-    return {"ok": current_count >= best, "current_count": current_count, "best_known_count": best}
+    return verdict(_read_data_health_counts())
+
+
+def list_trash(limit=300) -> list:
+    """Recently deleted things, newest first, with a short summary of what
+    would come back. 'merged' rows are bookkeeping only (not restorable)."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM trash WHERE kind != 'merged' AND restored_at IS NULL ORDER BY id DESC LIMIT ?",
+        (int(limit),),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            p = json.loads(r["payload"])
+        except ValueError:
+            continue
+        if r["kind"] == "client":
+            c = p.get("client", {})
+            summary = f"{len(p.get('notes', []))} notes, {len(p.get('call_log', []))} calls"
+            extra = c.get("phone") or c.get("address") or ""
+        elif r["kind"] == "note":
+            n = p.get("note", {})
+            summary = (n.get("text") or "")[:120]
+            extra = n.get("created_at") or ""
+        else:
+            summary = f"{len(p.get('client_ids', []))} members"
+            extra = (p.get("list") or {}).get("description") or ""
+        out.append({
+            "id": r["id"], "kind": r["kind"], "label": r["label"],
+            "deleted_at": r["deleted_at"], "summary": summary, "extra": extra,
+        })
+    return out
+
+
+def restore_from_trash(trash_id) -> dict:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM trash WHERE id = ?", (trash_id,)).fetchone()
+    if not row or row["restored_at"] or row["kind"] == "merged":
+        conn.close()
+        raise ValueError("That item isn't in the recycle bin anymore.")
+    p = json.loads(row["payload"])
+    result = {"kind": row["kind"], "label": row["label"]}
+    if row["kind"] == "client":
+        c = p["client"]
+        new_id = _reinsert_row(conn, "clients", c)
+        if not new_id:
+            conn.close()
+            raise ValueError("Couldn't put this person back.")
+        for n in p.get("notes", []):
+            _reinsert_row(conn, "notes", n, {"client_id": new_id})
+        for cl in p.get("call_log", []):
+            _reinsert_row(conn, "call_log", cl, {"client_id": new_id})
+        for lid in p.get("list_ids", []):
+            if conn.execute("SELECT 1 FROM contact_lists WHERE id = ?", (lid,)).fetchone():
+                conn.execute("INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)", (lid, new_id))
+        for ev in p.get("events", []):
+            _reinsert_row(conn, "events", ev, {"client_id": new_id})
+        for pc in p.get("chess_pieces", []):
+            _reinsert_row(conn, "chess_pieces", pc, {"client_id": new_id})
+        for did in p.get("dialer_call_ids", []):
+            conn.execute("UPDATE dialer_calls SET client_id = ? WHERE id = ? AND client_id IS NULL", (new_id, did))
+        for sid in p.get("send_ids", []):
+            conn.execute("UPDATE text_sequence_sends SET client_id = ? WHERE id = ? AND client_id IS NULL", (new_id, sid))
+        conn.execute("DELETE FROM deleted_clients WHERE client_id = ? AND name = ?", (c.get("id"), c.get("name")))
+        result["client_id"] = new_id
+        result["notes"] = len(p.get("notes", []))
+        result["calls"] = len(p.get("call_log", []))
+    elif row["kind"] == "note":
+        n = p["note"]
+        if not conn.execute("SELECT 1 FROM clients WHERE id = ?", (n.get("client_id"),)).fetchone():
+            conn.close()
+            raise ValueError("The person this note belonged to isn't in your CRM anymore. Restore them first.")
+        _reinsert_row(conn, "notes", n)
+    elif row["kind"] == "list":
+        lst = p["list"]
+        new_id = _reinsert_row(conn, "contact_lists", lst)
+        if not new_id:
+            conn.close()
+            raise ValueError("Couldn't put this list back.")
+        for cid in p.get("client_ids", []):
+            if conn.execute("SELECT 1 FROM clients WHERE id = ?", (cid,)).fetchone():
+                conn.execute("INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)", (new_id, cid))
+        for ev in p.get("events", []):
+            _reinsert_row(conn, "events", ev, {"list_id": new_id})
+        result["list_id"] = new_id
+    conn.execute("UPDATE trash SET restored_at = ? WHERE id = ?", (_now().isoformat(timespec="seconds"), trash_id))
+    conn.commit()
+    conn.close()
+    on_data_changed("restored from recycle bin", f"{row['kind']}: {row['label']}")
+    return result
+
+
+# ---- Recover notes & call history from backups (build order #220) ----
+
+def _snapshot_files():
+    seen, files = set(), []
+    for s in list_available_snapshots():
+        key = (s["filename"], s["modified_at"])
+        if key in seen or not Path(s["path"]).exists():
+            continue
+        seen.add(key)
+        files.append(Path(s["path"]))
+    return files
+
+
+def _backup_table_rows(conn, table, cols):
+    have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if not have:
+        return []
+    pick = [c for c in cols if c in have]
+    if not pick:
+        return []
+    return [dict(zip(pick, r)) for r in conn.execute(f"SELECT {','.join(pick)} FROM {table}").fetchall()]
+
+
+def scan_backups_for_recovery() -> dict:
+    """Reads every backup file (read-only) and finds what the live CRM is
+    missing: notes and call history belonging to people who ARE still in the
+    CRM, and whole people (with history) who aren't. Matches people by phone
+    number first, then by exact name. Notes Mario deleted on purpose (they're
+    in the recycle bin) are not offered back."""
+    live = get_conn()
+    live_clients = _rows_of(live, "SELECT id, name, phone FROM clients")
+    by_phone, by_name = {}, {}
+    for c in live_clients:
+        k = _normalize_phone_key(c["phone"])
+        if k:
+            by_phone.setdefault(k, []).append(c["id"])
+        by_name.setdefault(_name_key(c["name"]), []).append(c["id"])
+    from collections import Counter
+    live_notes = Counter((r["client_id"], r["text"], r["created_at"]) for r in _rows_of(live, "SELECT client_id, text, created_at FROM notes"))
+    live_calls = Counter((r["client_id"], r["called_at"], r.get("kind") or "call") for r in _rows_of(live, "SELECT client_id, called_at, kind FROM call_log"))
+    live_list_names = {_name_key(r["name"]): r["id"] for r in _rows_of(live, "SELECT id, name FROM contact_lists")}
+    trashed_notes = set()
+    for t in _rows_of(live, "SELECT payload FROM trash WHERE kind = 'note'"):
+        try:
+            n = json.loads(t["payload"]).get("note", {})
+            trashed_notes.add((_name_key(_client_name(n.get("client_id"))), n.get("text"), n.get("created_at")))
+        except ValueError:
+            pass
+    deleted_before = {}
+    for d in _rows_of(live, "SELECT name, phone_key, deleted_at FROM deleted_clients ORDER BY id"):
+        if d["phone_key"]:
+            deleted_before[("p", d["phone_key"])] = d["deleted_at"]
+        deleted_before[("n", _name_key(d["name"]))] = d["deleted_at"]
+    live.close()
+
+    add_notes = {}   # live client id -> {(text, created_at): copies missing}
+    add_calls = {}   # live client id -> {(called_at, kind): copies missing}
+    people = {}      # key -> person dict
+    scanned = 0
+    for f in _snapshot_files():
+        try:
+            conn = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+        except sqlite3.Error:
+            continue
+        try:
+            clients = _backup_table_rows(conn, "clients", ["id", "name", "phone", "address", "email", "contact_info",
+                                                          "created_at", "frequency_label", "interval_days", "next_followup_date"])
+            if not clients:
+                continue
+            notes = _backup_table_rows(conn, "notes", ["client_id", "text", "created_at"])
+            calls = _backup_table_rows(conn, "call_log", ["client_id", "called_at", "kind"])
+            members = _backup_table_rows(conn, "contact_list_members", ["list_id", "client_id"])
+            lists = {r["id"]: r["name"] for r in _backup_table_rows(conn, "contact_lists", ["id", "name"])}
+        except sqlite3.Error:
+            continue
+        finally:
+            conn.close()
+        scanned += 1
+        notes_by, calls_by, lists_by = {}, {}, {}
+        for n in notes:
+            notes_by.setdefault(n["client_id"], []).append(n)
+        for c in calls:
+            calls_by.setdefault(c["client_id"], []).append(c)
+        for m in members:
+            if m["list_id"] in lists:
+                lists_by.setdefault(m["client_id"], set()).add(lists[m["list_id"]])
+        for bc in clients:
+            pk = _normalize_phone_key(bc.get("phone"))
+            nk = _name_key(bc.get("name"))
+            live_ids = list(by_phone.get(pk, [])) if pk else []
+            if not live_ids and len(by_name.get(nk, [])) == 1 and nk:
+                live_ids = list(by_name[nk])
+            if live_ids:
+                target = live_ids[0]
+                bn = Counter((n["text"], n["created_at"]) for n in notes_by.get(bc["id"], []))
+                for (text, created), cnt in bn.items():
+                    if (nk, text, created) in trashed_notes:
+                        continue
+                    need = cnt - live_notes.get((target, text, created), 0)
+                    if need > 0:
+                        d = add_notes.setdefault(target, {})
+                        d[(text, created)] = max(d.get((text, created), 0), need)
+                bc_calls = Counter((c["called_at"], c.get("kind") or "call") for c in calls_by.get(bc["id"], []))
+                for (called_at, kind), cnt in bc_calls.items():
+                    need = cnt - live_calls.get((target, called_at, kind), 0)
+                    if need > 0:
+                        d = add_calls.setdefault(target, {})
+                        d[(called_at, kind)] = max(d.get((called_at, kind), 0), need)
+            else:
+                pkey = pk or ("name:" + nk)
+                person = people.setdefault(pkey, {
+                    "key": pkey, "name": bc.get("name"), "phone": bc.get("phone"), "address": bc.get("address"),
+                    "email": bc.get("email"), "contact_info": bc.get("contact_info"),
+                    "notes": {}, "calls": {}, "lists": set(),
+                })
+                for k, cnt in Counter((n["text"], n["created_at"]) for n in notes_by.get(bc["id"], [])).items():
+                    person["notes"][k] = max(person["notes"].get(k, 0), cnt)
+                for k, cnt in Counter((c["called_at"], c.get("kind") or "call") for c in calls_by.get(bc["id"], [])).items():
+                    person["calls"][k] = max(person["calls"].get(k, 0), cnt)
+                person["lists"] |= lists_by.get(bc["id"], set())
+
+    names = {c["id"]: c["name"] for c in live_clients}
+    affected = sorted(
+        ({"client_id": cid, "name": names.get(cid, ""), "notes": sum(add_notes.get(cid, {}).values()), "calls": sum(add_calls.get(cid, {}).values())}
+         for cid in set(add_notes) | set(add_calls)),
+        key=lambda a: -(a["notes"] + a["calls"]),
+    )
+    people_list = []
+    for p in people.values():
+        nk = _name_key(p["name"])
+        pk = _normalize_phone_key(p["phone"])
+        when = deleted_before.get(("p", pk)) if pk else None
+        when = when or deleted_before.get(("n", nk))
+        on_live_list = any(_name_key(n) in live_list_names for n in p["lists"])
+        people_list.append({
+            "key": p["key"], "name": p["name"], "phone": p["phone"], "address": p["address"],
+            "notes": sum(p["notes"].values()), "calls": sum(p["calls"].values()), "lists": sorted(p["lists"]),
+            "deleted_at": when, "default_checked": bool(on_live_list and not when),
+        })
+    people_list.sort(key=lambda p: (not p["default_checked"], -(p["notes"] + p["calls"]), (p["name"] or "").lower()))
+    return {
+        "backups_scanned": scanned,
+        "notes_missing": sum(sum(v.values()) for v in add_notes.values()),
+        "calls_missing": sum(sum(v.values()) for v in add_calls.values()),
+        "clients_affected": len(affected),
+        "affected": affected[:60],
+        "people": people_list,
+        "_add_notes": add_notes, "_add_calls": add_calls, "_people": people,
+        "_live_list_names": live_list_names,
+    }
+
+
+def public_scan(scan: dict) -> dict:
+    return {k: v for k, v in scan.items() if not k.startswith("_")}
+
+
+def apply_backup_recovery(people_keys) -> dict:
+    """Puts back the missing notes/calls found by scan_backups_for_recovery()
+    and the chosen missing people (with their history and list memberships).
+    Takes a safety snapshot first; never changes or removes anything that's
+    already in the CRM."""
+    scan = scan_backups_for_recovery()
+    backup_now("pre-recovery safety snapshot", push_drive=False)
+    notes_added = calls_added = people_added = 0
+    with _deferred_backup():
+        conn = get_conn()
+        for cid, items in scan["_add_notes"].items():
+            for (text, created), cnt in sorted(items.items(), key=lambda x: x[0][1] or ""):
+                for _ in range(cnt):
+                    conn.execute("INSERT INTO notes (client_id, text, created_at) VALUES (?, ?, ?)", (cid, text, created))
+                    notes_added += 1
+        for cid, items in scan["_add_calls"].items():
+            for (called_at, kind), cnt in sorted(items.items()):
+                for _ in range(cnt):
+                    conn.execute("INSERT INTO call_log (client_id, called_at, kind) VALUES (?, ?, ?)", (cid, called_at, kind))
+                    calls_added += 1
+        wanted = set(people_keys or [])
+        for key, p in scan["_people"].items():
+            if key not in wanted:
+                continue
+            cur = conn.execute(
+                "INSERT INTO clients (name, phone, contact_info, address, email, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (p["name"], p["phone"], p["contact_info"], p["address"], p["email"], _now().isoformat(timespec="seconds")),
+            )
+            nid = cur.lastrowid
+            for (text, created), cnt in sorted(p["notes"].items(), key=lambda x: x[0][1] or ""):
+                for _ in range(cnt):
+                    conn.execute("INSERT INTO notes (client_id, text, created_at) VALUES (?, ?, ?)", (nid, text, created))
+                    notes_added += 1
+            for (called_at, kind), cnt in sorted(p["calls"].items()):
+                for _ in range(cnt):
+                    conn.execute("INSERT INTO call_log (client_id, called_at, kind) VALUES (?, ?, ?)", (nid, called_at, kind))
+                    calls_added += 1
+            for ln in p["lists"]:
+                lid = scan["_live_list_names"].get(_name_key(ln))
+                if lid:
+                    conn.execute("INSERT OR IGNORE INTO contact_list_members (list_id, client_id) VALUES (?, ?)", (lid, nid))
+            people_added += 1
+        conn.commit()
+        conn.close()
+    on_data_changed("recovered from backups", f"{notes_added} notes, {calls_added} calls, {people_added} people")
+    return {"ok": True, "notes_added": notes_added, "calls_added": calls_added, "people_added": people_added}
 
 
 def restore_from_snapshot(snapshot_path: str) -> dict:
@@ -2185,6 +2507,18 @@ def init_db():
             deleted_at TEXT NOT NULL
         )
     """)
+    # Recycle bin (build order #220): everything Mario deletes lands here with
+    # its full history first, so a delete can always be undone.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trash (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            label TEXT,
+            payload TEXT NOT NULL,
+            deleted_at TEXT NOT NULL,
+            restored_at TEXT
+        )
+    """)
     # One-time: copy the calls already logged for CRM clients into it, so the
     # week/month/year counters start with real history instead of zero.
     if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'dialer_calls_backfilled'").fetchone():
@@ -2650,10 +2984,68 @@ def update_client(client_id, name, phone, contact_info, address, frequency_key, 
     return client_to_dict(row)
 
 
+def _rows_of(conn, sql, args=()):
+    try:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+    except sqlite3.Error:
+        return []
+
+
+def _trash_put(conn, kind, label, payload):
+    conn.execute(
+        "INSERT INTO trash (kind, label, payload, deleted_at) VALUES (?, ?, ?, ?)",
+        (kind, label or "", json.dumps(payload), _now().isoformat(timespec="seconds")),
+    )
+
+
+def _client_bundle(conn, client_id):
+    """Everything that disappears (or gets unlinked) when a client is
+    deleted, so it can be put back exactly: the client, notes, call
+    history, list memberships, calendar events, chessboard pieces, and the
+    ids of Dialer calls / text sends that only get unlinked."""
+    client = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not client:
+        return None
+    return {
+        "client": dict(client),
+        "notes": _rows_of(conn, "SELECT * FROM notes WHERE client_id = ?", (client_id,)),
+        "call_log": _rows_of(conn, "SELECT * FROM call_log WHERE client_id = ?", (client_id,)),
+        "list_ids": [r["list_id"] for r in _rows_of(conn, "SELECT list_id FROM contact_list_members WHERE client_id = ?", (client_id,))],
+        "events": _rows_of(conn, "SELECT * FROM events WHERE client_id = ?", (client_id,)),
+        "chess_pieces": _rows_of(conn, "SELECT * FROM chess_pieces WHERE client_id = ?", (client_id,)),
+        "dialer_call_ids": [r["id"] for r in _rows_of(conn, "SELECT id FROM dialer_calls WHERE client_id = ?", (client_id,))],
+        "send_ids": [r["id"] for r in _rows_of(conn, "SELECT id FROM text_sequence_sends WHERE client_id = ?", (client_id,))],
+    }
+
+
+def _reinsert_row(conn, table, row, force_cols=None):
+    """Inserts a saved row back into `table`, keeping its id when that id is
+    free (otherwise letting SQLite pick one) and ignoring columns the table
+    no longer has. Returns the new row id, or None if it couldn't be put back."""
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    data = {k: v for k, v in row.items() if k in cols}
+    data.update(force_cols or {})
+    if "id" in data and conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (data["id"],)).fetchone():
+        del data["id"]
+    if not data:
+        return None
+    try:
+        cur = conn.execute(
+            f"INSERT INTO {table} ({','.join(data)}) VALUES ({','.join('?' * len(data))})",
+            list(data.values()),
+        )
+        return cur.lastrowid
+    except sqlite3.Error:
+        return None
+
+
 def delete_client(client_id):
     conn = get_conn()
     gone = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     if gone:
+        bundle = _client_bundle(conn, client_id)
+        if bundle:
+            _trash_put(conn, "client", gone["name"], bundle)
         conn.execute(
             """INSERT INTO deleted_clients (client_id, name, phone, phone_key, address, email, deleted_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -2805,6 +3197,9 @@ def merge_clients(keep_id, remove_ids) -> dict:
             dup = conn.execute("SELECT * FROM clients WHERE id = ?", (rid,)).fetchone()
             if not dup:
                 continue
+            # Keep a copy of the merged-away person (without the history,
+            # which moves onto the kept client) in the recycle bin.
+            _trash_put(conn, "merged", dup["name"], {"client": dict(dup), "merged_into": keep_id})
             conn.execute("UPDATE notes SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute("UPDATE call_log SET client_id = ? WHERE client_id = ?", (keep_id, rid))
             conn.execute("UPDATE dialer_calls SET client_id = ? WHERE client_id = ?", (keep_id, rid))
@@ -3147,6 +3542,13 @@ def set_contact_list_description(list_id, description) -> dict:
 
 def delete_contact_list(list_id):
     conn = get_conn()
+    lst = conn.execute("SELECT * FROM contact_lists WHERE id = ?", (list_id,)).fetchone()
+    if lst:
+        _trash_put(conn, "list", lst["name"], {
+            "list": dict(lst),
+            "client_ids": [r["client_id"] for r in _rows_of(conn, "SELECT client_id FROM contact_list_members WHERE list_id = ?", (list_id,))],
+            "events": _rows_of(conn, "SELECT * FROM events WHERE list_id = ?", (list_id,)),
+        })
     conn.execute("DELETE FROM contact_lists WHERE id = ?", (list_id,))
     conn.commit()
     conn.close()
@@ -3535,6 +3937,11 @@ def list_notes(client_id) -> list:
 
 def delete_note(client_id, note_id) -> bool:
     conn = get_conn()
+    saved = conn.execute(
+        "SELECT * FROM notes WHERE id = ? AND client_id = ?", (note_id, client_id)
+    ).fetchone()
+    if saved:
+        _trash_put(conn, "note", _client_name(client_id), {"note": dict(saved)})
     cur = conn.execute(
         "DELETE FROM notes WHERE id = ? AND client_id = ?", (note_id, client_id)
     )

@@ -47,6 +47,19 @@ def crm_create_client():
     return jsonify(client)
 
 
+@crm_bp.route("/api/crm/trash", methods=["GET"])
+def crm_list_trash():
+    return jsonify({"items": crm.list_trash()})
+
+
+@crm_bp.route("/api/crm/trash/<int:trash_id>/restore", methods=["POST"])
+def crm_restore_trash(trash_id):
+    try:
+        return jsonify(crm.restore_from_trash(trash_id))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @crm_bp.route("/api/crm/deleted_clients", methods=["GET"])
 def crm_list_deleted_clients():
     return jsonify({"deleted": crm.list_deleted_clients()})
@@ -559,6 +572,17 @@ def backup_offline_copy():
         return "", 304, {"ETag": etag}
     data = crm.make_offline_copy_bytes()
     return data, 200, {"Content-Type": "application/x-sqlite3", "ETag": etag, "Cache-Control": "no-store"}
+
+
+@crm_bp.route("/api/backup/recover_history/scan", methods=["POST"])
+def backup_recover_scan():
+    return jsonify(crm.public_scan(crm.scan_backups_for_recovery()))
+
+
+@crm_bp.route("/api/backup/recover_history/apply", methods=["POST"])
+def backup_recover_apply():
+    keys = (request.get_json(force=True, silent=True) or {}).get("people", [])
+    return jsonify(crm.apply_backup_recovery(keys))
 
 
 @crm_bp.route("/api/backup/snapshots")
