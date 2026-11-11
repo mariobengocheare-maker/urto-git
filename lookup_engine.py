@@ -102,6 +102,16 @@ def extract_first_phone(page) -> str:
 MAX_CROSS_COMBO_SEARCHES = 12
 
 
+def alt_cand_ref(alt_person, candidates):
+    """The candidate dict that came from the case's second defendant, if any."""
+    if not alt_person or not candidates:
+        return None
+    for c in candidates:
+        if c.get("resolved_via") == "the case's second defendant":
+            return c
+    return None
+
+
 def process_row(page, row: dict, debug: bool = False) -> dict:
     # A note input_parser.py may have already attached at parse time (e.g.
     # the owner name was recovered from the case's own Defendant field, or
@@ -139,6 +149,21 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
                 {"first_name": resolved["first_name"], "last_name": resolved["last_name"],
                  "resolved_via": resolved["resolved_via"]}
             ]
+        # The case's second defendant, when it's a plain person tied to this
+        # business (build order #224) -- tried last, after every Sunbiz
+        # person, and the only option when Sunbiz can't resolve the business
+        # at all. Verified against the property's own address (no match_address).
+        alt_person = row.get("alt_person")
+        if alt_person:
+            alt_cand = {"first_name": alt_person["first_name"], "last_name": alt_person["last_name"],
+                        "resolved_via": "the case's second defendant"}
+            if skip_reason or not candidates:
+                entity_note += (f"Sunbiz couldn't resolve '{entity_name}' ({skip_reason or 'no people found'}) "
+                                 f"— using the case's other named defendant instead. ")
+                skip_reason = None
+                candidates = [alt_cand]
+            else:
+                candidates = list(candidates) + [alt_cand]
         if skip_reason:
             return {"phone": "", "status": "SKIPPED", "notes": skip_reason}
         primary = candidates[0]
@@ -156,8 +181,11 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
         # build order #142). Verify against THEIR OWN on-file address
         # instead, when Sunbiz gave us one.
         match_address = primary.get("address") or None
-        entity_note += (f"Resolved via Sunbiz ({primary['resolved_via']}): "
-                         f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}. ")
+        if primary is alt_cand_ref(alt_person, candidates):
+            entity_note += f"Searching {primary['first_name']} {primary['last_name']} (the case's other named defendant). "
+        else:
+            entity_note += (f"Resolved via Sunbiz ({primary['resolved_via']}): "
+                             f"'{entity_name}' -> {primary['first_name']} {primary['last_name']}. ")
     else:
         # A row can carry the OWNER's own mailing zip straight from the
         # input file (e.g. a "Tax - Owner - Postal Code" column on a
@@ -238,8 +266,12 @@ def process_row(page, row: dict, debug: bool = False) -> dict:
             row["last_name"] = fallback["last_name"]
             search_zip = fb_zip
             match_address = fallback.get("address") or None
-            entity_note += (f"No FOREWARN match for that name — retrying via Sunbiz "
-                             f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}. ")
+            if fallback.get("resolved_via") == "the case's second defendant":
+                entity_note += (f"No FOREWARN match for that name — retrying the case's other named "
+                                 f"defendant: {fallback['first_name']} {fallback['last_name']}. ")
+            else:
+                entity_note += (f"No FOREWARN match for that name — retrying via Sunbiz "
+                                 f"({fallback['resolved_via']}): {fallback['first_name']} {fallback['last_name']}. ")
             tried_combos.add(_combo(fallback["first_name"], fallback["last_name"], search_zip or row["zip"]))
             result = _run_forewarn_search(page, row, debug=debug, search_zip=search_zip,
                                            match_address=match_address)

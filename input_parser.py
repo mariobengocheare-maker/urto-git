@@ -393,6 +393,12 @@ def _try_extract_trust_person(tokens: list, name_order: str = "last_first") -> d
     if len(core) < 2 or any(t in ENTITY_TOKENS for t in core) or "&" in core:
         return None
 
+    # A trust named with bare initials ("CK BRESLAUER TRUST") has no real
+    # first name to search -- the initials would be sent to FOREWARN as if
+    # they were a surname/first name. Skip rather than waste a search.
+    if len(core) == 2 and any(len(t) <= 2 and not re.search(r"[AEIOUY]", t) for t in core):
+        return None
+
     if name_order == "first_last":
         if core[-1] in SUFFIXES and len(core) >= 3:
             first_name, last_name = core[0], core[-2]
@@ -524,6 +530,31 @@ def parse_owner_name(owner_raw: str, name_order: str = "last_first") -> dict:
 
 
 SURNAME_PARTICLES = {"DE", "DEL", "DA", "DOS", "DI", "VAN", "VON", "LA", "LOS", "LAS", "SAN", "DER"}
+
+
+_NOT_A_PERSON_WORDS = {
+    "OF", "COUNTY", "STATE", "STATES", "UNITED", "SECRETARY", "FLORIDA", "CITY", "DEPARTMENT",
+    "AMERICA", "UNKNOWN", "TENANT", "TENANTS", "SPOUSE", "ESTATE", "HEIRS", "DEVELOPME", "HOUSING",
+    "BANK", "MORTGAGE", "ASSOCIATION", "TRUST", "IN", "MADOK", "THE", "AND",
+}
+
+
+def _second_defendant_person(raw: str):
+    """When the owner is a business, the case's second defendant is often a
+    real person tied to it (e.g. 'TWENTY NINE SHORELAND LLC' + 'NOVESHEN ERIC
+    LANCE'). Returns {first_name,last_name} only for something that clearly
+    reads as a plain person's name (2-3 plain words, none of them a
+    government/bank/placeholder word); otherwise None. Never guesses."""
+    seg = (raw or "").split(";")[0].strip()
+    if not seg:
+        return None
+    toks = seg.upper().replace(".", "").replace(",", " ").split()
+    if not 2 <= len(toks) <= 4 or any(t in _NOT_A_PERSON_WORDS or not t.isalpha() for t in toks):
+        return None
+    p = parse_owner_name(seg, "last_first")
+    if p.get("is_entity") or p.get("skip_reason") or not p.get("first_name") or not p.get("last_name"):
+        return None
+    return {"first_name": p["first_name"], "last_name": p["last_name"]}
 
 
 def _defendant_pair_says_first_last(d1: str, d2: str) -> bool:
@@ -696,6 +727,10 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
         out["entity_name"] = parsed["entity_name"]
         out["skip_reason"] = parsed["skip_reason"]
         out["alt_last_names"] = parsed.get("alt_last_names", [])
+        if used_defendant_fallback and parsed.get("is_entity") and headers.get("defendant_name_2"):
+            alt = _second_defendant_person(_get(raw_row, headers["defendant_name_2"]))
+            if alt:
+                out["alt_person"] = alt
         if parsed.get("parse_note"):
             out["parse_note"] = out.get("parse_note", "") + parsed["parse_note"]
         if used_defendant_fallback and not out["skip_reason"] and no_owner_column:
