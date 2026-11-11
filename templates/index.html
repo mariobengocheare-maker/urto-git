@@ -3376,6 +3376,8 @@
     <div id="clMembersCurrentBox" class="cl-member-box"></div>
     <div class="row" style="margin-top:12px; margin-bottom:0">
       <button type="button" class="ghost small" id="clMembersAddToggleBtn">+ Add Client to List</button>
+      <button type="button" class="ghost small" id="clMembersCsvBtn">&#11015; Download CSV</button>
+      <span id="clMembersCsvMsg" style="font-size:.85em; color:var(--text-secondary)"></span>
     </div>
     <div id="clMembersAddSection" style="display:none; margin-top:12px">
       <div class="form-group">
@@ -7391,6 +7393,65 @@ async function openManageMembers(listId) {
 }
 
 document.getElementById('clMembersCloseBtn').addEventListener('click', () => clMembersOverlay.classList.remove('show'));
+
+// Download the list's members and their info as a CSV (build order #224).
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function formatLastCalledCsv(raw) {
+  return raw ? formatNoteTime(raw) : '';
+}
+function formatDateCsv(raw) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw || '');
+  if (!m) return raw || '';
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+document.getElementById('clMembersCsvBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('clMembersCsvMsg');
+  const btn = document.getElementById('clMembersCsvBtn');
+  if (!clMembersListId) return;
+  msg.textContent = '';
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/crm/contact_lists/${clMembersListId}/export`);
+    if (!res.ok) throw new Error('The server answered with an error (' + res.status + ').');
+    const data = await res.json();
+    if (!data.members || data.members.length === 0) {
+      msg.textContent = 'No members to download yet.';
+      return;
+    }
+    let name = prompt('What do you want to name the file?', data.name || 'contact_list');
+    if (name === null) return;
+    name = name.replace(/[\\/:*?"<>|]/g, '').replace(/\.csv$/i, '').trim() || 'contact_list';
+    const header = ['List', 'Name', 'Phone', 'Email', 'Address', 'Contact info',
+      'Follow-up schedule', 'Next follow-up', 'Last called (Miami time)', 'Added to CRM', 'Notes'];
+    const lines = [header.map(csvCell).join(',')];
+    data.members.forEach(m => {
+      const notes = (m.notes || []).map(n => `[${formatNoteTime(n.created_at)}] ${n.text}`).join('\n');
+      lines.push([
+        data.name, m.name, m.phone, m.email, m.address, m.contact_info,
+        m.frequency_label, formatDateCsv(m.next_followup_date),
+        formatLastCalledCsv(m.last_called_at), formatDateCsv(m.created_at), notes,
+      ].map(csvCell).join(','));
+    });
+    // Leading BOM so Excel reads accented names correctly.
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    msg.textContent = `Downloaded ${data.members.length} people.`;
+  } catch (err) {
+    msg.textContent = "Couldn't download: " + (err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // The list's own description box (build order #202).
 document.getElementById('clMembersDescSaveBtn').addEventListener('click', async () => {

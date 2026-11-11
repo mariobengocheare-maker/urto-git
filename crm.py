@@ -3523,6 +3523,37 @@ def get_contact_list(list_id) -> dict:
     return d
 
 
+def export_contact_list_members(list_id) -> dict:
+    """Everything the Manage Members "Download CSV" button needs in one
+    request (build order #224): the list plus each member's client fields and
+    full notes (newest first), so the page doesn't make one request per
+    person for a big building."""
+    contact_list = get_contact_list(list_id)
+    if not contact_list:
+        return None
+    conn = get_conn()
+    out = []
+    for m in contact_list["members"]:
+        notes = conn.execute(
+            "SELECT text, created_at FROM notes WHERE client_id = ? ORDER BY id DESC",
+            (m["id"],),
+        ).fetchall()
+        row = {k: m.get(k) for k in (
+            "id", "name", "phone", "email", "address", "contact_info",
+            "frequency_label", "next_followup_date", "last_called_at", "created_at",
+        )}
+        row["notes"] = [dict(n) for n in notes]
+        out.append(row)
+    conn.close()
+    return {
+        "name": contact_list["name"],
+        "description": contact_list.get("description") or "",
+        "frequency_label": contact_list.get("frequency_label"),
+        "next_call_date": contact_list.get("next_call_date"),
+        "members": out,
+    }
+
+
 def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit, description=None) -> dict:
     """description=None leaves the list's description as it is (the Dialer's
     schedule editor saves without it); "" clears it."""

@@ -230,6 +230,14 @@ def crm_get_contact_list(list_id):
     return jsonify(contact_list)
 
 
+@crm_bp.route("/api/crm/contact_lists/<int:list_id>/export", methods=["GET"])
+def crm_export_contact_list(list_id):
+    data = crm.export_contact_list_members(list_id)
+    if not data:
+        abort(404)
+    return jsonify(data)
+
+
 @crm_bp.route("/api/crm/contact_lists/<int:list_id>", methods=["PUT"])
 def crm_update_contact_list(list_id):
     data = request.get_json(force=True)
