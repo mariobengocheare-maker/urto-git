@@ -239,7 +239,8 @@ HEADER_ALIASES = {
     # against. Never let this alias collide with the "zip" list above (the
     # "mailing" exclusion in resolve_headers() doesn't apply here since this
     # one is deliberately meant to be a mailing-type address).
-    "owner_zip": ["tax owner postal code", "owner postal code", "owner zip code", "owner zip"],
+    "owner_zip": ["tax owner postal code", "owner postal code", "owner address postal code",
+                  "owner zip code", "owner zip"],
     # A foreclosure suit's own list of named parties — the actual person
     # being foreclosed on is always named first, with co-defendants (HOAs,
     # junior lienholders, banks, "United States of America") joined after.
@@ -479,7 +480,23 @@ def parse_owner_name(owner_raw: str, name_order: str = "last_first") -> dict:
             first_name, last_name = tokens[0], tokens[-1]
     else:
         # County default: "LAST [SUFFIX] FIRST [MIDDLE] [& CO-OWNER...]"
-        if len(tokens) >= 3 and tokens[1] in SUFFIXES:
+        if (len(tokens) == 3 and len(tokens[1]) == 1 and tokens[1].isalpha()
+                and len(tokens[2]) > 1 and tokens[2] not in SUFFIXES
+                and "&" not in tokens):
+            # "MARGARET W TOBIN" / "ANNA M GRASSIA": a lone middle initial
+            # sitting in the SECOND slot, then a full word, is first-middle-
+            # last order (in county order the initial would come last). Some
+            # exports mix both orders in one column.
+            return _no_entity(first_name=tokens[0].title(), last_name=tokens[2].title(),
+                              parse_note=f"Read '{owner_raw.title()}' as first-middle-last (a lone initial in the middle). ")
+        if len(tokens) >= 4 and tokens[0] == "DE" and tokens[1] in {"LA", "LOS", "LAS", "EL"}:
+            last_name, first_name = f"{tokens[0]} {tokens[1]} {tokens[2]}", tokens[3]
+        elif len(tokens) >= 4 and tokens[0] in SURNAME_PARTICLES and tokens[1] not in SUFFIXES:
+            # "DE ARMAS RODOLFO": a surname particle belongs to the surname.
+            last_name, first_name = f"{tokens[0]} {tokens[1]}", tokens[2]
+        elif len(tokens) == 3 and tokens[0] in SURNAME_PARTICLES and tokens[1] not in SUFFIXES:
+            last_name, first_name = f"{tokens[0]} {tokens[1]}", tokens[2]
+        elif len(tokens) >= 3 and tokens[1] in SUFFIXES:
             last_name, first_name = tokens[0], tokens[2]
         elif tokens[1] == "&":
             # "ALDINE & HERRING JR HERBERT L": the first owner is a single
@@ -505,8 +522,12 @@ def parse_owner_name(owner_raw: str, name_order: str = "last_first") -> dict:
     return _no_entity(first_name=first_name.title(), last_name=last_name.title())
 
 
+SURNAME_PARTICLES = {"DE", "DEL", "DA", "DOS", "DI", "VAN", "VON", "LA", "LOS", "LAS", "SAN", "DER"}
+
+
 def has_name_columns(headers: dict) -> bool:
-    return ("first_name" in headers and "last_name" in headers) or "owner_name" in headers
+    return (("first_name" in headers and "last_name" in headers)
+            or "owner_name" in headers or "defendant_name" in headers)
 
 
 def has_address_columns(headers: dict) -> bool:
@@ -618,6 +639,7 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
     else:
         owner_raw = _get(raw_row, headers.get("owner_name"))
         used_defendant_fallback = False
+        no_owner_column = not headers.get("owner_name")
         if not owner_raw and headers.get("defendant_name"):
             # The tax roll's own owner-name block is sometimes blanked out
             # entirely for a confidential/protected owner (law enforcement,
@@ -646,7 +668,13 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
         out["alt_last_names"] = parsed.get("alt_last_names", [])
         if parsed.get("parse_note"):
             out["parse_note"] = out.get("parse_note", "") + parsed["parse_note"]
-        if used_defendant_fallback and not out["skip_reason"]:
+        if used_defendant_fallback and not out["skip_reason"] and no_owner_column:
+            out["parse_note"] = (
+                out.get("parse_note", "")
+                + "This file has no owner-name column — used the foreclosure case's "
+                  "first named defendant as the owner. "
+            )
+        elif used_defendant_fallback and not out["skip_reason"]:
             out["parse_note"] = (
                 out.get("parse_note", "")
                 + "Owner name was blank on the tax roll (often a confidentiality "
