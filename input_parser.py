@@ -249,6 +249,7 @@ HEADER_ALIASES = {
     # redacted for confidentiality, but the case's own Defendant field still
     # names the real person).
     "defendant_name": ["defendant 1", "defendant"],
+    "defendant_name_2": ["defendant 2"],
     # The rest of these describe the OWNER's own on-file mailing address
     # (as opposed to "address"/"city"/"state"/"zip" above, which are the
     # PROPERTY's own address) — used only to rebuild a property's address
@@ -525,6 +526,26 @@ def parse_owner_name(owner_raw: str, name_order: str = "last_first") -> dict:
 SURNAME_PARTICLES = {"DE", "DEL", "DA", "DOS", "DI", "VAN", "VON", "LA", "LOS", "LAS", "SAN", "DER"}
 
 
+def _defendant_pair_says_first_last(d1: str, d2: str) -> bool:
+    """A foreclosure export lists two defendants. When the first is written
+    first-last ("BRYAN SMITH") the second is often the same person's own record
+    surname-first ("SMITH JOSEPH BRYAN"): its first word is the first
+    defendant's LAST word, and the first defendant's first word shows up after
+    it. When both start with the same word instead ("BRIGNAC KIMI D" /
+    "BRIGNAC DANNY M"), the first is surname-first like the rest of the file.
+    Only a clear match of the first pattern counts; anything else is False."""
+    t1 = _clean(d1.split(";")[0]).split()
+    t2 = _clean(d2.split(";")[0]).split()
+    if len(t1) < 2 or len(t2) < 2:
+        return False
+    if any(t in REGISTERED_ENTITY_TOKENS or t in ENTITY_TOKENS or t in TRUST_TOKENS
+           for t in t1 + t2):
+        return False
+    if t2[0] == t1[0]:
+        return False
+    return t2[0] == t1[-1] and t1[0] in t2[1:]
+
+
 def has_name_columns(headers: dict) -> bool:
     return (("first_name" in headers and "last_name" in headers)
             or "owner_name" in headers or "defendant_name" in headers)
@@ -659,7 +680,16 @@ def convert_row(raw_row: dict, headers: dict, name_order: str = "last_first") ->
                 owner_raw = first_segment
                 used_defendant_fallback = True
         out["owner_name_raw"] = owner_raw
-        parsed = parse_owner_name(owner_raw, name_order)
+        order_for_row = name_order
+        order_note = ""
+        if used_defendant_fallback and headers.get("defendant_name_2"):
+            if _defendant_pair_says_first_last(owner_raw, _get(raw_row, headers["defendant_name_2"])):
+                order_for_row = "first_last"
+                order_note = ("Read the name as first-last: the case's second defendant lists the same "
+                              "person surname-first. ")
+        parsed = parse_owner_name(owner_raw, order_for_row)
+        if order_note and not parsed.get("is_entity") and not parsed.get("skip_reason"):
+            out["parse_note"] = out.get("parse_note", "") + order_note
         out["first_name"] = parsed["first_name"]
         out["last_name"] = parsed["last_name"]
         out["is_entity"] = parsed["is_entity"]
