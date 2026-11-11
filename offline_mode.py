@@ -217,6 +217,7 @@ def _load_offline_app():
     mod._push_instant_documents_to_google_drive_safe = lambda *a, **k: None
     mod._google_drive_api_push = lambda *a, **k: False
     mod.start_backup_in_background = lambda *a, **k: False
+    mod._kick_geocode = lambda *a, **k: None
 
     real_crm = sys.modules["crm"]
     sys.modules["crm"] = mod

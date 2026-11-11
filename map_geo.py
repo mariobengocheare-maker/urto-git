@@ -17,8 +17,9 @@ provider is cooling down does a caller hear RateLimited (wait, then resume).
 
 Every lookup is clamped to Mario's market (Miami-Dade + Broward + the
 Florida Keys); a hit outside it is "not found." An address that doesn't
-name Florida gets ", Miami-Dade County, FL" appended first (the Texas
-Zillow lesson, build order #168). An address that explicitly names ANOTHER
+name Florida gets just ", FL" appended first (the Texas Zillow lesson,
+build order #168; never a county, since the Keys are Monroe County and a
+wrong county made Marathon / Key Largo closings fail -- build order #221). An address that explicitly names ANOTHER
 state ("..., Austin Tx") is never looked up at all -- see names_other_state().
 """
 
@@ -83,8 +84,18 @@ def provider_name() -> str:
 def anchor_to_market(address: str) -> str:
     address = (address or "").strip()
     if address and not _FL_RE.search(address):
-        address = f"{address}, Miami-Dade County, FL"
+        address = f"{address}, FL"
     return address
+
+
+_UNIT_RE = re.compile(r"(\s*#\s*[\w-]+|\s+\b(?:apt|apartment|unit|ste|suite|no)\.?\s*#?\s*[\w-]+)", re.IGNORECASE)
+
+
+def strip_unit(address: str) -> str:
+    """The address without an apartment/unit ("325 Calusa St #40, Key Largo"
+    -> "325 Calusa St, Key Largo"). Geocoders match the building, and a
+    unit marker is a common reason a good street address finds nothing."""
+    return re.sub(r"\s{2,}", " ", _UNIT_RE.sub("", address or "")).strip().strip(",").strip()
 
 
 def names_other_state(address: str) -> bool:
@@ -191,6 +202,9 @@ def geocode_address(address: str):
     say) -- the Dialer's Zillow link uses them when the address Mario typed
     is a bare street (build order #196).
 
+    An address with a unit ("#40", "Apt 3") that finds nothing is tried once
+    more without the unit before it counts as a no-match (build order #221).
+
     Raises RateLimited when every provider is currently cooling down (the
     caller should wait and resume, NOT mark the address failed), and
     RuntimeError when the providers that were tried all errored -- in both
@@ -198,6 +212,16 @@ def geocode_address(address: str):
     text = anchor_to_market(address)
     if not text:
         return None
+    hit = _geocode_text(text)
+    if hit:
+        return hit
+    bare = anchor_to_market(strip_unit(address))
+    if bare and bare != text:
+        return _geocode_text(bare)
+    return None
+
+
+def _geocode_text(text: str):
     now = time.time()
     errors = []
     rate_limited = 0

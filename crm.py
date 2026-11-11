@@ -1388,6 +1388,8 @@ def on_data_changed(reason="save", detail=""):
     global _instant_pending, _instant_worker_running, _instant_reason
     _log_activity(reason, detail)
     mark_dirty()
+    if reason in _GEO_KICK_REASONS:
+        _kick_geocode()
     with _instant_state_lock:
         _instant_pending = True
         _instant_reason = reason
@@ -1395,6 +1397,21 @@ def on_data_changed(reason="save", detail=""):
             return
         _instant_worker_running = True
     threading.Thread(target=_instant_backup_worker, daemon=True).start()
+
+
+# A closed deal should show up on the Map right away, not whenever the
+# background pass next comes around (build order #221).
+_GEO_KICK_REASONS = {"transaction created", "transaction updated", "commission entry added",
+                     "commission entry updated", "closings processed"}
+
+
+def _kick_geocode():
+    def run():
+        try:
+            geocode_pending(time_budget=25, max_items=10)
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
 
 
 def backup_if_dirty():
@@ -2609,6 +2626,13 @@ def init_db():
         if "geo_zip" not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN geo_city TEXT")
             conn.execute(f"ALTER TABLE {table} ADD COLUMN geo_zip TEXT")
+    # One-time (build order #221): addresses that "failed" under the old
+    # Miami-Dade-County anchoring (Keys deals like Marathon / Key Largo, and
+    # anything with a unit number) get looked up again with the fixed lookup.
+    if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'geo_failed_retry_v2'").fetchone():
+        for table in ("clients", "transactions", "commission_entries"):
+            conn.execute(f"UPDATE {table} SET geo_address = NULL WHERE geo_status = 'failed'")
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('geo_failed_retry_v2', '1')")
     conn.commit()
     _seed_document_types(conn)
     conn.close()
@@ -6957,10 +6981,16 @@ def _point_in_polygon(lat, lng, poly) -> bool:
 # kind label). Closed transactions and BACKFILLED commission entries (ones
 # not tied to a transaction -- a tied one is already represented by its
 # transaction) become "closed deal" pins; the title is the address in both.
+# A commission entry means a deal closed, so it gets a pin unless its own
+# transaction is already a closed one (that pin is the transaction's). Closed
+# deals come FIRST so a long queue of clients can never keep them waiting
+# (build order #221).
+_COMMISSION_PIN_WHERE = ("(transaction_id IS NULL OR transaction_id NOT IN "
+                         "(SELECT id FROM transactions WHERE status = 'closed'))")
 _GEO_TARGETS = [
-    ("clients", "address", "1=1", "client"),
     ("transactions", "title", "status = 'closed'", "transaction"),
-    ("commission_entries", "title", "transaction_id IS NULL", "commission"),
+    ("commission_entries", "title", _COMMISSION_PIN_WHERE, "commission"),
+    ("clients", "address", "1=1", "client"),
 ]
 _GEO_TABLE_BY_KIND = {kind: (table, col) for table, col, _, kind in _GEO_TARGETS}
 
@@ -7107,7 +7137,7 @@ def _map_closings(conn) -> tuple:
             located.append({**item, "lat": t["lat"], "lng": t["lng"]})
         elif t["geo_status"] == "failed":
             unplaced.append({"kind": "transaction", "id": t["id"], "name": t["title"], "address": t["title"]})
-    for c in conn.execute("SELECT * FROM commission_entries WHERE transaction_id IS NULL").fetchall():
+    for c in conn.execute(f"SELECT * FROM commission_entries WHERE {_COMMISSION_PIN_WHERE}").fetchall():
         item = {
             "kind": "commission", "id": c["id"], "title": c["title"], "closed_date": c["closed_date"],
             "sale_price": c["sale_price"], "commission": c["amount"],
