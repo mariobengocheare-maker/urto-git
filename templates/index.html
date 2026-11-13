@@ -9279,8 +9279,19 @@ const PROPERTY_APPRAISER_SEARCH_URL = 'https://www.miamidade.gov/Apps/PA/Propert
 // finds the direct search page, change the url below.
 const COUNTY_SITES = {
   miami_dade: { label: 'Miami-Dade', url: PROPERTY_APPRAISER_SEARCH_URL },
-  monroe: { label: 'Monroe County', url: 'https://www.mcpafl.org/' },
+  // Monroe's real search page (Name/Address/Parcel ID search) is on the
+  // Schneider "qPublic" site; this link came from a county appeal guide and
+  // could not be opened from the sandbox. Fallback: https://www.mcpafl.org/
+  monroe: { label: 'Monroe County', url: 'https://qpublic.schneidercorp.com/Application.aspx?AppID=605&LayerID=9946&PageTypeID=2&PageID=4381' },
 };
+// Just the street line ("18001 SW 148TH AVE RD"): no city, state, zip or unit,
+// since the county sites' address box wants only that (build order #227).
+function streetOnly(address) {
+  let t = String(address || '').split(/[\n,;]/)[0];
+  t = t.replace(/\(.*?\)/g, ' ').replace(/(\d)\.0\b/g, '$1');
+  t = t.replace(/\s+(#|apt\b|unit\b|ste\b|suite\b)\s*\S*\s*$/i, '');
+  return t.replace(/\s+/g, ' ').trim();
+}
 function countySite(key) { return COUNTY_SITES[key] || COUNTY_SITES.miami_dade; }
 function propertySearchLabel(key) { return '\u{1F3DB}\uFE0F ' + countySite(key).label + ' Property Search'; }
 
@@ -9353,13 +9364,12 @@ async function openPropertySearchFor(address, msgEl, county) {
   const site = countySite(county);
   window.open(site.url, '_blank', 'noopener');
   if (!address) return;
+  const street = streetOnly(address) || address;
   try {
-    await navigator.clipboard.writeText(address);
-    msgEl.textContent = county === 'monroe'
-      ? '📋 Address copied — open Property Search on the Monroe County site and paste it into the search box.'
-      : '📋 Address copied — paste it into the ADDRESS box on the county site.';
+    await navigator.clipboard.writeText(street);
+    msgEl.textContent = `📋 Copied "${street}" — paste it into the Address Search box on the county site.`;
   } catch (err) {
-    msgEl.textContent = `Address: ${address} (copy it in manually — clipboard access wasn't available)`;
+    msgEl.textContent = `Street: ${street} (copy it in manually — clipboard access wasn't available)`;
   }
   msgEl.style.display = 'block';
 }
