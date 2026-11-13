@@ -2132,6 +2132,10 @@ def init_db():
     if "description" not in list_cols:
         # A free-text description per Contact List (build order #202).
         conn.execute("ALTER TABLE contact_lists ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+    if "county" not in list_cols:
+        # Which county's Property Appraiser the Dialer / client card
+        # "Property Search" button opens for this list (build order #226).
+        conn.execute("ALTER TABLE contact_lists ADD COLUMN county TEXT NOT NULL DEFAULT 'miami_dade'")
     if "is_commercial" not in list_cols:
         conn.execute("ALTER TABLE contact_lists ADD COLUMN is_commercial INTEGER NOT NULL DEFAULT 0")
         conn.execute("ALTER TABLE contact_lists ADD COLUMN asset_class TEXT")
@@ -2931,6 +2935,20 @@ def _attach_list_followups(conn, clients: list):
         by_client.setdefault(r["client_id"], []).append({"name": r["name"], "next_call_date": r["next_call_date"]})
     for c in clients:
         c["list_followups"] = by_client.get(c["id"], [])
+    # Which county's Property Appraiser applies to each client: any list they
+    # are on that isn't Miami-Dade wins (a Keys building list), else Miami-Dade.
+    county_rows = conn.execute("""
+        SELECT contact_list_members.client_id, contact_lists.county
+        FROM contact_list_members
+        JOIN contact_lists ON contact_lists.id = contact_list_members.list_id
+    """).fetchall()
+    county_by_client = {}
+    for r in county_rows:
+        k = _clean_county(r["county"])
+        if k != "miami_dade" or r["client_id"] not in county_by_client:
+            county_by_client[r["client_id"]] = k
+    for c in clients:
+        c["county"] = county_by_client.get(c["id"], "miami_dade")
 
 
 def list_clients() -> list:
@@ -3486,14 +3504,24 @@ def list_contact_lists() -> list:
     return result
 
 
-def create_contact_list(name, frequency_key, custom_amount, custom_unit, description="") -> dict:
+# Counties a Contact List can be set to (build order #226). The page maps each
+# key to its own Property Appraiser site (COUNTY_SITES in templates/index.html).
+COUNTIES = {"miami_dade": "Miami-Dade", "monroe": "Monroe County (Florida Keys)"}
+
+
+def _clean_county(value) -> str:
+    v = (value or "").strip().lower()
+    return v if v in COUNTIES else "miami_dade"
+
+
+def create_contact_list(name, frequency_key, custom_amount, custom_unit, description="", county="miami_dade") -> dict:
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
     next_call_date = (_today() + timedelta(days=interval_days)).isoformat() if interval_days else None
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO contact_lists (name, frequency_label, interval_days, next_call_date, created_at, description) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (name, label, interval_days, next_call_date, _today().isoformat(), (description or "").strip()),
+        "INSERT INTO contact_lists (name, frequency_label, interval_days, next_call_date, created_at, description, county) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, label, interval_days, next_call_date, _today().isoformat(), (description or "").strip(), _clean_county(county)),
     )
     conn.commit()
     list_id = cur.lastrowid
@@ -3554,7 +3582,7 @@ def export_contact_list_members(list_id) -> dict:
     }
 
 
-def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit, description=None) -> dict:
+def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit, description=None, county=None) -> dict:
     """description=None leaves the list's description as it is (the Dialer's
     schedule editor saves without it); "" clears it."""
     label, interval_days = resolve_interval_days(frequency_key, custom_amount, custom_unit)
@@ -3571,9 +3599,12 @@ def update_contact_list(list_id, name, frequency_key, custom_amount, custom_unit
         next_call_date = None
     if description is None:
         description = existing["description"] if "description" in existing.keys() else ""
+    # county=None keeps what the list already has (the Dialer's schedule editor saves without it).
+    county = _clean_county(county) if county is not None else _clean_county(
+        existing["county"] if "county" in existing.keys() else None)
     conn.execute(
-        "UPDATE contact_lists SET name=?, frequency_label=?, interval_days=?, next_call_date=?, description=? WHERE id=?",
-        (name, label, interval_days, next_call_date, (description or "").strip(), list_id),
+        "UPDATE contact_lists SET name=?, frequency_label=?, interval_days=?, next_call_date=?, description=?, county=? WHERE id=?",
+        (name, label, interval_days, next_call_date, (description or "").strip(), county, list_id),
     )
     conn.commit()
     conn.close()

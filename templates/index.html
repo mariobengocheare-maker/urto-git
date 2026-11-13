@@ -3331,6 +3331,13 @@
         <textarea id="clDescription" rows="3" placeholder="e.g. 16-unit waterfront building, board meets every 2nd Tuesday, most owners are snowbirds"></textarea>
       </div>
       <div class="form-group">
+        <label for="clCounty">County (decides which Property Appraiser site the Property Search button opens)</label>
+        <select id="clCounty">
+          <option value="miami_dade">Miami-Dade</option>
+          <option value="monroe">Monroe County (Florida Keys)</option>
+        </select>
+      </div>
+      <div class="form-group">
         <label for="clFrequency">Call this whole list every</label>
         <select id="clFrequency">
           <option value="none">No recurring schedule</option>
@@ -6819,6 +6826,7 @@ clientForm.addEventListener('submit', async (e) => {
 const clientDetailOverlay = document.getElementById('clientDetailOverlay');
 let currentClientId = null;
 let cdCallClient = null;   // who the client card's Call button dials
+let cdLookupCounty = 'miami_dade';
 let cdLookupAddress = null;   // best address for the open client card's Zillow/Property Search buttons
 
 async function openClientDetail(id) {
@@ -6845,6 +6853,8 @@ async function openClientDetail(id) {
   // Zillow / Property Search for this client's address (same lookups as the
   // Dialer's buttons), using the Map's city/zip for a bare-street address.
   cdLookupAddress = crmAddressWithGeoZip(c) || null;
+  cdLookupCounty = c.county || 'miami_dade';
+  document.getElementById('cdPropertyAppraiserBtn').textContent = propertySearchLabel(cdLookupCounty);
   document.getElementById('cdLookupRow').style.display = buildZillowUrl(cdLookupAddress) ? 'flex' : 'none';
   document.getElementById('cdLookupMsg').style.display = 'none';
   document.getElementById('cdLastCalled').textContent = formatLastCalled(c.last_called_at);
@@ -7201,6 +7211,7 @@ const clCustomRow = document.getElementById('clCustomRow');
 const clCustomAmount = document.getElementById('clCustomAmount');
 const clCustomUnit = document.getElementById('clCustomUnit');
 const clDescription = document.getElementById('clDescription');
+const clCounty = document.getElementById('clCounty');
 
 const clMembersOverlay = document.getElementById('clMembersOverlay');
 const clMembersTitle = document.getElementById('clMembersTitle');
@@ -7266,6 +7277,7 @@ function resetClForm() {
   clForm.reset();
   clFormId.value = '';
   clFrequency.value = '2_weeks';
+  clCounty.value = 'miami_dade';
   clCustomRow.style.display = 'none';
   clFormError.style.display = 'none';
 }
@@ -7298,6 +7310,7 @@ async function openEditContactList(listId) {
   applyFrequencyToElements(l.interval_days, clFrequency, clCustomRow, clCustomAmount, clCustomUnit);
   clName.value = l.name;
   clDescription.value = l.description || '';
+  clCounty.value = l.county || 'miami_dade';
   clFormOverlay.classList.add('show');
 }
 
@@ -7307,6 +7320,7 @@ clForm.addEventListener('submit', async (e) => {
   const payload = {
     name: clName.value,
     description: clDescription.value,
+    county: clCounty.value,
     frequency_key: clFrequency.value,
     custom_amount: clCustomAmount.value,
     custom_unit: clCustomUnit.value,
@@ -8576,7 +8590,7 @@ document.getElementById('dialerLoadListBtn').addEventListener('click', async () 
   document.getElementById('dialerListFreqToggleBtn').style.display = 'inline-block';
   document.getElementById('dialerListFreqPanel').style.display = 'none';
   await loadDialerList(withPhones.map(c => ({
-    name: c.name, phone: c.phone, clientId: c.id,
+    name: c.name, phone: c.phone, clientId: c.id, county: list.county || 'miami_dade',
     meta: [c.address, followupLabel(c)].filter(Boolean).join(' · '),
   })));
 });
@@ -9258,12 +9272,24 @@ function pickBestAddress(crmAddress, entryAddress) {
 // (or Mario screenshots) a confirmed way to pre-fill an address via URL,
 // this is the one place to add it.
 const PROPERTY_APPRAISER_SEARCH_URL = 'https://www.miamidade.gov/Apps/PA/PropertySearch/';
+// One entry per county a Contact List can be set to (build order #226). Monroe
+// (the Florida Keys) is the Monroe County Property Appraiser's own site; its
+// exact property-search page has never been checked from here, so this opens
+// the site's front page, where "Property Search" is under Quick Links. If Mario
+// finds the direct search page, change the url below.
+const COUNTY_SITES = {
+  miami_dade: { label: 'Miami-Dade', url: PROPERTY_APPRAISER_SEARCH_URL },
+  monroe: { label: 'Monroe County', url: 'https://www.mcpafl.org/' },
+};
+function countySite(key) { return COUNTY_SITES[key] || COUNTY_SITES.miami_dade; }
+function propertySearchLabel(key) { return '\u{1F3DB}\uFE0F ' + countySite(key).label + ' Property Search'; }
 
 const dialerZillowBtn = document.getElementById('dialerZillowBtn');
 const dialerPropertyAppraiserBtn = document.getElementById('dialerPropertyAppraiserBtn');
 const dialerPaMsg = document.getElementById('dialerPaMsg');
 let dialerZillowUrl = null;
 let dialerLookupAddress = null;
+let dialerLookupCounty = 'miami_dade';
 
 // Called with the best address known for the CURRENT entry -- entry.address
 // immediately (whatever the dialer source itself carries), then overridden
@@ -9272,8 +9298,10 @@ let dialerLookupAddress = null;
 // external-lookup buttons together, since they're always shown/hidden as a
 // pair -- whenever there's a real address to look up on Zillow, the same
 // address is worth having Mario jump to the county's own record for too.
-function setDialerZillowAddress(address) {
+function setDialerZillowAddress(address, county) {
   dialerLookupAddress = address || null;
+  dialerLookupCounty = COUNTY_SITES[county] ? county : 'miami_dade';
+  dialerPropertyAppraiserBtn.textContent = propertySearchLabel(dialerLookupCounty);
   dialerZillowUrl = buildZillowUrl(address);
   dialerZillowBtn.style.display = dialerZillowUrl ? 'inline-block' : 'none';
   dialerPropertyAppraiserBtn.style.display = dialerZillowUrl ? 'inline-block' : 'none';
@@ -9321,12 +9349,15 @@ async function openZillowFor(address, msgEl) {
 // and a window.open() to another origin can never reach into that tab to
 // fill/submit its form (build orders #165/#166). So this copies the address
 // and opens the real search tool, and Mario pastes it into the ADDRESS box.
-async function openPropertySearchFor(address, msgEl) {
-  window.open(PROPERTY_APPRAISER_SEARCH_URL, '_blank', 'noopener');
+async function openPropertySearchFor(address, msgEl, county) {
+  const site = countySite(county);
+  window.open(site.url, '_blank', 'noopener');
   if (!address) return;
   try {
     await navigator.clipboard.writeText(address);
-    msgEl.textContent = '📋 Address copied — paste it into the ADDRESS box on the county site.';
+    msgEl.textContent = county === 'monroe'
+      ? '📋 Address copied — open Property Search on the Monroe County site and paste it into the search box.'
+      : '📋 Address copied — paste it into the ADDRESS box on the county site.';
   } catch (err) {
     msgEl.textContent = `Address: ${address} (copy it in manually — clipboard access wasn't available)`;
   }
@@ -9337,13 +9368,13 @@ async function openPropertySearchFor(address, msgEl) {
 dialerZillowBtn.addEventListener('click', () => {
   if (dialerZillowUrl) openZillowFor(dialerLookupAddress, dialerPaMsg);
 });
-dialerPropertyAppraiserBtn.addEventListener('click', () => openPropertySearchFor(dialerLookupAddress, dialerPaMsg));
+dialerPropertyAppraiserBtn.addEventListener('click', () => openPropertySearchFor(dialerLookupAddress, dialerPaMsg, dialerLookupCounty));
 
 // Same two buttons on the CRM client card (cdLookupAddress is set in openClientDetail).
 document.getElementById('cdZillowBtn').addEventListener('click', () =>
   openZillowFor(cdLookupAddress, document.getElementById('cdLookupMsg')));
 document.getElementById('cdPropertyAppraiserBtn').addEventListener('click', () =>
-  openPropertySearchFor(cdLookupAddress, document.getElementById('cdLookupMsg')));
+  openPropertySearchFor(cdLookupAddress, document.getElementById('cdLookupMsg'), cdLookupCounty));
 
 const dialerClientInfoEl = document.getElementById('dialerClientInfo');
 let dialerInfoToken = 0;
@@ -9436,7 +9467,7 @@ function renderDialerCard() {
   dialerPhoneEl.textContent = entry.phone || '—';
   dialerPhoneEl.href = 'tel:' + normalizePhone(entry.phone);
   dialerMetaEl.textContent = entry.meta || '';
-  setDialerZillowAddress(entry.address);
+  setDialerZillowAddress(entry.address, entry.county);
 
   renderDialerListRows();
 
@@ -9510,7 +9541,7 @@ async function updateDialerClientInfo(entry) {
   // dialer source line happened to carry (e.g. the "CRM Clients" source
   // never even sets entry.address, only folds it into the meta text) --
   // override once the real record resolves.
-  setDialerZillowAddress(pickBestAddress(crmAddressWithGeoZip(c), entry.address));
+  setDialerZillowAddress(pickBestAddress(crmAddressWithGeoZip(c), entry.address), entry.county || c.county);
   // Fresh entry, fresh editor -- never leave the frequency panel open (or
   // showing a stale schedule) carried over from whoever was on screen before.
   document.getElementById('dciFreqPanel').style.display = 'none';

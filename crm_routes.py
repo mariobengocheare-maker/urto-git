@@ -216,6 +216,7 @@ def crm_create_contact_list():
             custom_amount=data.get("custom_amount"),
             custom_unit=data.get("custom_unit"),
             description=data.get("description") or "",
+            county=data.get("county") or "miami_dade",
         )
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid custom call schedule amount"}), 400
@@ -252,6 +253,7 @@ def crm_update_contact_list(list_id):
             custom_amount=data.get("custom_amount"),
             custom_unit=data.get("custom_unit"),
             description=data.get("description") if "description" in data else None,
+            county=data.get("county") if "county" in data else None,
         )
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid custom call schedule amount"}), 400
