@@ -7993,9 +7993,9 @@ function renderDayViewNoWork() {
   } else {
     box.innerHTML = `<span>🏖 Holiday, half day, or not working?</span>
       <input type="text" id="dayViewNoWorkLabel" placeholder="e.g. Thanksgiving (optional)" maxlength="80">
-      <textarea id="dayViewNoWorkNote" rows="2" maxlength="2000" style="flex-basis:100%" placeholder="What were you doing? A short written description (optional for a day off — a half day needs this OR a file)"></textarea>
+      <textarea id="dayViewNoWorkNote" rows="2" maxlength="2000" style="flex-basis:100%" placeholder="Why are you off? A short written description (required unless you attach a file)"></textarea>
       <div style="flex-basis:100%; font-size:.85rem; color:var(--text-secondary)">
-        Attachment (optional) — a photo, PDF or any file:
+        Attachment — a photo, PDF or any file (needed only if you don't write a description):
         <input type="file" id="dayViewHalfProof" style="margin-top:4px; max-width:100%">
       </div>
       <div class="field-error" id="dayViewNoWorkErr" style="display:none; flex-basis:100%; color:#ff9b9b; font-size:.85rem"></div>
@@ -8021,9 +8021,9 @@ document.getElementById('dayViewNoWork').addEventListener('click', async (e) => 
     const label = (document.getElementById('dayViewNoWorkLabel').value || '').trim();
     const note = (document.getElementById('dayViewNoWorkNote').value || '').trim();
     const file = document.getElementById('dayViewHalfProof').files[0];
-    // A half day needs proof: a written description OR a file is enough.
-    if (kind === 'half' && !file && !note) {
-      showErr('A half day needs proof — write a short description of what you were doing, or attach a file.');
+    // A half day or a day off needs a reason: a written description OR a file is enough.
+    if (!file && !note) {
+      showErr(`${kind === 'half' ? 'A half day' : 'A day off'} needs a reason — write a short description of what you were doing, or attach a file.`);
       return;
     }
     if (file) {

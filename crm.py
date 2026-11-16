@@ -5867,10 +5867,10 @@ def set_no_work_day(day: str, label: str = "", kind: str = "off", file_storage=N
     rounded up). Either one never breaks a streak by itself, and cuts that
     week's scorecard targets (20% for a day off, 10% for a half day).
 
-    A half day needs PROOF of what Mario was doing: a photo, PDF or any file
-    (file_storage), OR a written description (note) -- either one is enough.
-    A full day off needs neither, but can carry both. Opened later from the
-    Calendar. Marking the same day again without a new file keeps the
+    Both a half day and a full day off need PROOF of what Mario was doing: a
+    photo, PDF or any file (file_storage), OR a written description (note) --
+    either one is enough, both are allowed (build order #228). Opened later
+    from the Calendar. Marking the same day again without a new file keeps the
     existing proof; note=None keeps the existing description, "" clears it."""
     try:
         d = datetime.strptime((day or "").strip(), "%Y-%m-%d").date()
@@ -5884,9 +5884,10 @@ def set_no_work_day(day: str, label: str = "", kind: str = "off", file_storage=N
     old_proof = existing["proof_filename"] if existing else None
     old_note = ((existing["note"] if existing else None) or "").strip()
     new_note = old_note if note is None else (str(note).strip()[:2000])
-    if kind == "half" and not has_file and not old_proof and not new_note:
+    if not has_file and not old_proof and not new_note:
         conn.close()
-        raise RuntimeError("A half day needs proof — write a short description of what you were doing, "
+        what = "A half day" if kind == "half" else "A day off"
+        raise RuntimeError(f"{what} needs a reason — write a short description of what you were doing, "
                            "or attach a photo, PDF or other file.")
     if has_file:
         stored, original = _store_upload(file_storage, HALF_DAY_PROOF_DIR)
