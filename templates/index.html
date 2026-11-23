@@ -1688,6 +1688,10 @@
   @media (max-width: 640px) {
     .chess-sq .chess-name { display: none; }
     .chess-sq .coord { font-size: .5rem; }
+    .chess-board-col { flex: 1 1 100%; }
+    .chess-piece-glyph { font-size: 8.6vw; }
+    .chess-pawn { font-size: 7.8vw; }
+    .chess-sq .chess-count { font-size: .62rem; }
     .chess-pawn-tip { white-space: normal; width: max-content; max-width: 92%; }
   }
 
@@ -3008,7 +3012,7 @@
       </div>
     </div>
     <div class="form-group" id="chessPieceNoteGroup">
-      <label for="chessPieceNote" id="chessPieceNoteLabel">What happened? (saved to this client's notes)</label>
+      <label for="chessPieceNote" id="chessPieceNoteLabel">Add a note? (optional — only saved if you type something)</label>
       <textarea id="chessPieceNote" rows="3" placeholder="e.g. Signed listing agreement, showing set for Saturday"></textarea>
     </div>
     <div class="chess-piece-actions">
@@ -11926,7 +11930,7 @@ function renderChessPieceMenu() {
   else if (queen) meta = `Queen on ${p.square} · Under Contract · on the board since ${since}`;
   else meta = `${label} on ${p.square} · ${p.rank - chessState.queen_rank} square${p.rank - chessState.queen_rank === 1 ? '' : 's'} from Queen · since ${since}`;
   document.getElementById('chessPieceMeta').textContent = meta;
-  document.getElementById('chessPieceNoteLabel').textContent = `What happened? (saved to ${p.client_name}'s notes)`;
+  document.getElementById('chessPieceNoteLabel').textContent = `Add a note for ${p.client_name}? (optional — only saved if you type something)`;
   const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
   document.getElementById('chessAdvanceBtn').textContent = `▼ Move ${label} down`;
   show('chessAdvanceBtn', !captured && !queen);

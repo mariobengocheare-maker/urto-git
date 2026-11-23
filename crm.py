@@ -6527,7 +6527,14 @@ def _scorecard_values(conn, start, end) -> dict:
         "SELECT COUNT(*) FROM notes WHERE substr(created_at, 1, 10) BETWEEN ? AND ? "
         "AND text NOT LIKE '%Chessboard:%' AND text NOT LIKE '❌ Bad number removed%'", (s, e)
     ).fetchone()[0]
+    _adv = ("(detail LIKE '%advanced to%' OR detail LIKE '%Promoted from pawn%' OR detail LIKE '%promoted to Queen%' "
+            "OR detail LIKE '%Placed on the board%' OR detail LIKE '%captured off the board%')")
     deals_advanced = conn.execute(
+        "SELECT COUNT(*) FROM activity_log WHERE action = 'chessboard move' "
+        "AND substr(at, 1, 10) BETWEEN ? AND ? AND " + _adv, (s, e)
+    ).fetchone()[0]
+    # Moves made before Chessboard stopped writing notes were counted from those notes.
+    deals_advanced += conn.execute(
         "SELECT COUNT(*) FROM notes WHERE substr(created_at, 1, 10) BETWEEN ? AND ? AND text LIKE '%Chessboard:%' "
         "AND (text LIKE '%advanced to%' OR text LIKE '%Promoted from pawn%' OR text LIKE '%promoted to Queen%' "
         "OR text LIKE '%Placed on the board%' OR text LIKE '%captured off the board%')", (s, e)
@@ -7564,11 +7571,13 @@ def _chess_piece_to_dict(row) -> dict:
 
 
 def _chess_note(client_id, piece_type, text, extra=""):
+    """Records a Chessboard move in the activity log (which feeds the weekly
+    scorecard) -- it never writes into the client's notes. Only text Mario
+    typed himself in the piece menu is saved as a plain note."""
     extra = (extra or "").strip()
-    line = f"{CHESS_GLYPHS.get(piece_type, '♟')} Chessboard: {text}"
     if extra:
-        line += f" — {extra}"
-    add_note(client_id, line)
+        add_note(client_id, extra)
+    on_data_changed("chessboard move", f"{_client_name(client_id)}: {text}")
 
 
 _CHESS_SELECT = """
@@ -7704,17 +7713,19 @@ def move_chess_piece_back(piece_id, undo=False) -> dict:
     )
     removed_note = False
     if undo:
+        name = _client_name(row["client_id"])
         last = conn.execute(
-            "SELECT id, text, created_at FROM notes WHERE client_id = ? ORDER BY id DESC LIMIT 1",
-            (row["client_id"],),
+            "SELECT id, at FROM activity_log WHERE action = 'chessboard move' AND detail LIKE ? "
+            "AND detail LIKE '%advanced to%' ORDER BY id DESC LIMIT 1",
+            (name.replace("%", "") + ": %",),
         ).fetchone()
-        if last and " Chessboard: " in (last["text"] or "") and " advanced to " in last["text"]:
+        if last:
             try:
-                age = _now() - datetime.strptime(last["created_at"], "%Y-%m-%d %H:%M")
+                age = _now() - datetime.fromisoformat(last["at"])
             except (TypeError, ValueError):
                 age = None
             if age is not None and age.total_seconds() < 15 * 60:
-                conn.execute("DELETE FROM notes WHERE id = ?", (last["id"],))
+                conn.execute("DELETE FROM activity_log WHERE id = ?", (last["id"],))
                 removed_note = True
     conn.commit()
     conn.close()
